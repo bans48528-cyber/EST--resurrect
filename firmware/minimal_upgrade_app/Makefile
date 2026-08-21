@@ -74,6 +74,7 @@ lib:
 
 test:
 	$(PYTHON) -m unittest discover -s tests -v
+	$(PYTHON) tools/check_hardware_pins.py --repo-root ../..
 
 verification-pair:
 	$(MAKE) BUILD_DIR=build/v1 APP_VERSION=M0.01A all

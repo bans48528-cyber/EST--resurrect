@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time
 from pathlib import Path
 
 from .errors import EstUpdaterError, VersionSafetyError
@@ -17,6 +18,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
     ping = commands.add_parser("ping", help="读取当前设备版本")
     add_device_options(ping)
+
+    keys = commands.add_parser("keys", help="查看六个按键的状态")
+    add_device_options(keys)
+    keys.add_argument("--watch", action="store_true", help="持续观察按键变化")
+    keys.add_argument("--interval", type=float, default=0.1, help="读取间隔，默认 0.1 秒")
+    keys.add_argument("--duration", type=float, help="观察秒数；默认持续到用户中止")
 
     info = commands.add_parser("info", help="显示升级包信息，不连接设备")
     add_package_options(info)
@@ -83,6 +90,42 @@ def run_ping(args: argparse.Namespace) -> int:
         print(f"report input={transport.input_len} output={transport.output_len}", flush=True)
         version = FirmwareUpdater(transport).ping()
         print(f"heartbeat={version}", flush=True)
+    return 0
+
+
+def format_pressed_keys(mask: int) -> str:
+    names = [f"KEY{index}" for index in range(6) if mask & (1 << index)]
+    return ",".join(names) if names else "none"
+
+
+def run_keys(args: argparse.Namespace) -> int:
+    if args.interval <= 0:
+        raise ValueError("--interval 必须大于 0")
+    if args.duration is not None and args.duration <= 0:
+        raise ValueError("--duration 必须大于 0")
+    with open_transport(args) as transport:
+        print(f"device={transport.path}", flush=True)
+        print(f"report input={transport.input_len} output={transport.output_len}", flush=True)
+        updater = FirmwareUpdater(transport)
+        print(f"current_version={updater.ping()}", flush=True)
+        started = time.monotonic()
+        previous_mask = None
+        try:
+            while True:
+                mask = updater.read_key_mask()
+                if mask != previous_mask:
+                    print(
+                        f"pressed={format_pressed_keys(mask)} mask=0x{mask:02X}",
+                        flush=True,
+                    )
+                    previous_mask = mask
+                if not args.watch:
+                    break
+                if args.duration is not None and time.monotonic() - started >= args.duration:
+                    break
+                time.sleep(args.interval)
+        except KeyboardInterrupt:
+            print("key watch stopped", flush=True)
     return 0
 
 
@@ -197,6 +240,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.mode == "ping":
             return run_ping(args)
+        if args.mode == "keys":
+            return run_keys(args)
         if args.mode == "info":
             return run_package_check(args, require_manifest=False)
         if args.mode == "verify":

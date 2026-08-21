@@ -10,12 +10,15 @@
 - 清除 Bootloader 遗留中断和主要外设状态，使用 8 MHz HSE 建立 168 MHz/48 MHz USB 时钟。
 - USB HID 使用 EST 3.0 官方链路：`OTG HS + USB3300 ULPI`，复现 `0483:5750`、HS 产品字符串/序列号、1024 字节端点和 35 字节 Report Descriptor。
 - 支持旧心跳命令，六字节版本由构建参数 `APP_VERSION` 指定。
+- 六个面板按键支持 25 ms 消抖和只读诊断查询，不改变原升级协议。
+- 使用当前实物验证过的 `PD14/PG2/PD15` 驱动 UC1638 LCD，启动后清除 Bootloader 遗留画面并显示当前版本号。不要把 `PB13` 用作 LCD 时钟，它属于当前高速 USB 链路。
 - 按 1024 字节 HID report 接收升级逻辑帧，同时允许协议层分片输入；逐帧校验、连续性检查、重复上一帧 ACK 和 400 秒会话超时。
 - 半帧中断后，如果主机停顿并从新帧头重发，接收器会自动丢弃残帧；设备回包使用 4 项 FIFO，避免前一 ACK 尚在 USB 总线上时丢掉重发响应。
 - 首帧确认 `APP=` 后擦除 Sector 8-11，写入完成后检查 MSP 和 Thumb Reset_Handler。
 - 最后擦除 Sector 3，按旧语义写入 `package_length - 1`，最后写升级状态 `0x0000`；最终 ACK 发出后拉低 `PE2/PB_CON` 关机，等待人工重新开机。这与 EST 3.0 官方 APP 行为一致，不使用未经验证的软件复位路径。
 - 打包器把最终升级文件填充为固定 256 KiB，满足旧 Bootloader 的长度限制。
 - 每次构建自动检查 APP 地址、向量表、入口第一条关中断指令、USB VID/PID、1024 字节端点、HS HID/Qualifier 描述符、产品字符串、版本文本、`APP=` 包头、填充内容和 SHA-256 清单。
+- `make test` 还会读取 V5.0 当前引脚表，检查电源、LED、六个按键、LCD 和 USB 的代码接线，并拒绝任何重复占用或与原理图不一致的修改。
 
 ## 构建
 
@@ -47,7 +50,7 @@ $env:PATH='D:\AIMODU~1\AI_MOD~1\ARM_GC~1\bin;E:\Git\usr\bin;' + $env:PATH
 
 ## 实机验收顺序
 
-1. 让板卡进入 Bootloader 下载界面，确认心跳为 `03.00B`。
+1. 按住第一个按键开机，让板卡进入 Bootloader 下载界面；当前实物表现为红灯闪烁，心跳为 `03.00B`。
 2. 使用 `tools/est_hid_sender/est_hid_sender.py` 发送 `.upgrade.bin`。
 3. 确认传输完成、Bootloader 搬运后红/蓝诊断灯交替闪烁。
 4. 确认 Windows 重新枚举 `VID_0483&PID_5750`，HID 输入/输出报告长度为 `1025`。

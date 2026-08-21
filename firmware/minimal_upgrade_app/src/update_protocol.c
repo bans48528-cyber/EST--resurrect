@@ -4,6 +4,8 @@
 #include <string.h>
 
 #include "app_config.h"
+#include "app_version.h"
+#include "board_keys.h"
 #include "update_protocol.h"
 #include "update_storage.h"
 #include "usb_hid.h"
@@ -55,7 +57,7 @@ static bool report_starts_logical_frame(const uint8_t *report, size_t length)
 		return false;
 	}
 	data_length = read_u16_le(&report[3]);
-	if (report[2] == HEARTBEAT_COMMAND) {
+	if (report[2] == HEARTBEAT_COMMAND || report[2] == KEY_STATUS_COMMAND) {
 		return data_length == 0U;
 	}
 	return report[2] == UPDATE_COMMAND && data_length >= 4U &&
@@ -84,7 +86,6 @@ static void queue_update_ack(uint16_t total_frames, uint16_t frame_index,
 
 static void queue_heartbeat(void)
 {
-	static const char version[] = APP_VERSION_TEXT;
 	uint8_t report[USB_HID_REPORT_SIZE] = {0};
 
 	report[0] = FRAME_START_BYTE;
@@ -92,9 +93,24 @@ static void queue_heartbeat(void)
 	report[2] = HEARTBEAT_COMMAND;
 	report[3] = 6U;
 	report[4] = 0U;
-	memcpy(&report[5], version, 6U);
+	memcpy(&report[5], app_version_text, 6U);
 	report[11] = checksum(report, 11U);
 	report[12] = FRAME_END_BYTE;
+	(void)usb_hid_queue_report(report, false);
+}
+
+static void queue_key_status(void)
+{
+	uint8_t report[USB_HID_REPORT_SIZE] = {0};
+
+	report[0] = FRAME_START_BYTE;
+	report[1] = DEVICE_FRAME_DIRECTION;
+	report[2] = KEY_STATUS_COMMAND;
+	report[3] = 1U;
+	report[4] = 0U;
+	report[5] = board_keys_pressed_mask();
+	report[6] = checksum(report, 6U);
+	report[7] = FRAME_END_BYTE;
 	(void)usb_hid_queue_report(report, false);
 }
 
@@ -203,6 +219,8 @@ static void handle_logical_frame(uint32_t now_ms)
 
 	if (logical_frame[2] == HEARTBEAT_COMMAND && data_length == 0U) {
 		queue_heartbeat();
+	} else if (logical_frame[2] == KEY_STATUS_COMMAND && data_length == 0U) {
+		queue_key_status();
 	} else if (logical_frame[2] == UPDATE_COMMAND) {
 		handle_update_frame(logical_frame, data_length, now_ms);
 	}

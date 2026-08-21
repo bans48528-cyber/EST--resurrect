@@ -31,6 +31,10 @@ class HeartbeatTimeoutError(EstUpdaterError, TimeoutError):
     code = "heartbeat-timeout"
 
 
+class DiagnosticTimeoutError(EstUpdaterError, TimeoutError):
+    code = "diagnostic-timeout"
+
+
 class AckTimeoutError(EstUpdaterError, TimeoutError):
     code = "ack-timeout"
 

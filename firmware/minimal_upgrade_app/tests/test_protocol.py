@@ -26,6 +26,8 @@ from protocol_reference import (  # noqa: E402
 )
 from verify_build import simulate_current_bootloader_copy, verify_version_pair  # noqa: E402
 
+SOURCE_DIR = ROOT / "src"
+
 
 class PackageTests(unittest.TestCase):
     @staticmethod
@@ -109,6 +111,69 @@ class BuildVerificationTests(unittest.TestCase):
         second = b"Prefix-M0.02A-suffix"
         with self.assertRaisesRegex(ValueError, "outside"):
             verify_version_pair(first, "M0.01A", second, "M0.02A")
+
+
+class BoardModuleLayoutTests(unittest.TestCase):
+    def test_platform_no_longer_owns_board_gpio_or_time(self) -> None:
+        platform = (SOURCE_DIR / "platform.c").read_text(encoding="utf-8")
+        self.assertNotIn("gpio_", platform)
+        self.assertNotIn("iwdg_reset", platform)
+        self.assertNotIn("sys_tick_handler", platform)
+
+    def test_board_modules_keep_existing_power_and_led_pins(self) -> None:
+        power = (SOURCE_DIR / "board_power.c").read_text(encoding="utf-8")
+        led = (SOURCE_DIR / "board_led.c").read_text(encoding="utf-8")
+        self.assertIn("GPIOE, GPIO2", power)
+        self.assertIn("GPIOF, GPIO2", led)
+        self.assertIn("GPIOC, GPIO13", led)
+
+    def test_main_initializes_power_before_other_board_services(self) -> None:
+        main = (SOURCE_DIR / "main.c").read_text(encoding="utf-8")
+        power = main.index("board_power_init();")
+        led = main.index("board_led_init();")
+        clock = main.index("system_time_init();")
+        usb = main.index("usb_hid_init();")
+        self.assertLess(power, led)
+        self.assertLess(led, clock)
+        self.assertLess(clock, usb)
+
+    def test_key_module_keeps_all_six_documented_pins(self) -> None:
+        keys = (SOURCE_DIR / "board_keys.c").read_text(encoding="utf-8")
+        for pin in (
+            "GPIOC, GPIO14",
+            "GPIOC, GPIO15",
+            "GPIOF, GPIO0",
+            "GPIOE, GPIO3",
+            "GPIOF, GPIO1",
+            "GPIOE, GPIO4",
+        ):
+            self.assertIn(pin, keys)
+        self.assertIn("KEY_DEBOUNCE_MS 25U", keys)
+
+    def test_lcd_module_uses_official_app_pins_without_usb_conflict(self) -> None:
+        lcd = (SOURCE_DIR / "board_lcd.c").read_text(encoding="utf-8")
+        for pin in (
+            "#define LCD_CLOCK_PORT GPIOD",
+            "#define LCD_CLOCK_PIN GPIO14",
+            "#define LCD_DATA_PORT GPIOG",
+            "#define LCD_DATA_PIN GPIO2",
+            "#define LCD_RESET_PORT GPIOD",
+            "#define LCD_RESET_PIN GPIO15",
+        ):
+            self.assertIn(pin, lcd)
+        for usb_conflicting_pin in (
+            "#define LCD_CLOCK_PORT GPIOB",
+            "#define LCD_CLOCK_PIN GPIO13",
+        ):
+            self.assertNotIn(usb_conflicting_pin, lcd)
+
+    def test_lcd_starts_only_after_interrupts_are_enabled(self) -> None:
+        main = (SOURCE_DIR / "main.c").read_text(encoding="utf-8")
+        interrupts = main.index("platform_enable_interrupts();")
+        lcd_init = main.index("board_lcd_init();")
+        lcd_version = main.index("board_lcd_show_version(app_version_text);")
+        self.assertLess(interrupts, lcd_init)
+        self.assertLess(lcd_init, lcd_version)
 
 
 if __name__ == "__main__":

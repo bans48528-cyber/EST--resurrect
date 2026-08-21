@@ -8,6 +8,7 @@ from .constants import (
     FRAME_START,
     HEARTBEAT_COMMAND,
     HOST_DIRECTION,
+    KEY_STATUS_COMMAND,
     LEGACY_REPORT_SIZE,
     MAX_PAYLOAD,
     UPDATE_COMMAND,
@@ -36,6 +37,10 @@ def build_frame(command: int, payload: bytes = b"") -> bytes:
 
 def build_heartbeat_frame() -> bytes:
     return build_frame(HEARTBEAT_COMMAND)
+
+
+def build_key_status_frame() -> bytes:
+    return build_frame(KEY_STATUS_COMMAND)
 
 
 def build_update_frame(total_frames: int, frame_index: int, payload: bytes) -> bytes:
@@ -71,6 +76,20 @@ def parse_heartbeat_response(report: bytes) -> str | None:
     if checksum(report[:11]) != report[11]:
         return None
     return report[5:11].decode("ascii", errors="replace")
+
+
+def parse_key_status_response(report: bytes) -> int | None:
+    if len(report) < 8:
+        return None
+    if report[0] != FRAME_START:
+        return None
+    if report[1] != DEVICE_DIRECTION or report[2] != KEY_STATUS_COMMAND:
+        return None
+    if report[3:5] != b"\x01\x00" or report[7] != FRAME_END:
+        return None
+    if checksum(report[:6]) != report[6]:
+        return None
+    return report[5] & 0x3F
 
 
 def parse_update_ack(report: bytes) -> UpdateAck | None:

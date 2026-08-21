@@ -22,6 +22,7 @@
 
 #define UPDATE_COMMAND                  0x05U
 #define HEARTBEAT_COMMAND               0x01U
+#define KEY_STATUS_COMMAND              0x0DU
 #define HOST_FRAME_DIRECTION            0x11U
 #define DEVICE_FRAME_DIRECTION          0x21U
 #define FRAME_START_BYTE                0x68U

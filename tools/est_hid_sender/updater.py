@@ -12,14 +12,22 @@ from .constants import (
     HEARTBEAT_TIMEOUT_SECONDS,
     HID_READ_TIMEOUT_MS,
     LEGACY_REPORT_SIZE,
+    KEY_STATUS_TIMEOUT_SECONDS,
     MAX_PAYLOAD,
     PACKET_ACK_TIMEOUT_SECONDS,
 )
-from .errors import AckRejectedError, AckTimeoutError, HeartbeatTimeoutError
+from .errors import (
+    AckRejectedError,
+    AckTimeoutError,
+    DiagnosticTimeoutError,
+    HeartbeatTimeoutError,
+)
 from .protocol import (
     build_heartbeat_frame,
+    build_key_status_frame,
     build_update_frame,
     parse_heartbeat_response,
+    parse_key_status_response,
     parse_update_ack,
     split_reports,
 )
@@ -67,6 +75,21 @@ class FirmwareUpdater:
                 return version
         raise HeartbeatTimeoutError(
             "设备已枚举，但心跳回应超时；请确认设备处于正常 APP 模式后重试"
+        )
+
+    def read_key_mask(self) -> int:
+        report = build_key_status_frame().ljust(LEGACY_REPORT_SIZE, b"\x00")
+        self.transport.write_report(report)
+        deadline = time.monotonic() + KEY_STATUS_TIMEOUT_SECONDS
+        while time.monotonic() < deadline:
+            report = self.transport.read_report()
+            if not report:
+                continue
+            key_mask = parse_key_status_response(report)
+            if key_mask is not None:
+                return key_mask
+        raise DiagnosticTimeoutError(
+            "设备没有返回按键状态；请确认固件支持 keys 命令"
         )
 
     def flash(

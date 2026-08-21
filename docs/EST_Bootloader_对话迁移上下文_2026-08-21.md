@@ -161,7 +161,9 @@ USB Device HID：
 
 - `docs\主控引脚与接口梳理.md`
 - `docs\硬件构成初步梳理.md`
-- `docs\主控MCU引脚表_来自LEGO_1220.csv`
+- `references\hardware\current\PCB_MainControlV5.0.sch`
+- `references\hardware\current\PCB_MainControlV30.pdf`
+- `references\hardware\legacy\主控MCU引脚表_来自LEGO_1220.csv`（旧板资料，禁止直接用于固件）
 - `docs\主控BOM_来自EST元器件.csv`
 - `firmware\minimal_upgrade_app\README.md`
 - `firmware\minimal_upgrade_app\Makefile`
@@ -245,8 +247,8 @@ USB Device HID：
 
 ## 硬件与文档要点
 
-- 最新原理图文件：`PCB_MainControlV5.0.sch`，Altium/Protel 早期二进制格式，普通文本只能抽到器件名和网络名。
-- `LEGO_1220.xlsx` 之前被整理为 `docs\主控MCU引脚表_来自LEGO_1220.csv`。
+- 当前权威原理图文件保存在 `references\hardware\current\`，包含 SCH 和 5 页 PDF。
+- `LEGO_1220.xlsx` 导出的旧引脚表已隔离到 `references\hardware\legacy\`，禁止直接用于当前固件。
 - 外部 SPI Flash：`W25Q64`。
 - LCD：`UC1638`，180x128。
 - 音频：`VS1053B`。

@@ -1,0 +1,145 @@
+package_pin,mcu_pin,current_net,subsystem,kind,verification,notes
+1,PE2,PB_CON,power-control,gpio,hardware-tested,power hold high in Bootloader and minimal APP
+2,PE3,KEY3,keys,gpio,hardware-tested,active low
+3,PE4,KEY5,keys,gpio,hardware-tested,active low and physical power key
+4,PE5,TACHOA0,motor-feedback,gpio,schematic,
+5,PE6,TACHOA1,motor-feedback,gpio,schematic,
+6,VBAT,VBAT,power,power,schematic,
+7,PC13,BLUE,diagnostic-led,gpio,hardware-tested,active level follows board circuit
+8,PC14,KEY0,keys,gpio,hardware-tested,active low and Bootloader entry key
+9,PC15,KEY1,keys,gpio,hardware-tested,active low
+10,PF0,KEY2,keys,gpio,hardware-tested,active low
+11,PF1,KEY4,keys,gpio,hardware-tested,active low
+12,PF2,RED,diagnostic-led,gpio,hardware-tested,active level follows board circuit
+13,PF3,PB_VOL,power-monitor,gpio,schematic,ADC input
+14,PF4,ADC_A0,input-port-a,gpio,schematic,ADC input
+15,PF5,ADC_A1,input-port-a,gpio,schematic,ADC input
+16,VSS,GND,power,ground,schematic,
+17,VDD,V33,power,supply,schematic,
+18,PF6,I_ONA,input-port-a,gpio,schematic,
+19,PF7,DIGIA1,input-port-a,gpio,schematic,
+20,PF8,ADCMC,motor-current-c,gpio,schematic,ADC input
+21,PF9,ADCMD,motor-current-d,gpio,schematic,ADC input
+22,PF10,ADC_C1,input-port-c,gpio,schematic,ADC input
+23,PH0,HSE_IN,clock,clock,schematic,8 MHz crystal
+24,PH1,HSE_OUT,clock,clock,schematic,8 MHz crystal
+25,NRST,RST,system,reset,schematic,
+26,PC0,ULPI_STP,usb-hs-ulpi,gpio,hardware-tested,USB3300
+27,PC1,ADC_B0,input-port-b,gpio,schematic,ADC input
+28,PC2,ULPI_DIR,usb-hs-ulpi,gpio,hardware-tested,USB3300
+29,PC3,ULPI_NXT,usb-hs-ulpi,gpio,hardware-tested,USB3300
+30,VDD,V33,power,supply,schematic,
+31,VSSA,AGND,power,ground,schematic,
+32,VREF+,VREF,power,analog-reference,schematic,
+33,VDDA,V33A,power,supply,schematic,analog supply
+34,PA0,TXINA,input-port-a,gpio,schematic,
+35,PA1,RXINA,input-port-a,gpio,schematic,
+36,PA2,ADC_B1,input-port-b,gpio,schematic,ADC input
+37,PA3,ULPI_D0,usb-hs-ulpi,gpio,hardware-tested,USB3300
+38,VSS,GND,power,ground,schematic,
+39,VDD,V33,power,supply,schematic,
+40,PA4,ADC_C0,input-port-c,gpio,schematic,ADC input
+41,PA5,ULPI_CK,usb-hs-ulpi,gpio,hardware-tested,USB3300
+42,PA6,ADC_D1,input-port-d,gpio,schematic,ADC input
+43,PA7,ADC_D0,input-port-d,gpio,schematic,ADC input
+44,PC4,ADCMA,motor-current-a,gpio,schematic,ADC input
+45,PC5,ADCMB,motor-current-b,gpio,schematic,ADC input
+46,PB0,ULPI_D1,usb-hs-ulpi,gpio,hardware-tested,USB3300
+47,PB1,ULPI_D2,usb-hs-ulpi,gpio,hardware-tested,USB3300
+48,PB2,NC,system,gpio,schematic,BOOT1-capable pin with no net shown
+49,PF11,DIGIB1,input-port-b,gpio,schematic,
+50,PF12,I_ONB,input-port-b,gpio,schematic,
+51,VSS,GND,power,ground,schematic,
+52,VDD,V33,power,supply,schematic,
+53,PF13,DIGIB0,input-port-b,gpio,schematic,
+54,PF14,LEGDETB,input-port-b,gpio,schematic,
+55,PF15,I_ONC,input-port-c,gpio,schematic,
+56,PG0,DIGIC1,input-port-c,gpio,schematic,
+57,PG1,DIGIC0,input-port-c,gpio,schematic,
+58,PE7,LEGDETC,input-port-c,gpio,schematic,
+59,PE8,RXINC_EN,input-port-c,gpio,schematic,
+60,PE9,RXIND_EN,input-port-d,gpio,schematic,
+61,VSS,GND,power,ground,schematic,
+62,VDD,V33,power,supply,schematic,
+63,PE10,LEGDETD,input-port-d,gpio,schematic,
+64,PE11,DIGID0,input-port-d,gpio,schematic,
+65,PE12,DIGID1,input-port-d,gpio,schematic,
+66,PE13,TACHOB0,motor-feedback,gpio,schematic,
+67,PE14,TACHOB1,motor-feedback,gpio,schematic,
+68,PE15,I_OND,input-port-d,gpio,schematic,
+69,PB10,ULPI_D3,usb-hs-ulpi,gpio,hardware-tested,USB3300
+70,PB11,ULPI_D4,usb-hs-ulpi,gpio,hardware-tested,USB3300
+71,VCAP_1,VCAP_1,power,internal-cap,schematic,
+72,VDD,V33,power,supply,schematic,
+73,PB12,ULPI_D5,usb-hs-ulpi,gpio,hardware-tested,USB3300; legacy CSV incorrectly called this LCD_LED
+74,PB13,ULPI_D6,usb-hs-ulpi,gpio,hardware-tested,USB3300; legacy CSV incorrectly called this LCD_SCK
+75,PB14,HOSTDM,usb-host,gpio,schematic,USB FS host D-
+76,PB15,HOSTDP,usb-host,gpio,schematic,USB FS host D+
+77,PD8,TXIND,input-port-d,gpio,schematic,
+78,PD9,RXIND,input-port-d,gpio,schematic,
+79,PD10,BLE_IO2,bluetooth,gpio,schematic,
+80,PD11,BLE_IO1,bluetooth,gpio,schematic,
+81,PD12,MDPWM,motor-output-d,gpio,schematic,TIM4_CH1
+82,PD13,MCPWM,motor-output-c,gpio,schematic,TIM4_CH2
+83,VSS,GND,power,ground,schematic,
+84,VDD,V33,power,supply,schematic,
+85,PD14,LCD_SCK,lcd,gpio,hardware-tested,UC1638 serial clock
+86,PD15,LCD_RST,lcd,gpio,hardware-tested,UC1638 reset
+87,PG2,LCD_SDAI,lcd,gpio,hardware-tested,UC1638 serial data input
+88,PG3,LCD_SDAO,lcd,gpio,schematic,UC1638 serial data output; not used by current write-only driver
+89,PG4,VS_CS,audio,gpio,schematic,VS1053 control chip select
+90,PG5,VS_DREQ,audio,gpio,schematic,VS1053 data request
+91,PG6,VS_RST,audio,gpio,schematic,VS1053 reset
+92,PG7,VS_XDCS,audio,gpio,schematic,VS1053 data chip select
+93,PG8,BELL,buzzer,gpio,schematic,
+94,VSS,GND,power,ground,schematic,
+95,VDD,V33,power,supply,schematic,
+96,PC6,TACHOC1,motor-feedback,gpio,schematic,
+97,PC7,TACHOC0,motor-feedback,gpio,schematic,
+98,PC8,TACHOD1,motor-feedback,gpio,schematic,
+99,PC9,TACHOD0,motor-feedback,gpio,schematic,
+100,PA8,LCD_LED,lcd,gpio,schematic,backlight control; current APP leaves Bootloader state unchanged
+101,PA9,MDIN1,motor-output-d,gpio,schematic,
+102,PA10,MDIN0,motor-output-d,gpio,schematic,
+103,PA11,HOSTDM2,usb-host,gpio,schematic,second USB FS net
+104,PA12,HOSTDP2,usb-host,gpio,schematic,second USB FS net
+105,PA13,SWDIO,debug,gpio,schematic,SWD
+106,VCAP_2,VCAP_2,power,internal-cap,schematic,
+107,VSS,GND,power,ground,schematic,
+108,VDD,V33,power,supply,schematic,
+109,PA14,SWCLK,debug,gpio,schematic,SWD
+110,PA15,SPI0_CS,external-flash,gpio,schematic,W25Q64 chip select
+111,PC10,VS_SCK,audio-and-flash,gpio,schematic,SPI3 clock shared by VS1053 and W25Q64
+112,PC11,VS_MISO,audio-and-flash,gpio,schematic,SPI3 MISO shared by VS1053 and W25Q64
+113,PC12,VS_MOSI,audio-and-flash,gpio,schematic,SPI3 MOSI shared by VS1053 and W25Q64
+114,PD0,MBIN0,motor-output-b,gpio,schematic,
+115,PD1,MBIN1,motor-output-b,gpio,schematic,
+116,PD2,LED1,status-led,gpio,schematic,
+117,PD3,LED2,status-led,gpio,schematic,
+118,PD4,RXINB_EN,input-port-b,gpio,schematic,
+119,PD5,TXINB,input-port-b,gpio,schematic,
+120,VSS,GND,power,ground,schematic,
+121,VDD,V33,power,supply,schematic,
+122,PD6,RXINB,input-port-b,gpio,schematic,
+123,PD7,USB_DET,usb-device,gpio,schematic,USB insertion or power detect
+124,PG9,BLE_RX,bluetooth,gpio,schematic,USART6 RX-side net
+125,PG10,MAIN0,motor-output-a,gpio,schematic,
+126,PG11,MAIN1,motor-output-a,gpio,schematic,
+127,PG12,MCIN0,motor-output-c,gpio,schematic,
+128,PG13,MCIN1,motor-output-c,gpio,schematic,
+129,PG14,BLE_TX,bluetooth,gpio,schematic,USART6 TX-side net
+130,VSS,GND,power,ground,schematic,
+131,VDD,V33,power,supply,schematic,
+132,PG15,RXINA_EN,input-port-a,gpio,schematic,
+133,PB3,DIGIA0,input-port-a,gpio,schematic,
+134,PB4,LEGDETA,input-port-a,gpio,schematic,
+135,PB5,ULPI_D7,usb-hs-ulpi,gpio,hardware-tested,USB3300
+136,PB6,TXINC,input-port-c,gpio,schematic,
+137,PB7,RXINC,input-port-c,gpio,schematic,
+138,BOOT0,GND,boot,boot,schematic,boot strap low
+139,PB8,MBPWM,motor-output-b,gpio,schematic,TIM4_CH3
+140,PB9,MAPWM,motor-output-a,gpio,schematic,TIM4_CH4
+141,PE0,NC,system,gpio,schematic,no net shown
+142,PE1,PB_DET,power-control,gpio,schematic,power key detect
+143,PDR_ON,PDR_ON_BIAS,system,configuration,schematic,resistor bias network
+144,VDD,V33,power,supply,schematic,

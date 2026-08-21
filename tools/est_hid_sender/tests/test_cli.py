@@ -28,6 +28,15 @@ class CliTests(unittest.TestCase):
             open_device.assert_not_called()
             self.assertIn("manifest_status=verified", output.getvalue())
 
+    def test_keys_prints_pressed_button_names(self) -> None:
+        output = io.StringIO()
+        transport = FakeTransport(key_mask=0x21)
+        with mock.patch.object(cli.HidTransport, "open", return_value=transport):
+            with contextlib.redirect_stdout(output):
+                self.assertEqual(cli.main(["keys"]), 0)
+        self.assertIn("current_version=M0.19A", output.getvalue())
+        self.assertIn("pressed=KEY0,KEY5 mask=0x21", output.getvalue())
+
     def test_flash_shows_versions_and_writes_success_log(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             directory = Path(temp)

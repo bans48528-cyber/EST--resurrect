@@ -24,9 +24,11 @@ from est_hid_sender.errors import (  # noqa: E402
 from est_hid_sender.protocol import (  # noqa: E402
     build_frame,
     build_heartbeat_frame,
+    build_key_status_frame,
     build_update_frame,
     checksum,
     parse_heartbeat_response,
+    parse_key_status_response,
     parse_update_ack,
     split_reports,
 )
@@ -64,6 +66,13 @@ def build_heartbeat(version: bytes = b"M0.19A") -> bytes:
     return bytes(frame).ljust(LEGACY_REPORT_SIZE, b"\x00")
 
 
+def build_key_status(mask: int = 0) -> bytes:
+    frame = bytearray((0x68, 0x21, 0x0D, 0x01, 0x00, mask & 0x3F))
+    frame.append(checksum(frame))
+    frame.append(0x16)
+    return bytes(frame).ljust(LEGACY_REPORT_SIZE, b"\x00")
+
+
 class ProtocolTests(unittest.TestCase):
     def test_heartbeat_frame_preserves_legacy_frame_format(self) -> None:
         frame = build_heartbeat_frame()
@@ -91,6 +100,13 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(ack.frame_index, 3)
         self.assertEqual(ack.flag, 1)
 
+    def test_key_status_query_and_response(self) -> None:
+        self.assertEqual(
+            build_key_status_frame(),
+            bytes((0x68, 0x11, 0x0D, 0x00, 0x00, 0x86, 0x16)),
+        )
+        self.assertEqual(parse_key_status_response(build_key_status(0x25)), 0x25)
+
 
 class FirmwareTests(unittest.TestCase):
     def test_accepts_existing_est_and_app_upgrade_headers(self) -> None:
@@ -113,7 +129,9 @@ class FirmwareTests(unittest.TestCase):
 
 
 class FakeTransport:
-    def __init__(self, output_len: int = 1025, ack_flag: int = 1) -> None:
+    def __init__(
+        self, output_len: int = 1025, ack_flag: int = 1, key_mask: int = 0
+    ) -> None:
         self.input_len = 1025
         self.output_len = output_len
         self.path = "fake"
@@ -121,6 +139,7 @@ class FakeTransport:
         self.reports: list[bytes] = []
         self.acks: list[bytes] = []
         self.ack_flag = ack_flag
+        self.key_mask = key_mask
 
     def __enter__(self) -> "FakeTransport":
         return self
@@ -139,6 +158,9 @@ class FakeTransport:
         if report[0:3] == b"\x68\x11\x01":
             self.acks.append(build_heartbeat())
             return
+        if report[0:3] == b"\x68\x11\x0d":
+            self.acks.append(build_key_status(self.key_mask))
+            return
         if report[0:3] == b"\x68\x11\x05":
             total = int.from_bytes(report[5:7], "little")
             index = int.from_bytes(report[7:9], "little")
@@ -156,6 +178,10 @@ class UpdaterTests(unittest.TestCase):
         updater = FirmwareUpdater(transport)
         self.assertEqual(updater.ping(), "M0.19A")
         self.assertEqual(len(transport.reports), 1)
+
+    def test_reads_debounced_key_mask_from_device(self) -> None:
+        updater = FirmwareUpdater(FakeTransport(key_mask=0x12))
+        self.assertEqual(updater.read_key_mask(), 0x12)
 
     def test_flash_sends_high_speed_payloads_and_waits_for_matching_ack(self) -> None:
         transport = FakeTransport(output_len=1025)

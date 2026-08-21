@@ -4,16 +4,11 @@
 #include <libopencm3/cm3/nvic.h>
 #include <libopencm3/cm3/scb.h>
 #include <libopencm3/cm3/systick.h>
-#include <libopencm3/stm32/gpio.h>
-#include <libopencm3/stm32/iwdg.h>
 #include <libopencm3/stm32/rcc.h>
 
 #include "app_config.h"
 #include "platform.h"
-
-static volatile uint32_t milliseconds;
-
-void sys_tick_handler(void);
+#include "watchdog.h"
 
 static void reset_bootloader_peripherals(void)
 {
@@ -33,7 +28,7 @@ static void reset_bootloader_peripherals(void)
 
 	for (index = 0U; index < (sizeof(resets) / sizeof(resets[0])); index++) {
 		rcc_periph_reset_pulse(resets[index]);
-		platform_watchdog_kick();
+		watchdog_kick();
 	}
 }
 
@@ -41,7 +36,7 @@ void platform_prepare_from_bootloader(void)
 {
 	uint32_t index;
 
-	platform_watchdog_kick();
+	watchdog_kick();
 	STK_CSR = 0U;
 	STK_RVR = 0U;
 	STK_CVR = 0U;
@@ -59,30 +54,7 @@ void platform_prepare_from_bootloader(void)
 	rcc_apb1_frequency = 42000000U;
 	rcc_apb2_frequency = 84000000U;
 	SCB_VTOR = APP_FLASH_START;
-	platform_watchdog_kick();
-}
-
-void platform_init(void)
-{
-	rcc_periph_clock_enable(RCC_GPIOE);
-	rcc_periph_clock_enable(RCC_GPIOF);
-	rcc_periph_clock_enable(RCC_GPIOC);
-
-	gpio_set(GPIOE, GPIO2);
-	gpio_mode_setup(GPIOE, GPIO_MODE_OUTPUT, GPIO_PUPD_PULLUP, GPIO2);
-	gpio_set_output_options(GPIOE, GPIO_OTYPE_PP, GPIO_OSPEED_100MHZ, GPIO2);
-
-	gpio_clear(GPIOF, GPIO2);
-	gpio_clear(GPIOC, GPIO13);
-	gpio_mode_setup(GPIOF, GPIO_MODE_OUTPUT, GPIO_PUPD_NONE, GPIO2);
-	gpio_mode_setup(GPIOC, GPIO_MODE_OUTPUT, GPIO_PUPD_NONE, GPIO13);
-	gpio_set_output_options(GPIOF, GPIO_OTYPE_PP, GPIO_OSPEED_50MHZ, GPIO2);
-	gpio_set_output_options(GPIOC, GPIO_OTYPE_PP, GPIO_OSPEED_50MHZ, GPIO13);
-
-	systick_set_frequency(1000U, 168000000U);
-	systick_interrupt_enable();
-	systick_counter_enable();
-	platform_watchdog_kick();
+	watchdog_kick();
 }
 
 void platform_enable_interrupts(void)
@@ -90,52 +62,7 @@ void platform_enable_interrupts(void)
 	cm_enable_interrupts();
 }
 
-uint32_t platform_millis(void)
-{
-	return milliseconds;
-}
-
-void platform_diag_set(uint8_t phase)
-{
-	gpio_clear(GPIOF, GPIO2);
-	if ((phase & 1U) == 0U) {
-		gpio_clear(GPIOC, GPIO13);
-	} else {
-		gpio_set(GPIOC, GPIO13);
-	}
-}
-
-void platform_diag_checkpoint(uint8_t code)
-{
-	if ((code & 1U) != 0U) {
-		gpio_set(GPIOF, GPIO2);
-	} else {
-		gpio_clear(GPIOF, GPIO2);
-	}
-	if ((code & 2U) != 0U) {
-		gpio_set(GPIOC, GPIO13);
-	} else {
-		gpio_clear(GPIOC, GPIO13);
-	}
-}
-
-void platform_watchdog_kick(void)
-{
-	iwdg_reset();
-}
-
-void platform_power_off(void)
+void platform_disable_interrupts(void)
 {
 	cm_disable_interrupts();
-	gpio_clear(GPIOF, GPIO2);
-	gpio_clear(GPIOC, GPIO13);
-	gpio_clear(GPIOE, GPIO2);
-	while (1) {
-	}
-}
-
-void sys_tick_handler(void)
-{
-	milliseconds++;
-	platform_watchdog_kick();
 }

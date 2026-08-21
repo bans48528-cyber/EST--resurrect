@@ -5,7 +5,7 @@
 #include <libopencm3/stm32/flash.h>
 
 #include "app_config.h"
-#include "platform.h"
+#include "watchdog.h"
 #include "update_storage.h"
 
 #define FLASH_ERROR_MASK (FLASH_SR_PGSERR | FLASH_SR_PGPERR | \
@@ -31,7 +31,7 @@ static bool range_is_erased(uint32_t start, uint32_t end)
 		if (*(const volatile uint32_t *)address != 0xFFFFFFFFU) {
 			return false;
 		}
-		platform_watchdog_kick();
+		watchdog_kick();
 	}
 	return true;
 }
@@ -44,9 +44,9 @@ bool update_storage_begin(void)
 	flash_unlock();
 	clear_flash_status();
 	for (sector = 8U; sector <= 11U; sector++) {
-		platform_watchdog_kick();
+		watchdog_kick();
 		flash_erase_sector(sector, FLASH_CR_PROGRAM_X32);
-		platform_watchdog_kick();
+		watchdog_kick();
 		if (!flash_ok()) {
 			flash_lock();
 			return false;
@@ -85,7 +85,7 @@ bool update_storage_write(uint32_t offset, const uint8_t *data, size_t length)
 		flash_program_half_word(address, value);
 		address += 2U;
 		index += 2U;
-		platform_watchdog_kick();
+		watchdog_kick();
 	}
 	if (index < length) {
 		flash_program_byte(address, data[index]);
@@ -124,7 +124,7 @@ bool update_storage_validate_image(uint32_t package_length)
 	}
 
 	for (index = 0U; index < package_length; index += 4096U) {
-		platform_watchdog_kick();
+		watchdog_kick();
 	}
 
 	initial_msp = *(const volatile uint32_t *)(UPDATE_FLASH_START + 4U);
@@ -148,9 +148,9 @@ bool update_storage_commit(uint32_t package_length)
 	stored_length = package_length - 1U;
 
 	clear_flash_status();
-	platform_watchdog_kick();
+	watchdog_kick();
 	flash_erase_sector(UPDATE_STATUS_FLASH_SECTOR, FLASH_CR_PROGRAM_X32);
-	platform_watchdog_kick();
+	watchdog_kick();
 	if (!flash_ok()) {
 		flash_lock();
 		storage_open = false;
