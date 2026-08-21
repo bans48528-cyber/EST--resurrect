@@ -1,0 +1,54 @@
+#ifndef APP_CONFIG_H
+#define APP_CONFIG_H
+
+#include <stdint.h>
+
+#define APP_FLASH_START                 0x08010000U
+#define APP_FLASH_END                   0x08080000U
+#define APP_FLASH_CAPACITY              (APP_FLASH_END - APP_FLASH_START)
+
+#define UPDATE_FLASH_START              0x08080000U
+#define UPDATE_FLASH_PHYSICAL_END       0x08100000U
+#define UPDATE_MAX_PACKAGE_SIZE         APP_FLASH_CAPACITY
+
+#define UPDATE_LENGTH_LOW_ADDRESS       0x0800C000U
+#define UPDATE_LENGTH_HIGH_ADDRESS      0x0800C008U
+#define UPDATE_STATUS_ADDRESS           0x0800C010U
+#define UPDATE_STATUS_FLASH_SECTOR      3U
+#define UPDATE_STATUS_PENDING           0x0000U
+
+#define BOOTLOADER_MIN_STORED_LENGTH    (200U * 1024U)
+#define RELEASE_PACKAGE_SIZE            (256U * 1024U)
+
+#define UPDATE_COMMAND                  0x05U
+#define HEARTBEAT_COMMAND               0x01U
+#define HOST_FRAME_DIRECTION            0x11U
+#define DEVICE_FRAME_DIRECTION          0x21U
+#define FRAME_START_BYTE                0x68U
+#define FRAME_END_BYTE                  0x16U
+#define UPDATE_FRAME_MAX_PAYLOAD        1010U
+#define UPDATE_FRAME_MAX_DATA_LENGTH    (UPDATE_FRAME_MAX_PAYLOAD + 4U)
+#define UPDATE_FRAME_MAX_LENGTH         (UPDATE_FRAME_MAX_DATA_LENGTH + 7U)
+#define UPDATE_SESSION_TIMEOUT_MS       400000U
+#define LOGICAL_FRAME_TIMEOUT_MS        3000U
+#define LOGICAL_FRAME_RESTART_GAP_MS    250U
+#define FINAL_ACK_POWER_OFF_TIMEOUT_MS  1000U
+
+#define USB_VENDOR_ID                   0x0483U
+#define USB_PRODUCT_ID                  0x5750U
+#define USB_HID_IN_ENDPOINT             0x82U
+#define USB_HID_OUT_ENDPOINT            0x01U
+#define USB_HID_REPORT_SIZE             1024U
+
+#ifndef APP_VERSION_TEXT
+#define APP_VERSION_TEXT "M0.01A"
+#endif
+
+_Static_assert(sizeof(APP_VERSION_TEXT) == 7U,
+	"APP_VERSION_TEXT must contain exactly six ASCII characters");
+_Static_assert(RELEASE_PACKAGE_SIZE > (BOOTLOADER_MIN_STORED_LENGTH + 1U),
+	"Release package does not satisfy the old Bootloader minimum length");
+_Static_assert(RELEASE_PACKAGE_SIZE < UPDATE_MAX_PACKAGE_SIZE,
+	"Release package does not fit the old Bootloader APP range");
+
+#endif

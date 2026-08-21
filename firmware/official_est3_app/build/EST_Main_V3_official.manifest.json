@@ -1,0 +1,12 @@
+{
+  "version": "03.02A",
+  "input": "EST_Main_V3.bin",
+  "raw_app_size": 411908,
+  "unpadded_package_size": 411912,
+  "upgrade_package_size": 411912,
+  "bootloader_stored_length": 411911,
+  "initial_msp": "0x2002D3B0",
+  "reset_handler": "0x0801019D",
+  "header_ascii": "APP=",
+  "sha256": "df358dedd80a77d6db76d2b3852ba67be2b20019659799b3296a42b645df0914"
+}

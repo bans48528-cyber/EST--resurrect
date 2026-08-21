@@ -1,0 +1,23 @@
+# Large historical archives are synchronized separately through Baidu Netdisk.
+/乐博士可视化编程机器人最终资料20180207/
+/est V1.0 Chinese/
+/EST 3.0/
+/work/
+
+# Generated firmware outputs. Tested release packages live in firmware/releases.
+/firmware/minimal_upgrade_app/build/
+/firmware/minimal_upgrade_app/firmware/
+/firmware/official_est3_app/build/*.app.bin
+*.d
+*.o
+
+# Local caches and IDE state.
+**/__pycache__/
+*.py[cod]
+*.suo
+*.user
+*.tlog
+*.lastbuildstate
+/.codex/
+/.agents/
+
