@@ -68,10 +68,11 @@ H:\EST第二期\EST 3.0
 
 ```powershell
 python tools\est_hid_sender\est_hid_sender.py ping
-python tools\est_hid_sender\est_hid_sender.py flash --skip-ping --file "固件.upgrade.bin"
+python tools\est_hid_sender\est_hid_sender.py verify --file "固件.upgrade.bin"
+python tools\est_hid_sender\est_hid_sender.py flash --file "固件.upgrade.bin"
 ```
 
-发送时第一帧偶发 timeout，重试后可能继续，不应仅凭一次第一帧 timeout 判断协议整体失败。
+发送器对第 0 包使用 15 秒 ACK 超时，对其余包使用 4 秒 ACK 超时；发送前默认校验 manifest 并显示当前/目标版本，每次升级保存日志。
 
 ## 5. 当前已有产物
 

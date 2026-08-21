@@ -4,6 +4,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT.parent))
@@ -14,6 +15,12 @@ from est_hid_sender.constants import (  # noqa: E402
     MAX_PAYLOAD,
 )
 from est_hid_sender.firmware import detect_header, load_firmware_package  # noqa: E402
+from est_hid_sender.errors import (  # noqa: E402
+    AckRejectedError,
+    AckTimeoutError,
+    FirmwareValidationError,
+    HeartbeatTimeoutError,
+)
 from est_hid_sender.protocol import (  # noqa: E402
     build_frame,
     build_heartbeat_frame,
@@ -91,7 +98,7 @@ class FirmwareTests(unittest.TestCase):
         self.assertEqual(detect_header(b"EST" + b"\xFF"), b"EST")
 
     def test_rejects_unknown_firmware_header(self) -> None:
-        with self.assertRaisesRegex(ValueError, "not EST/APP="):
+        with self.assertRaisesRegex(FirmwareValidationError, "升级包头无效"):
             detect_header(b"BAD")
 
     def test_load_firmware_package_reports_size_total_and_sha(self) -> None:
@@ -106,19 +113,26 @@ class FirmwareTests(unittest.TestCase):
 
 
 class FakeTransport:
-    def __init__(self, output_len: int = 1025) -> None:
+    def __init__(self, output_len: int = 1025, ack_flag: int = 1) -> None:
         self.input_len = 1025
         self.output_len = output_len
         self.path = "fake"
         self.payloads: list[bytes] = []
         self.reports: list[bytes] = []
         self.acks: list[bytes] = []
+        self.ack_flag = ack_flag
+
+    def __enter__(self) -> "FakeTransport":
+        return self
+
+    def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
+        pass
 
     def write_payload(self, payload: bytes) -> None:
         self.payloads.append(payload)
         total = int.from_bytes(payload[5:7], "little")
         index = int.from_bytes(payload[7:9], "little")
-        self.acks.append(build_ack(total, index))
+        self.acks.append(build_ack(total, index, self.ack_flag))
 
     def write_report(self, report: bytes) -> None:
         self.reports.append(report)
@@ -128,7 +142,7 @@ class FakeTransport:
         if report[0:3] == b"\x68\x11\x05":
             total = int.from_bytes(report[5:7], "little")
             index = int.from_bytes(report[7:9], "little")
-            self.acks.append(build_ack(total, index))
+            self.acks.append(build_ack(total, index, self.ack_flag))
 
     def read_report(self, timeout_ms: int = 250) -> bytes | None:
         if self.acks:
@@ -160,6 +174,30 @@ class UpdaterTests(unittest.TestCase):
         updater.flash(b"APP=" + bytes(MAX_PAYLOAD - 4))
         self.assertGreater(len(transport.reports), 1)
         self.assertTrue(all(len(report) == LEGACY_REPORT_SIZE for report in transport.reports))
+
+    def test_ping_timeout_has_specific_error(self) -> None:
+        transport = FakeTransport()
+        transport.write_report = mock.Mock()
+        updater = FirmwareUpdater(transport)
+        with mock.patch(
+            "est_hid_sender.updater.time.monotonic", side_effect=(0.0, 10.0)
+        ):
+            with self.assertRaises(HeartbeatTimeoutError):
+                updater.ping()
+
+    def test_ack_timeout_has_specific_error(self) -> None:
+        transport = FakeTransport()
+        updater = FirmwareUpdater(transport)
+        with mock.patch.object(transport, "read_report", return_value=None), mock.patch(
+            "est_hid_sender.updater.time.monotonic", side_effect=(0.0, 20.0)
+        ):
+            with self.assertRaises(AckTimeoutError):
+                updater.flash(b"APP=")
+
+    def test_ack_flag_failure_has_specific_error(self) -> None:
+        updater = FirmwareUpdater(FakeTransport(ack_flag=7))
+        with self.assertRaisesRegex(AckRejectedError, "ACK flag=7"):
+            updater.flash(b"APP=")
 
 
 if __name__ == "__main__":

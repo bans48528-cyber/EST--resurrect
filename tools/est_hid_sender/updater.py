@@ -15,6 +15,7 @@ from .constants import (
     MAX_PAYLOAD,
     PACKET_ACK_TIMEOUT_SECONDS,
 )
+from .errors import AckRejectedError, AckTimeoutError, HeartbeatTimeoutError
 from .protocol import (
     build_heartbeat_frame,
     build_update_frame,
@@ -64,7 +65,9 @@ class FirmwareUpdater:
             version = parse_heartbeat_response(report)
             if version is not None:
                 return version
-        raise TimeoutError("心跳无回应")
+        raise HeartbeatTimeoutError(
+            "设备已枚举，但心跳回应超时；请确认设备处于正常 APP 模式后重试"
+        )
 
     def flash(
         self,
@@ -80,7 +83,9 @@ class FirmwareUpdater:
             self._write_frame(frame)
             flag = self._read_matching_ack(total, index)
             if flag != 1:
-                raise RuntimeError(f"第 {index + 1}/{total} 包失败，设备返回 {flag}")
+                raise AckRejectedError(
+                    f"第 {index + 1}/{total} 包被设备拒绝：ACK flag={flag}（成功值应为 1）"
+                )
             if progress is not None:
                 progress(PacketProgress(index + 1, total, "acked"))
 
@@ -115,4 +120,6 @@ class FirmwareUpdater:
                 continue
             if ack.total_frames == total and ack.frame_index == index:
                 return ack.flag
-        raise TimeoutError(f"等待第 {index + 1}/{total} 包回应超时")
+        raise AckTimeoutError(
+            f"等待第 {index + 1}/{total} 包 ACK 超时；请保留日志并重新连接设备后重试"
+        )

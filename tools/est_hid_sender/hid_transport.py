@@ -11,6 +11,7 @@ from .constants import (
     PID,
     VID,
 )
+from .errors import DeviceNotFoundError
 
 HIDP_STATUS_SUCCESS = 0x00110000
 
@@ -301,7 +302,9 @@ def open_est_device(vid: int = VID, pid: int = PID) -> HidTransport:
         except Exception:
             kernel32.CloseHandle(handle)
             raise
-    raise RuntimeError("未找到 EST HID 设备 VID_0483&PID_5750")
+    raise DeviceNotFoundError(
+        "未枚举到 EST HID 设备（VID_0483&PID_5750）；请确认设备已开机且 USB 已连接"
+    )
 
 
 def wait_overlapped(handle: int, overlapped: OVERLAPPED, timeout_ms: int, action: str) -> int | None:
