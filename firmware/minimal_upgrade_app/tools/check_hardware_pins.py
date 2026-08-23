@@ -26,6 +26,32 @@ FIRMWARE_NETS = {
     "LCD_SCK": "board_lcd.c",
     "LCD_SDAI": "board_lcd.c",
     "LCD_RST": "board_lcd.c",
+    "SPI0_CS": "board_flash.c",
+    "VS_SCK": "board_flash.c",
+    "VS_MISO": "board_flash.c",
+    "VS_MOSI": "board_flash.c",
+    "VS_CS": "board_flash.c",
+    "VS_XDCS": "board_flash.c",
+    "MAPWM": "board_motor.c",
+    "MAIN0": "board_motor.c",
+    "MAIN1": "board_motor.c",
+    "TACHOA0": "board_motor.c",
+    "TACHOA1": "board_motor.c",
+    "MBPWM": "board_motor.c",
+    "MBIN0": "board_motor.c",
+    "MBIN1": "board_motor.c",
+    "TACHOB0": "board_motor.c",
+    "TACHOB1": "board_motor.c",
+    "MCPWM": "board_motor.c",
+    "MCIN0": "board_motor.c",
+    "MCIN1": "board_motor.c",
+    "TACHOC0": "board_motor.c",
+    "TACHOC1": "board_motor.c",
+    "MDPWM": "board_motor.c",
+    "MDIN0": "board_motor.c",
+    "MDIN1": "board_motor.c",
+    "TACHOD0": "board_motor.c",
+    "TACHOD1": "board_motor.c",
     "ULPI_D0": "usb_hid.c",
     "ULPI_D1": "usb_hid.c",
     "ULPI_D2": "usb_hid.c",
@@ -125,6 +151,66 @@ def validate_lcd(source_dir: Path, net_to_pin: dict[str, str]) -> None:
             )
 
 
+def validate_external_flash(source_dir: Path, net_to_pin: dict[str, str]) -> None:
+    source = read_source(source_dir, "board_flash.c")
+    roles = {
+        "FLASH_CHIP_SELECT": "SPI0_CS",
+        "FLASH_CLOCK": "VS_SCK",
+        "FLASH_MISO": "VS_MISO",
+        "FLASH_MOSI": "VS_MOSI",
+        "AUDIO_COMMAND_SELECT": "VS_CS",
+        "AUDIO_DATA_SELECT": "VS_XDCS",
+    }
+    for role, net in roles.items():
+        port_match = re.search(rf"#define {role}_PORT GPIO([A-Z])", source)
+        pin_match = re.search(rf"#define {role}_PIN GPIO(\d+)", source)
+        if port_match is None or pin_match is None:
+            raise ValueError(f"board_flash.c is missing the {role} pin macros")
+        actual_pin = f"P{port_match.group(1)}{int(pin_match.group(1))}"
+        if actual_pin != net_to_pin[net]:
+            raise ValueError(
+                f"board_flash.c uses {net}={actual_pin}, expected {net_to_pin[net]}"
+            )
+
+
+def validate_motor_ports(source_dir: Path, net_to_pin: dict[str, str]) -> None:
+    source = read_source(source_dir, "board_motor.c")
+    roles = {
+        "MAPWM": ("MOTOR_A_PWM_PORT", "MOTOR_A_PWM_PIN"),
+        "MAIN0": ("MOTOR_A_DIRECTION_PORT", "MOTOR_A_DIRECTION_0_PIN"),
+        "MAIN1": ("MOTOR_A_DIRECTION_PORT", "MOTOR_A_DIRECTION_1_PIN"),
+        "TACHOA0": ("MOTOR_A_TACHO_PORT", "MOTOR_A_TACHO_PHASE_PIN"),
+        "TACHOA1": ("MOTOR_A_TACHO_PORT", "MOTOR_A_TACHO_DIRECTION_PIN"),
+        "MBPWM": ("MOTOR_B_PWM_PORT", "MOTOR_B_PWM_PIN"),
+        "MBIN0": ("MOTOR_B_DIRECTION_PORT", "MOTOR_B_DIRECTION_0_PIN"),
+        "MBIN1": ("MOTOR_B_DIRECTION_PORT", "MOTOR_B_DIRECTION_1_PIN"),
+        "TACHOB0": ("MOTOR_B_TACHO_PORT", "MOTOR_B_TACHO_PHASE_PIN"),
+        "TACHOB1": ("MOTOR_B_TACHO_PORT", "MOTOR_B_TACHO_DIRECTION_PIN"),
+        "MCPWM": ("MOTOR_C_PWM_PORT", "MOTOR_C_PWM_PIN"),
+        "MCIN0": ("MOTOR_C_DIRECTION_PORT", "MOTOR_C_DIRECTION_0_PIN"),
+        "MCIN1": ("MOTOR_C_DIRECTION_PORT", "MOTOR_C_DIRECTION_1_PIN"),
+        "TACHOC0": ("MOTOR_C_TACHO_PORT", "MOTOR_C_TACHO_PHASE_PIN"),
+        "TACHOC1": ("MOTOR_C_TACHO_PORT", "MOTOR_C_TACHO_DIRECTION_PIN"),
+        "MDPWM": ("MOTOR_D_PWM_PORT", "MOTOR_D_PWM_PIN"),
+        "MDIN0": ("MOTOR_D_DIRECTION_PORT", "MOTOR_D_DIRECTION_0_PIN"),
+        "MDIN1": ("MOTOR_D_DIRECTION_PORT", "MOTOR_D_DIRECTION_1_PIN"),
+        "TACHOD0": ("MOTOR_D_TACHO_PORT", "MOTOR_D_TACHO_PHASE_PIN"),
+        "TACHOD1": ("MOTOR_D_TACHO_PORT", "MOTOR_D_TACHO_DIRECTION_PIN"),
+    }
+    for net, (port_macro, pin_macro) in roles.items():
+        port_match = re.search(rf"#define {port_macro} GPIO([A-Z])", source)
+        pin_match = re.search(rf"#define {pin_macro} GPIO(\d+)", source)
+        if port_match is None or pin_match is None:
+            raise ValueError(
+                f"board_motor.c is missing the {port_macro}/{pin_macro} macros"
+            )
+        actual_pin = f"P{port_match.group(1)}{int(pin_match.group(1))}"
+        if actual_pin != net_to_pin[net]:
+            raise ValueError(
+                f"board_motor.c uses {net}={actual_pin}, expected {net_to_pin[net]}"
+            )
+
+
 def read_mask_pins(source: str, variable: str, port: str) -> set[str]:
     match = re.search(rf"const uint16_t {variable} = (.*?);", source, re.DOTALL)
     if match is None:
@@ -163,6 +249,8 @@ def validate_repository(repo_root: Path) -> tuple[int, int, int]:
     source_dir = repo_root / "firmware/minimal_upgrade_app/src"
     validate_simple_modules(source_dir, net_to_pin)
     validate_lcd(source_dir, net_to_pin)
+    validate_external_flash(source_dir, net_to_pin)
+    validate_motor_ports(source_dir, net_to_pin)
     validate_usb(source_dir, net_to_pin)
     validate_claim_conflicts(net_to_pin)
     gpio_count = sum(row["kind"] == "gpio" for row in rows)

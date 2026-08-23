@@ -8,12 +8,23 @@ from typing import Literal, Protocol
 
 from .constants import (
     FIRST_PACKET_ACK_TIMEOUT_SECONDS,
+    FLASH_DIAGNOSTIC_TIMEOUT_SECONDS,
+    FLASH_ID_TIMEOUT_SECONDS,
     FRAGMENT_WRITE_DELAY_SECONDS,
     HEARTBEAT_TIMEOUT_SECONDS,
     HID_READ_TIMEOUT_MS,
     LEGACY_REPORT_SIZE,
     KEY_STATUS_TIMEOUT_SECONDS,
     MAX_PAYLOAD,
+    MOTOR_CONTROL_ACTION_BRAKE,
+    MOTOR_CONTROL_ACTION_COAST,
+    MOTOR_CONTROL_ACTION_RESET_TACHO,
+    MOTOR_CONTROL_ACTION_SET_POWER,
+    MOTOR_CONTROL_ACTION_STATUS,
+    MOTOR_TEST_ACTION_START,
+    MOTOR_TEST_ACTION_STATUS,
+    MOTOR_TEST_ACTION_STOP,
+    MOTOR_TEST_TIMEOUT_SECONDS,
     PACKET_ACK_TIMEOUT_SECONDS,
 )
 from .errors import (
@@ -24,12 +35,41 @@ from .errors import (
 )
 from .protocol import (
     build_heartbeat_frame,
+    build_flash_id_frame,
+    build_flash_scan_frame,
+    build_flash_test_frame,
+    build_flash_status_frame,
+    build_flash_mode_probe_frame,
     build_key_status_frame,
+    build_motor_control_frame,
+    build_motor_dual_test_frame,
+    build_motor_stop_test_frame,
+    build_motor_tacho_test_frame,
+    build_motor_test_frame,
     build_update_frame,
     parse_heartbeat_response,
+    parse_flash_id_response,
+    parse_flash_scan_response,
+    parse_flash_test_response,
+    parse_flash_status_response,
+    parse_flash_mode_probe_response,
     parse_key_status_response,
+    parse_motor_control_response,
+    parse_motor_dual_test_response,
+    parse_motor_stop_test_response,
+    parse_motor_tacho_test_response,
+    parse_motor_test_response,
     parse_update_ack,
     split_reports,
+    FlashScanResult,
+    FlashTestResult,
+    FlashStatus,
+    FlashModeProbe,
+    MotorTestResult,
+    MotorTachoTestResult,
+    MotorStopTestResult,
+    MotorDualTestResult,
+    MotorControlResult,
 )
 
 
@@ -90,6 +130,261 @@ class FirmwareUpdater:
                 return key_mask
         raise DiagnosticTimeoutError(
             "设备没有返回按键状态；请确认固件支持 keys 命令"
+        )
+
+    def read_flash_id(self) -> bytes:
+        report = build_flash_id_frame().ljust(LEGACY_REPORT_SIZE, b"\x00")
+        self.transport.write_report(report)
+        deadline = time.monotonic() + FLASH_ID_TIMEOUT_SECONDS
+        while time.monotonic() < deadline:
+            report = self.transport.read_report()
+            if not report:
+                continue
+            jedec_id = parse_flash_id_response(report)
+            if jedec_id is not None:
+                return jedec_id
+        raise DiagnosticTimeoutError(
+            "设备没有返回外部 Flash ID；请确认固件支持 flash-id 命令"
+        )
+
+    def scan_flash_test_sector(self) -> FlashScanResult:
+        report = build_flash_scan_frame().ljust(LEGACY_REPORT_SIZE, b"\x00")
+        self.transport.write_report(report)
+        deadline = time.monotonic() + FLASH_DIAGNOSTIC_TIMEOUT_SECONDS
+        while time.monotonic() < deadline:
+            response = self.transport.read_report()
+            if not response:
+                continue
+            result = parse_flash_scan_response(response)
+            if result is not None:
+                return result
+        raise DiagnosticTimeoutError(
+            "设备没有返回 Flash 空白区检查结果；请确认固件支持 flash-scan 命令"
+        )
+
+    def test_flash_4byte_addressing(self) -> FlashTestResult:
+        report = build_flash_test_frame().ljust(LEGACY_REPORT_SIZE, b"\x00")
+        self.transport.write_report(report)
+        deadline = time.monotonic() + FLASH_DIAGNOSTIC_TIMEOUT_SECONDS
+        while time.monotonic() < deadline:
+            response = self.transport.read_report()
+            if not response:
+                continue
+            result = parse_flash_test_response(response)
+            if result is not None:
+                return result
+        raise DiagnosticTimeoutError(
+            "设备没有返回 Flash 读写测试结果；请确认设备仍在线"
+        )
+
+    def read_flash_status(self) -> FlashStatus:
+        report = build_flash_status_frame().ljust(LEGACY_REPORT_SIZE, b"\x00")
+        self.transport.write_report(report)
+        deadline = time.monotonic() + FLASH_DIAGNOSTIC_TIMEOUT_SECONDS
+        while time.monotonic() < deadline:
+            response = self.transport.read_report()
+            if not response:
+                continue
+            status = parse_flash_status_response(response)
+            if status is not None:
+                return status
+        raise DiagnosticTimeoutError(
+            "设备没有返回 Flash 保护状态；请确认固件支持 flash-status 命令"
+        )
+
+    def probe_flash_modes(self) -> FlashModeProbe:
+        report = build_flash_mode_probe_frame().ljust(LEGACY_REPORT_SIZE, b"\x00")
+        self.transport.write_report(report)
+        deadline = time.monotonic() + FLASH_DIAGNOSTIC_TIMEOUT_SECONDS
+        while time.monotonic() < deadline:
+            response = self.transport.read_report()
+            if not response:
+                continue
+            probe = parse_flash_mode_probe_response(response)
+            if probe is not None:
+                return probe
+        raise DiagnosticTimeoutError(
+            "设备没有返回 Flash 模式检测结果；请确认固件支持 flash-mode-probe 命令"
+        )
+
+    def start_motor_test(self) -> MotorTestResult:
+        return self._motor_test_action(MOTOR_TEST_ACTION_START)
+
+    def read_motor_test_status(self) -> MotorTestResult:
+        return self._motor_test_action(MOTOR_TEST_ACTION_STATUS)
+
+    def stop_motor_test(self) -> MotorTestResult:
+        return self._motor_test_action(MOTOR_TEST_ACTION_STOP)
+
+    def _motor_test_action(self, action: int) -> MotorTestResult:
+        report = build_motor_test_frame(action).ljust(LEGACY_REPORT_SIZE, b"\x00")
+        self.transport.write_report(report)
+        deadline = time.monotonic() + MOTOR_TEST_TIMEOUT_SECONDS
+        while time.monotonic() < deadline:
+            response = self.transport.read_report()
+            if not response:
+                continue
+            result = parse_motor_test_response(response)
+            if result is not None:
+                return result
+        raise DiagnosticTimeoutError(
+            "设备没有返回马达测试状态；请断开马达并确认固件支持 motor-test 命令"
+        )
+
+    def start_motor_tacho_test(
+        self, power_percent: int | None = None, motor_port: int | None = None
+    ) -> MotorTachoTestResult:
+        return self._motor_tacho_test_action(
+            MOTOR_TEST_ACTION_START,
+            power_percent=power_percent,
+            motor_port=motor_port,
+        )
+
+    def read_motor_tacho_test_status(self) -> MotorTachoTestResult:
+        return self._motor_tacho_test_action(MOTOR_TEST_ACTION_STATUS)
+
+    def stop_motor_tacho_test(self) -> MotorTachoTestResult:
+        return self._motor_tacho_test_action(MOTOR_TEST_ACTION_STOP)
+
+    def _motor_tacho_test_action(
+        self,
+        action: int,
+        power_percent: int | None = None,
+        motor_port: int | None = None,
+    ) -> MotorTachoTestResult:
+        report = build_motor_tacho_test_frame(
+            action, power_percent, motor_port
+        ).ljust(
+            LEGACY_REPORT_SIZE, b"\x00"
+        )
+        self.transport.write_report(report)
+        deadline = time.monotonic() + MOTOR_TEST_TIMEOUT_SECONDS
+        while time.monotonic() < deadline:
+            response = self.transport.read_report()
+            if not response:
+                continue
+            result = parse_motor_tacho_test_response(response)
+            if result is not None:
+                return result
+        raise DiagnosticTimeoutError(
+            "设备没有返回马达测速结果；请确认固件支持 motor-tacho-test 命令"
+        )
+
+    def start_motor_stop_test(
+        self,
+        stop_mode: int,
+        power_percent: int,
+        motor_port: int | None = None,
+    ) -> MotorStopTestResult:
+        return self._motor_stop_test_action(
+            MOTOR_TEST_ACTION_START,
+            stop_mode=stop_mode,
+            power_percent=power_percent,
+            motor_port=motor_port,
+        )
+
+    def read_motor_stop_test_status(self) -> MotorStopTestResult:
+        return self._motor_stop_test_action(MOTOR_TEST_ACTION_STATUS)
+
+    def stop_motor_stop_test(self) -> MotorStopTestResult:
+        return self._motor_stop_test_action(MOTOR_TEST_ACTION_STOP)
+
+    def _motor_stop_test_action(
+        self,
+        action: int,
+        stop_mode: int | None = None,
+        power_percent: int | None = None,
+        motor_port: int | None = None,
+    ) -> MotorStopTestResult:
+        report = build_motor_stop_test_frame(
+            action, stop_mode, power_percent, motor_port
+        ).ljust(LEGACY_REPORT_SIZE, b"\x00")
+        self.transport.write_report(report)
+        deadline = time.monotonic() + MOTOR_TEST_TIMEOUT_SECONDS
+        while time.monotonic() < deadline:
+            response = self.transport.read_report()
+            if not response:
+                continue
+            result = parse_motor_stop_test_response(response)
+            if result is not None:
+                return result
+        raise DiagnosticTimeoutError(
+            "设备没有返回停车对比结果；请确认固件支持 motor-stop-compare 命令"
+        )
+
+    def start_motor_dual_test(self, power_percent: int) -> MotorDualTestResult:
+        return self._motor_dual_test_action(
+            MOTOR_TEST_ACTION_START, power_percent=power_percent
+        )
+
+    def read_motor_dual_test_status(self) -> MotorDualTestResult:
+        return self._motor_dual_test_action(MOTOR_TEST_ACTION_STATUS)
+
+    def stop_motor_dual_test(self) -> MotorDualTestResult:
+        return self._motor_dual_test_action(MOTOR_TEST_ACTION_STOP)
+
+    def _motor_dual_test_action(
+        self, action: int, power_percent: int | None = None
+    ) -> MotorDualTestResult:
+        report = build_motor_dual_test_frame(action, power_percent).ljust(
+            LEGACY_REPORT_SIZE, b"\x00"
+        )
+        self.transport.write_report(report)
+        deadline = time.monotonic() + MOTOR_TEST_TIMEOUT_SECONDS
+        while time.monotonic() < deadline:
+            response = self.transport.read_report()
+            if not response:
+                continue
+            result = parse_motor_dual_test_response(response)
+            if result is not None:
+                return result
+        raise DiagnosticTimeoutError(
+            "设备没有返回 A/B 双马达结果；请确认固件支持 motor-dual-test 命令"
+        )
+
+    def read_motor_control_status(self, motor_port: int) -> MotorControlResult:
+        return self._motor_control_action(MOTOR_CONTROL_ACTION_STATUS, motor_port)
+
+    def set_motor_power(
+        self, motor_port: int, power_percent: int
+    ) -> MotorControlResult:
+        return self._motor_control_action(
+            MOTOR_CONTROL_ACTION_SET_POWER,
+            motor_port,
+            power_percent=power_percent,
+        )
+
+    def coast_motor(self, motor_port: int) -> MotorControlResult:
+        return self._motor_control_action(MOTOR_CONTROL_ACTION_COAST, motor_port)
+
+    def brake_motor(self, motor_port: int) -> MotorControlResult:
+        return self._motor_control_action(MOTOR_CONTROL_ACTION_BRAKE, motor_port)
+
+    def reset_motor_tacho(self, motor_port: int) -> MotorControlResult:
+        return self._motor_control_action(
+            MOTOR_CONTROL_ACTION_RESET_TACHO, motor_port
+        )
+
+    def _motor_control_action(
+        self,
+        action: int,
+        motor_port: int,
+        power_percent: int | None = None,
+    ) -> MotorControlResult:
+        report = build_motor_control_frame(
+            action, motor_port, power_percent
+        ).ljust(LEGACY_REPORT_SIZE, b"\x00")
+        self.transport.write_report(report)
+        deadline = time.monotonic() + MOTOR_TEST_TIMEOUT_SECONDS
+        while time.monotonic() < deadline:
+            response = self.transport.read_report()
+            if not response:
+                continue
+            result = parse_motor_control_response(response)
+            if result is not None:
+                return result
+        raise DiagnosticTimeoutError(
+            "设备没有返回通用马达控制状态；请确认固件支持 motor-control 命令"
         )
 
     def flash(

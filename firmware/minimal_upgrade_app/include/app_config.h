@@ -23,6 +23,24 @@
 #define UPDATE_COMMAND                  0x05U
 #define HEARTBEAT_COMMAND               0x01U
 #define KEY_STATUS_COMMAND              0x0DU
+#define FLASH_ID_COMMAND                0x0EU
+#define FLASH_SCAN_COMMAND              0x0FU
+#define FLASH_TEST_COMMAND              0x10U
+#define FLASH_STATUS_COMMAND            0x11U
+#define FLASH_MODE_PROBE_COMMAND        0x12U
+#define MOTOR_TEST_COMMAND              0x13U
+#define MOTOR_TACHO_TEST_COMMAND        0x14U
+#define MOTOR_STOP_TEST_COMMAND         0x15U
+#define MOTOR_DUAL_TEST_COMMAND         0x16U
+#define MOTOR_CONTROL_COMMAND           0x17U
+#define MOTOR_TEST_ACTION_STATUS        0x00U
+#define MOTOR_TEST_ACTION_START         0x01U
+#define MOTOR_TEST_ACTION_STOP          0x02U
+#define MOTOR_CONTROL_ACTION_STATUS     0x00U
+#define MOTOR_CONTROL_ACTION_SET_POWER  0x01U
+#define MOTOR_CONTROL_ACTION_COAST      0x02U
+#define MOTOR_CONTROL_ACTION_BRAKE      0x03U
+#define MOTOR_CONTROL_ACTION_RESET_TACHO 0x04U
 #define HOST_FRAME_DIRECTION            0x11U
 #define DEVICE_FRAME_DIRECTION          0x21U
 #define FRAME_START_BYTE                0x68U
@@ -40,6 +58,8 @@
 #define USB_HID_IN_ENDPOINT             0x82U
 #define USB_HID_OUT_ENDPOINT            0x01U
 #define USB_HID_REPORT_SIZE             1024U
+
+#define EXTERNAL_FLASH_TEST_ADDRESS     0x01FFF000U
 
 #ifndef APP_VERSION_TEXT
 #define APP_VERSION_TEXT "M0.01A"

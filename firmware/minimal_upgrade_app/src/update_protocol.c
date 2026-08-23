@@ -5,7 +5,9 @@
 
 #include "app_config.h"
 #include "app_version.h"
+#include "board_flash.h"
 #include "board_keys.h"
+#include "board_motor.h"
 #include "update_protocol.h"
 #include "update_storage.h"
 #include "usb_hid.h"
@@ -37,6 +39,16 @@ static uint16_t read_u16_le(const uint8_t *bytes)
 	return (uint16_t)bytes[0] | ((uint16_t)bytes[1] << 8U);
 }
 
+static void write_i32_le(uint8_t *bytes, int32_t value)
+{
+	uint32_t encoded = (uint32_t)value;
+
+	bytes[0] = (uint8_t)encoded;
+	bytes[1] = (uint8_t)(encoded >> 8U);
+	bytes[2] = (uint8_t)(encoded >> 16U);
+	bytes[3] = (uint8_t)(encoded >> 24U);
+}
+
 static uint8_t checksum(const uint8_t *bytes, size_t length)
 {
 	uint8_t sum = 0U;
@@ -57,8 +69,26 @@ static bool report_starts_logical_frame(const uint8_t *report, size_t length)
 		return false;
 	}
 	data_length = read_u16_le(&report[3]);
-	if (report[2] == HEARTBEAT_COMMAND || report[2] == KEY_STATUS_COMMAND) {
+	if (report[2] == HEARTBEAT_COMMAND || report[2] == KEY_STATUS_COMMAND ||
+	    report[2] == FLASH_ID_COMMAND || report[2] == FLASH_SCAN_COMMAND ||
+	    report[2] == FLASH_TEST_COMMAND || report[2] == FLASH_STATUS_COMMAND ||
+	    report[2] == FLASH_MODE_PROBE_COMMAND) {
 		return data_length == 0U;
+	}
+	if (report[2] == MOTOR_TEST_COMMAND) {
+		return data_length == 1U;
+	}
+	if (report[2] == MOTOR_TACHO_TEST_COMMAND) {
+		return data_length == 1U || data_length == 2U || data_length == 3U;
+	}
+	if (report[2] == MOTOR_STOP_TEST_COMMAND) {
+		return data_length == 1U || data_length == 3U || data_length == 4U;
+	}
+	if (report[2] == MOTOR_DUAL_TEST_COMMAND) {
+		return data_length == 1U || data_length == 2U;
+	}
+	if (report[2] == MOTOR_CONTROL_COMMAND) {
+		return data_length == 2U || data_length == 3U;
 	}
 	return report[2] == UPDATE_COMMAND && data_length >= 4U &&
 		data_length <= UPDATE_FRAME_MAX_DATA_LENGTH;
@@ -114,6 +144,352 @@ static void queue_key_status(void)
 	(void)usb_hid_queue_report(report, false);
 }
 
+static void queue_flash_identity(void)
+{
+	struct board_flash_identity identity = board_flash_read_identity();
+	uint8_t report[USB_HID_REPORT_SIZE] = {0};
+
+	report[0] = FRAME_START_BYTE;
+	report[1] = DEVICE_FRAME_DIRECTION;
+	report[2] = FLASH_ID_COMMAND;
+	report[3] = 3U;
+	report[4] = 0U;
+	report[5] = identity.manufacturer;
+	report[6] = identity.memory_type;
+	report[7] = identity.capacity;
+	report[8] = checksum(report, 8U);
+	report[9] = FRAME_END_BYTE;
+	(void)usb_hid_queue_report(report, false);
+}
+
+static bool flash_supports_4byte_test(void)
+{
+	struct board_flash_identity identity = board_flash_read_identity();
+
+	return identity.manufacturer == 0xEFU && identity.memory_type == 0x40U &&
+		identity.capacity == 0x19U;
+}
+
+static void queue_flash_scan(void)
+{
+	uint8_t report[USB_HID_REPORT_SIZE] = {0};
+	bool supported = flash_supports_4byte_test();
+	bool erased = supported &&
+		board_flash_sector_is_erased_4byte(EXTERNAL_FLASH_TEST_ADDRESS);
+
+	report[0] = FRAME_START_BYTE;
+	report[1] = DEVICE_FRAME_DIRECTION;
+	report[2] = FLASH_SCAN_COMMAND;
+	report[3] = 6U;
+	report[4] = 0U;
+	report[5] = supported ? 1U : 0U;
+	report[6] = erased ? 1U : 0U;
+	report[7] = (uint8_t)EXTERNAL_FLASH_TEST_ADDRESS;
+	report[8] = (uint8_t)(EXTERNAL_FLASH_TEST_ADDRESS >> 8U);
+	report[9] = (uint8_t)(EXTERNAL_FLASH_TEST_ADDRESS >> 16U);
+	report[10] = (uint8_t)(EXTERNAL_FLASH_TEST_ADDRESS >> 24U);
+	report[11] = checksum(report, 11U);
+	report[12] = FRAME_END_BYTE;
+	(void)usb_hid_queue_report(report, false);
+}
+
+static void queue_flash_test(void)
+{
+	uint8_t report[USB_HID_REPORT_SIZE] = {0};
+	enum board_flash_test_result result;
+	bool restored;
+
+	if (flash_supports_4byte_test()) {
+		result = board_flash_test_empty_sector_4byte(EXTERNAL_FLASH_TEST_ADDRESS);
+	} else {
+		result = BOARD_FLASH_TEST_UNSUPPORTED_DEVICE;
+	}
+	restored = result != BOARD_FLASH_TEST_UNSUPPORTED_DEVICE &&
+		board_flash_sector_is_erased_4byte(EXTERNAL_FLASH_TEST_ADDRESS);
+	report[0] = FRAME_START_BYTE;
+	report[1] = DEVICE_FRAME_DIRECTION;
+	report[2] = FLASH_TEST_COMMAND;
+	report[3] = 6U;
+	report[4] = 0U;
+	report[5] = (uint8_t)result;
+	report[6] = restored ? 1U : 0U;
+	report[7] = (uint8_t)EXTERNAL_FLASH_TEST_ADDRESS;
+	report[8] = (uint8_t)(EXTERNAL_FLASH_TEST_ADDRESS >> 8U);
+	report[9] = (uint8_t)(EXTERNAL_FLASH_TEST_ADDRESS >> 16U);
+	report[10] = (uint8_t)(EXTERNAL_FLASH_TEST_ADDRESS >> 24U);
+	report[11] = checksum(report, 11U);
+	report[12] = FRAME_END_BYTE;
+	(void)usb_hid_queue_report(report, false);
+}
+
+static void queue_flash_status(void)
+{
+	struct board_flash_status status = board_flash_read_status();
+	uint8_t report[USB_HID_REPORT_SIZE] = {0};
+
+	report[0] = FRAME_START_BYTE;
+	report[1] = DEVICE_FRAME_DIRECTION;
+	report[2] = FLASH_STATUS_COMMAND;
+	report[3] = 3U;
+	report[4] = 0U;
+	report[5] = status.status1;
+	report[6] = status.status2;
+	report[7] = status.status3;
+	report[8] = checksum(report, 8U);
+	report[9] = FRAME_END_BYTE;
+	(void)usb_hid_queue_report(report, false);
+}
+
+static void queue_flash_mode_probe(void)
+{
+	struct board_flash_mode_probe probe = board_flash_probe_modes();
+	uint8_t report[USB_HID_REPORT_SIZE] = {0};
+
+	report[0] = FRAME_START_BYTE;
+	report[1] = DEVICE_FRAME_DIRECTION;
+	report[2] = FLASH_MODE_PROBE_COMMAND;
+	report[3] = 6U;
+	report[4] = 0U;
+	report[5] = probe.status1_before;
+	report[6] = probe.status1_write_enabled;
+	report[7] = probe.status1_write_disabled;
+	report[8] = probe.status3_before;
+	report[9] = probe.status3_four_byte;
+	report[10] = probe.status3_restored;
+	report[11] = checksum(report, 11U);
+	report[12] = FRAME_END_BYTE;
+	(void)usb_hid_queue_report(report, false);
+}
+
+static void queue_motor_test_result(uint8_t result)
+{
+	uint8_t report[USB_HID_REPORT_SIZE] = {0};
+
+	report[0] = FRAME_START_BYTE;
+	report[1] = DEVICE_FRAME_DIRECTION;
+	report[2] = MOTOR_TEST_COMMAND;
+	report[3] = 2U;
+	report[4] = 0U;
+	report[5] = result;
+	report[6] = (uint8_t)board_motor_test_state();
+	report[7] = checksum(report, 7U);
+	report[8] = FRAME_END_BYTE;
+	(void)usb_hid_queue_report(report, false);
+}
+
+static void queue_motor_tacho_test_result(uint8_t result)
+{
+	struct board_motor_tacho_snapshot snapshot = board_motor_tacho_snapshot();
+	uint8_t report[USB_HID_REPORT_SIZE] = {0};
+
+	report[0] = FRAME_START_BYTE;
+	report[1] = DEVICE_FRAME_DIRECTION;
+	report[2] = MOTOR_TACHO_TEST_COMMAND;
+	report[3] = 14U;
+	report[4] = 0U;
+	report[5] = result;
+	report[6] = (uint8_t)board_motor_test_state();
+	write_i32_le(&report[7], snapshot.total_count);
+	write_i32_le(&report[11], snapshot.forward_count);
+	write_i32_le(&report[15], snapshot.reverse_count);
+	report[19] = checksum(report, 19U);
+	report[20] = FRAME_END_BYTE;
+	(void)usb_hid_queue_report(report, false);
+}
+
+static void queue_motor_stop_test_result(uint8_t result)
+{
+	struct board_motor_stop_test_snapshot snapshot =
+		board_motor_stop_test_snapshot();
+	uint8_t report[USB_HID_REPORT_SIZE] = {0};
+
+	report[0] = FRAME_START_BYTE;
+	report[1] = DEVICE_FRAME_DIRECTION;
+	report[2] = MOTOR_STOP_TEST_COMMAND;
+	report[3] = 15U;
+	report[4] = 0U;
+	report[5] = result;
+	report[6] = (uint8_t)snapshot.state;
+	report[7] = (uint8_t)snapshot.mode;
+	write_i32_le(&report[8], snapshot.total_count);
+	write_i32_le(&report[12], snapshot.powered_count);
+	write_i32_le(&report[16], snapshot.stopped_count);
+	report[20] = checksum(report, 20U);
+	report[21] = FRAME_END_BYTE;
+	(void)usb_hid_queue_report(report, false);
+}
+
+static void queue_motor_dual_test_result(uint8_t result)
+{
+	struct board_motor_dual_test_snapshot snapshot =
+		board_motor_dual_test_snapshot();
+	uint8_t report[USB_HID_REPORT_SIZE] = {0};
+
+	report[0] = FRAME_START_BYTE;
+	report[1] = DEVICE_FRAME_DIRECTION;
+	report[2] = MOTOR_DUAL_TEST_COMMAND;
+	report[3] = 18U;
+	report[4] = 0U;
+	report[5] = result;
+	report[6] = (uint8_t)snapshot.state;
+	write_i32_le(&report[7], snapshot.a_forward_count);
+	write_i32_le(&report[11], snapshot.b_forward_count);
+	write_i32_le(&report[15], snapshot.a_reverse_count);
+	write_i32_le(&report[19], snapshot.b_reverse_count);
+	report[23] = checksum(report, 23U);
+	report[24] = FRAME_END_BYTE;
+	(void)usb_hid_queue_report(report, false);
+}
+
+static void queue_motor_control_result(uint8_t result,
+	enum board_motor_port port)
+{
+	struct board_motor_control_snapshot snapshot = {0};
+	uint8_t report[USB_HID_REPORT_SIZE] = {0};
+
+	(void)board_motor_control_snapshot(port, &snapshot);
+	report[0] = FRAME_START_BYTE;
+	report[1] = DEVICE_FRAME_DIRECTION;
+	report[2] = MOTOR_CONTROL_COMMAND;
+	report[3] = 8U;
+	report[4] = 0U;
+	report[5] = result;
+	report[6] = (uint8_t)port;
+	report[7] = (uint8_t)snapshot.state;
+	report[8] = (uint8_t)snapshot.power_percent;
+	write_i32_le(&report[9], snapshot.tacho_count);
+	report[13] = checksum(report, 13U);
+	report[14] = FRAME_END_BYTE;
+	(void)usb_hid_queue_report(report, false);
+}
+
+static uint8_t apply_motor_test_action(uint8_t action, uint32_t now_ms,
+	uint8_t power_percent, bool custom_power)
+{
+	uint8_t result = 1U;
+
+	if (action == MOTOR_TEST_ACTION_START) {
+		bool started = custom_power ?
+			board_motor_start_test_with_power(now_ms, power_percent) :
+			board_motor_start_test(now_ms);
+		if (!started) {
+			result = 2U;
+		}
+	} else if (action == MOTOR_TEST_ACTION_STOP) {
+		board_motor_stop();
+	} else if (action != MOTOR_TEST_ACTION_STATUS) {
+		result = 0U;
+	}
+	return result;
+
+}
+
+static void handle_motor_test(uint8_t action, uint32_t now_ms)
+{
+	queue_motor_test_result(apply_motor_test_action(action, now_ms, 0U, false));
+}
+
+static void handle_motor_tacho_test(const uint8_t *data, uint16_t data_length,
+	uint32_t now_ms)
+{
+	uint8_t action = data[0];
+	bool custom_power = data_length >= 2U;
+	uint8_t power_percent = custom_power ? data[1] : 0U;
+	enum board_motor_port port = data_length == 3U ?
+		(enum board_motor_port)data[2] : BOARD_MOTOR_PORT_A;
+	uint8_t result;
+
+	if (custom_power && action != MOTOR_TEST_ACTION_START) {
+		result = 0U;
+	} else if (custom_power) {
+		result = board_motor_start_port_test_with_power(now_ms, port,
+			power_percent) ? 1U : 2U;
+	} else {
+		result = apply_motor_test_action(action, now_ms, 0U, false);
+	}
+	queue_motor_tacho_test_result(result);
+}
+
+static void handle_motor_stop_test(const uint8_t *data, uint16_t data_length,
+	uint32_t now_ms)
+{
+	uint8_t action = data[0];
+	uint8_t result = 1U;
+
+	if (action == MOTOR_TEST_ACTION_START &&
+	    (data_length == 3U || data_length == 4U)) {
+		enum board_motor_port port = data_length == 4U ?
+			(enum board_motor_port)data[3] : BOARD_MOTOR_PORT_A;
+
+		if (!board_motor_start_port_stop_test(now_ms, port,
+		    (enum board_motor_stop_mode)data[1], data[2])) {
+			result = 2U;
+		}
+	} else if (action == MOTOR_TEST_ACTION_STOP && data_length == 1U) {
+		board_motor_stop();
+	} else if (action != MOTOR_TEST_ACTION_STATUS || data_length != 1U) {
+		result = 0U;
+	}
+	queue_motor_stop_test_result(result);
+}
+
+static void handle_motor_dual_test(const uint8_t *data, uint16_t data_length,
+	uint32_t now_ms)
+{
+	uint8_t action = data[0];
+	uint8_t result = 1U;
+
+	if (action == MOTOR_TEST_ACTION_START && data_length == 2U) {
+		if (!board_motor_start_dual_test(now_ms, data[1])) {
+			result = 2U;
+		}
+	} else if (action == MOTOR_TEST_ACTION_STOP && data_length == 1U) {
+		board_motor_stop();
+	} else if (action != MOTOR_TEST_ACTION_STATUS || data_length != 1U) {
+		result = 0U;
+	}
+	queue_motor_dual_test_result(result);
+}
+
+static void handle_motor_control(const uint8_t *data, uint16_t data_length)
+{
+	uint8_t action = data[0];
+	enum board_motor_port port = (enum board_motor_port)data[1];
+	uint8_t result = 1U;
+
+	if (data[1] >= BOARD_MOTOR_PORT_COUNT) {
+		result = 0U;
+	} else if (action == MOTOR_CONTROL_ACTION_STATUS && data_length == 2U) {
+		/* Status remains readable while one of the older diagnostics runs. */
+	} else if (board_motor_diagnostic_active()) {
+		result = 2U;
+	} else if (action == MOTOR_CONTROL_ACTION_SET_POWER && data_length == 3U) {
+		int8_t power_percent = (int8_t)data[2];
+
+		if (power_percent < -100 || power_percent > 100) {
+			result = 0U;
+		} else if (!board_motor_set_power(port, power_percent)) {
+			result = 2U;
+		}
+	} else if (action == MOTOR_CONTROL_ACTION_COAST && data_length == 2U) {
+		if (!board_motor_coast(port)) {
+			result = 2U;
+		}
+	} else if (action == MOTOR_CONTROL_ACTION_BRAKE && data_length == 2U) {
+		if (!board_motor_brake(port)) {
+			result = 2U;
+		}
+	} else if (action == MOTOR_CONTROL_ACTION_RESET_TACHO &&
+		   data_length == 2U) {
+		if (!board_motor_reset_tacho(port)) {
+			result = 2U;
+		}
+	} else {
+		result = 0U;
+	}
+	queue_motor_control_result(result, port);
+}
+
 static void abort_session(void)
 {
 	update_storage_abort();
@@ -132,6 +508,7 @@ static void handle_update_frame(const uint8_t *frame, uint16_t data_length,
 	if (data_length < 4U) {
 		return;
 	}
+	board_motor_stop();
 	total_frames = read_u16_le(&frame[5]);
 	frame_index = read_u16_le(&frame[7]);
 	payload_length = data_length - 4U;
@@ -221,6 +598,30 @@ static void handle_logical_frame(uint32_t now_ms)
 		queue_heartbeat();
 	} else if (logical_frame[2] == KEY_STATUS_COMMAND && data_length == 0U) {
 		queue_key_status();
+	} else if (logical_frame[2] == FLASH_ID_COMMAND && data_length == 0U) {
+		queue_flash_identity();
+	} else if (logical_frame[2] == FLASH_SCAN_COMMAND && data_length == 0U) {
+		queue_flash_scan();
+	} else if (logical_frame[2] == FLASH_TEST_COMMAND && data_length == 0U) {
+		queue_flash_test();
+	} else if (logical_frame[2] == FLASH_STATUS_COMMAND && data_length == 0U) {
+		queue_flash_status();
+	} else if (logical_frame[2] == FLASH_MODE_PROBE_COMMAND && data_length == 0U) {
+		queue_flash_mode_probe();
+	} else if (logical_frame[2] == MOTOR_TEST_COMMAND && data_length == 1U) {
+		handle_motor_test(logical_frame[5], now_ms);
+	} else if (logical_frame[2] == MOTOR_TACHO_TEST_COMMAND &&
+		   (data_length == 1U || data_length == 2U || data_length == 3U)) {
+		handle_motor_tacho_test(&logical_frame[5], data_length, now_ms);
+	} else if (logical_frame[2] == MOTOR_STOP_TEST_COMMAND &&
+		   (data_length == 1U || data_length == 3U || data_length == 4U)) {
+		handle_motor_stop_test(&logical_frame[5], data_length, now_ms);
+	} else if (logical_frame[2] == MOTOR_DUAL_TEST_COMMAND &&
+		   (data_length == 1U || data_length == 2U)) {
+		handle_motor_dual_test(&logical_frame[5], data_length, now_ms);
+	} else if (logical_frame[2] == MOTOR_CONTROL_COMMAND &&
+		   (data_length == 2U || data_length == 3U)) {
+		handle_motor_control(&logical_frame[5], data_length);
 	} else if (logical_frame[2] == UPDATE_COMMAND) {
 		handle_update_frame(logical_frame, data_length, now_ms);
 	}

@@ -15,6 +15,9 @@ ARCH_FLAGS := -mcpu=cortex-m4 -mthumb -mfloat-abi=hard -mfpu=fpv4-sp-d16
 CPPFLAGS := -DSTM32F4 -Iinclude -I$(OPENCM3_DIR)/include \
 	-I$(OPENCM3_DIR)/lib/usb \
 	-DAPP_VERSION_TEXT=\"$(APP_VERSION)\"
+ifeq ($(DIAGNOSTIC_SKIP_LCD_STARTUP),1)
+CPPFLAGS += -DDIAGNOSTIC_SKIP_LCD_STARTUP=1
+endif
 CFLAGS := $(ARCH_FLAGS) -std=c11 -Os -g3 -Wall -Wextra -Werror \
 	-Wshadow -Wundef -Wstrict-prototypes -Wmissing-prototypes \
 	-ffunction-sections -fdata-sections -fno-common

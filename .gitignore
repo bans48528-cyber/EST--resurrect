@@ -20,4 +20,4 @@
 *.lastbuildstate
 /.codex/
 /.agents/
-
+/tmp/
