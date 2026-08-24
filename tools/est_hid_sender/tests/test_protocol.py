@@ -23,12 +23,14 @@ from est_hid_sender.errors import (  # noqa: E402
 )
 from est_hid_sender.protocol import (  # noqa: E402
     build_frame,
+    build_device_status_frame,
     build_flash_id_frame,
     build_flash_scan_frame,
     build_flash_test_frame,
     build_flash_status_frame,
     build_flash_mode_probe_frame,
     build_heartbeat_frame,
+    build_input_sensor_frame,
     build_key_status_frame,
     build_motor_control_frame,
     build_motor_dual_test_frame,
@@ -38,6 +40,8 @@ from est_hid_sender.protocol import (  # noqa: E402
     build_update_frame,
     checksum,
     parse_heartbeat_response,
+    parse_device_status_response,
+    parse_input_sensor_response,
     parse_flash_id_response,
     parse_flash_scan_response,
     parse_flash_test_response,
@@ -182,6 +186,69 @@ def build_motor_control_result(
     frame.append(checksum(frame))
     frame.append(0x16)
     return bytes(frame).ljust(LEGACY_REPORT_SIZE, b"\x00")
+
+
+def build_input_sensor_result(
+    result: int = 1,
+    port: int = 0,
+    state: int = 2,
+    sensor_type: int = 0x1D,
+    mode: int = 0,
+    value_valid: bool = True,
+    value: int = 42,
+    adc0_raw: int = 123,
+    adc1_raw: int = 456,
+    digital_mask: int = 0x05,
+    rx_count: int = 3210,
+    checksum_errors: int = 2,
+) -> bytes:
+    frame = bytearray(
+        (
+            0x68, 0x21, 0x18, 0x13, 0x00, result, port, state,
+            sensor_type, mode, 1 if value_valid else 0,
+        )
+    )
+    frame += value.to_bytes(2, "little")
+    frame += adc0_raw.to_bytes(2, "little")
+    frame += adc1_raw.to_bytes(2, "little")
+    frame.append(digital_mask)
+    frame += rx_count.to_bytes(4, "little")
+    frame += checksum_errors.to_bytes(2, "little")
+    frame.append(checksum(frame))
+    frame.append(0x16)
+    return bytes(frame).ljust(LEGACY_REPORT_SIZE, b"\x00")
+
+
+def build_device_status_result() -> bytes:
+    payload = bytearray((1, 0))
+    payload += b"M0.52A"
+    payload += bytes((4, 4, 0x12, 4))
+    payload += (2800).to_bytes(2, "little")
+    payload += (1708).to_bytes(2, "little")
+    payload += (0x3F).to_bytes(4, "little")
+    payload += (123456).to_bytes(4, "little")
+    for state, power, tacho in (
+        (0, 0, 12),
+        (1, 40, 345),
+        (1, -30, -456),
+        (2, 0, 789),
+    ):
+        payload += bytes((state, power & 0xFF))
+        payload += tacho.to_bytes(4, "little", signed=True)
+    for state, sensor_type, mode, valid, value in (
+        (2, 0x1D, 2, 1, 5),
+        (2, 0x10, 0, 1, 1),
+        (2, 0x06, 0, 1, 235),
+        (0, 0x00, 0, 0, 0),
+    ):
+        payload += bytes((state, sensor_type, mode, valid))
+        payload += value.to_bytes(2, "little")
+    frame = bytearray((0x68, 0x21, 0x19))
+    frame += len(payload).to_bytes(2, "little")
+    frame += payload
+    frame.append(checksum(frame))
+    frame.append(0x16)
+    return bytes(frame)
 
 
 class ProtocolTests(unittest.TestCase):
@@ -348,6 +415,46 @@ class ProtocolTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "-100 and 100"):
             build_motor_control_frame(1, 0, 101)
 
+    def test_input_sensor_command_builds_modes_and_parses_diagnostics(self) -> None:
+        self.assertEqual(
+            build_input_sensor_frame(0, 0),
+            bytes((0x68, 0x11, 0x18, 0x02, 0x00, 0x00, 0x00, 0x93, 0x16)),
+        )
+        self.assertEqual(
+            build_input_sensor_frame(1, 0, 2),
+            bytes((0x68, 0x11, 0x18, 0x03, 0x00, 0x01, 0x00, 0x02, 0x97, 0x16)),
+        )
+        result = parse_input_sensor_response(build_input_sensor_result())
+        self.assertIsNotNone(result)
+        self.assertEqual(result.sensor_type, 0x1D)
+        self.assertEqual(result.mode, 0)
+        self.assertTrue(result.value_valid)
+        self.assertEqual(result.value, 42)
+        self.assertEqual((result.adc0_raw, result.adc1_raw), (123, 456))
+        self.assertEqual(result.rx_count, 3210)
+        self.assertEqual(result.checksum_errors, 2)
+        with self.assertRaisesRegex(ValueError, "mode must be 0, 1, or 2"):
+            build_input_sensor_frame(1, 0, 3)
+
+    def test_device_status_returns_one_complete_machine_snapshot(self) -> None:
+        self.assertEqual(
+            build_device_status_frame(),
+            bytes((0x68, 0x11, 0x19, 0x00, 0x00, 0x92, 0x16)),
+        )
+        status = parse_device_status_response(build_device_status_result())
+        self.assertIsNotNone(status)
+        self.assertEqual(status.firmware_version, "M0.52A")
+        self.assertEqual((status.protocol_major, status.protocol_minor), (1, 0))
+        self.assertEqual(status.battery_level, 4)
+        self.assertEqual(status.battery_adc_raw, 2800)
+        self.assertEqual(status.battery_sample_mv, 1708)
+        self.assertEqual(status.capabilities, 0x3F)
+        self.assertEqual(status.uptime_ms, 123456)
+        self.assertEqual(status.motors[1].power_percent, 40)
+        self.assertEqual(status.motors[2].tacho_count, -456)
+        self.assertEqual(status.sensors[0].sensor_type, 0x1D)
+        self.assertEqual(status.sensors[2].value, 235)
+
 
 class FirmwareTests(unittest.TestCase):
     def test_accepts_existing_est_and_app_upgrade_headers(self) -> None:
@@ -380,6 +487,8 @@ class FakeTransport:
         flash_test_status: int = 1,
         flash_status: bytes = bytes((0x00, 0x00, 0x00)),
         flash_mode_probe: bytes = bytes((0x00, 0x02, 0x00, 0x60, 0x61, 0x60)),
+        sensor_type: int = 0x1D,
+        sensor_value: int = 42,
     ) -> None:
         self.input_len = 1025
         self.output_len = output_len
@@ -402,6 +511,10 @@ class FakeTransport:
         self.motor_control_state = [0, 0, 0, 0]
         self.motor_control_power = [0, 0, 0, 0]
         self.motor_control_tacho = [0, 0, 0, 0]
+        self.sensor_state = 2
+        self.sensor_type = sensor_type
+        self.sensor_mode = 0
+        self.sensor_value = sensor_value
 
     def __enter__(self) -> "FakeTransport":
         return self
@@ -588,6 +701,40 @@ class FakeTransport:
                 )
             )
             return
+        if report[0:3] == b"\x68\x11\x18":
+            action = report[5]
+            port = report[6]
+            result = 1
+            if port != 0:
+                result = 0
+            elif action == 1:
+                self.sensor_mode = report[7]
+                if self.sensor_type == 0x1E:
+                    values = (123, 48, 1)
+                elif self.sensor_type == 0x06:
+                    values = (235, 743, 235)
+                else:
+                    values = (42, 17, 5)
+                self.sensor_value = values[self.sensor_mode]
+            elif action == 2:
+                self.sensor_state = 1
+            elif action != 0:
+                result = 0
+            self.acks.append(
+                build_input_sensor_result(
+                    result=result,
+                    port=port,
+                    state=self.sensor_state,
+                    sensor_type=self.sensor_type,
+                    mode=self.sensor_mode,
+                    value=self.sensor_value,
+                    value_valid=self.sensor_state == 2,
+                )
+            )
+            return
+        if report[0:3] == b"\x68\x11\x19":
+            self.acks.append(build_device_status_result())
+            return
         if report[0:3] == b"\x68\x11\x05":
             total = int.from_bytes(report[5:7], "little")
             index = int.from_bytes(report[7:9], "little")
@@ -609,6 +756,25 @@ class UpdaterTests(unittest.TestCase):
     def test_reads_debounced_key_mask_from_device(self) -> None:
         updater = FirmwareUpdater(FakeTransport(key_mask=0x12))
         self.assertEqual(updater.read_key_mask(), 0x12)
+
+    def test_reads_complete_device_status_in_one_request(self) -> None:
+        transport = FakeTransport()
+        status = FirmwareUpdater(transport).read_device_status()
+        self.assertEqual(status.firmware_version, "M0.52A")
+        self.assertEqual(status.battery_level, 4)
+        self.assertEqual(len(status.motors), 4)
+        self.assertEqual(len(status.sensors), 4)
+
+    def test_reads_and_selects_input_sensor_mode(self) -> None:
+        transport = FakeTransport()
+        updater = FirmwareUpdater(transport)
+        status = updater.read_input_sensor(0)
+        self.assertEqual(status.sensor_type, 0x1D)
+        self.assertEqual(status.value, 42)
+        color = updater.set_input_sensor_mode(0, 2)
+        self.assertEqual(color.mode, 2)
+        self.assertEqual(color.value, 5)
+        self.assertEqual(transport.reports[-1][5:8], bytes((1, 0, 2)))
 
     def test_reads_external_flash_jedec_id(self) -> None:
         updater = FirmwareUpdater(FakeTransport(jedec_id=bytes.fromhex("EF4017")))

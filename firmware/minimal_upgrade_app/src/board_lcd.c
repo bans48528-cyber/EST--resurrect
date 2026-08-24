@@ -26,8 +26,9 @@ static uint8_t framebuffer[LCD_WIDTH][LCD_PAGES];
 
 static const uint8_t glyph_blank[5] = {0x00U, 0x00U, 0x00U, 0x00U, 0x00U};
 static const uint8_t glyph_dot[5] = {0x00U, 0x60U, 0x60U, 0x00U, 0x00U};
-static const uint8_t glyph_a[5] = {0x7EU, 0x09U, 0x09U, 0x09U, 0x7EU};
-static const uint8_t glyph_m[5] = {0x7FU, 0x02U, 0x0CU, 0x02U, 0x7FU};
+static const uint8_t glyph_colon[5] = {0x00U, 0x36U, 0x36U, 0x00U, 0x00U};
+static const uint8_t glyph_dash[5] = {0x08U, 0x08U, 0x08U, 0x08U, 0x08U};
+static const uint8_t glyph_percent[5] = {0x63U, 0x13U, 0x08U, 0x64U, 0x63U};
 static const uint8_t glyph_digits[10][5] = {
 	{0x3EU, 0x51U, 0x49U, 0x45U, 0x3EU},
 	{0x00U, 0x42U, 0x7FU, 0x40U, 0x00U},
@@ -39,6 +40,34 @@ static const uint8_t glyph_digits[10][5] = {
 	{0x01U, 0x71U, 0x09U, 0x05U, 0x03U},
 	{0x36U, 0x49U, 0x49U, 0x49U, 0x36U},
 	{0x06U, 0x49U, 0x49U, 0x29U, 0x1EU},
+};
+static const uint8_t glyph_letters[26][5] = {
+	{0x7EU, 0x11U, 0x11U, 0x11U, 0x7EU},
+	{0x7FU, 0x49U, 0x49U, 0x49U, 0x36U},
+	{0x3EU, 0x41U, 0x41U, 0x41U, 0x22U},
+	{0x7FU, 0x41U, 0x41U, 0x22U, 0x1CU},
+	{0x7FU, 0x49U, 0x49U, 0x49U, 0x41U},
+	{0x7FU, 0x09U, 0x09U, 0x09U, 0x01U},
+	{0x3EU, 0x41U, 0x49U, 0x49U, 0x7AU},
+	{0x7FU, 0x08U, 0x08U, 0x08U, 0x7FU},
+	{0x00U, 0x41U, 0x7FU, 0x41U, 0x00U},
+	{0x20U, 0x40U, 0x41U, 0x3FU, 0x01U},
+	{0x7FU, 0x08U, 0x14U, 0x22U, 0x41U},
+	{0x7FU, 0x40U, 0x40U, 0x40U, 0x40U},
+	{0x7FU, 0x02U, 0x0CU, 0x02U, 0x7FU},
+	{0x7FU, 0x04U, 0x08U, 0x10U, 0x7FU},
+	{0x3EU, 0x41U, 0x41U, 0x41U, 0x3EU},
+	{0x7FU, 0x09U, 0x09U, 0x09U, 0x06U},
+	{0x3EU, 0x41U, 0x51U, 0x21U, 0x5EU},
+	{0x7FU, 0x09U, 0x19U, 0x29U, 0x46U},
+	{0x46U, 0x49U, 0x49U, 0x49U, 0x31U},
+	{0x01U, 0x01U, 0x7FU, 0x01U, 0x01U},
+	{0x3FU, 0x40U, 0x40U, 0x40U, 0x3FU},
+	{0x1FU, 0x20U, 0x40U, 0x20U, 0x1FU},
+	{0x3FU, 0x40U, 0x38U, 0x40U, 0x3FU},
+	{0x63U, 0x14U, 0x08U, 0x14U, 0x63U},
+	{0x07U, 0x08U, 0x70U, 0x08U, 0x07U},
+	{0x61U, 0x51U, 0x49U, 0x45U, 0x43U},
 };
 
 static void bus_pause(void)
@@ -250,14 +279,20 @@ static const uint8_t *glyph_for(char character)
 	if (character >= '0' && character <= '9') {
 		return glyph_digits[(uint8_t)character - (uint8_t)'0'];
 	}
-	if (character == 'M') {
-		return glyph_m;
-	}
-	if (character == 'A') {
-		return glyph_a;
+	if (character >= 'A' && character <= 'Z') {
+		return glyph_letters[(uint8_t)character - (uint8_t)'A'];
 	}
 	if (character == '.') {
 		return glyph_dot;
+	}
+	if (character == ':') {
+		return glyph_colon;
+	}
+	if (character == '-') {
+		return glyph_dash;
+	}
+	if (character == '%') {
+		return glyph_percent;
 	}
 	return glyph_blank;
 }
@@ -282,6 +317,34 @@ static void draw_character(uint16_t x, uint16_t y, char character, uint8_t scale
 				}
 			}
 		}
+	}
+}
+
+static void draw_text_at(uint16_t x, uint16_t y, const char *text,
+	uint8_t scale)
+{
+	while (*text != '\0' && x < LCD_WIDTH) {
+		draw_character(x, y, *text, scale);
+		x = (uint16_t)(x + 6U * scale);
+		text++;
+	}
+}
+
+static void draw_text_centered(uint16_t y, const char *text, uint8_t scale)
+{
+	size_t length = strlen(text);
+	uint16_t width;
+	uint16_t x;
+
+	if (length == 0U) {
+		return;
+	}
+	width = (uint16_t)(((length * 6U) - 1U) * scale);
+	x = width < LCD_WIDTH ? (uint16_t)((LCD_WIDTH - width) / 2U) : 0U;
+	while (*text != '\0' && x < LCD_WIDTH) {
+		draw_character(x, y, *text, scale);
+		x = (uint16_t)(x + 6U * scale);
+		text++;
 	}
 }
 
@@ -319,5 +382,55 @@ void board_lcd_show_version(const char *version)
 		x = (uint16_t)(x + 18U);
 		version++;
 	}
+	refresh();
+}
+
+void board_lcd_show_sensor(const char *version, const char *mode,
+	const char *reading)
+{
+	size_t reading_length = strlen(reading);
+	uint8_t reading_scale = reading_length <= 5U ? 4U : 3U;
+
+	memset(framebuffer, 0, sizeof(framebuffer));
+	draw_text_centered(2U, version, 2U);
+	draw_text_centered(27U, mode, 2U);
+	draw_text_centered(58U, reading, reading_scale);
+	draw_text_centered(112U, "ANY KEY", 1U);
+	refresh();
+}
+
+void board_lcd_show_sensor_ports(const char *version, const char *mode,
+	const char *const readings[4])
+{
+	uint8_t index;
+
+	memset(framebuffer, 0, sizeof(framebuffer));
+	draw_text_centered(1U, version, 2U);
+	draw_text_centered(19U, mode, 1U);
+	for (index = 0U; index < 4U; index++) {
+		draw_text_centered((uint16_t)(33U + index * 20U),
+			readings[index], 2U);
+	}
+	draw_text_centered(116U, "KEY MODE", 1U);
+	refresh();
+}
+
+void board_lcd_show_io_ports(const char *version, const char *mode,
+	const char *const sensor_readings[4],
+	const char *const motor_readings[4], const char *status)
+{
+	uint8_t index;
+
+	memset(framebuffer, 0, sizeof(framebuffer));
+	draw_text_centered(1U, version, 2U);
+	draw_text_at(4U, 19U, mode, 1U);
+	draw_text_at(108U, 19U, "MOTOR", 1U);
+	for (index = 0U; index < 4U; index++) {
+		draw_text_at(4U, (uint16_t)(35U + index * 19U),
+			sensor_readings[index], 1U);
+		draw_text_at(96U, (uint16_t)(35U + index * 19U),
+			motor_readings[index], 1U);
+	}
+	draw_text_centered(116U, status, 1U);
 	refresh();
 }

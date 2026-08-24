@@ -37,6 +37,23 @@ class CliTests(unittest.TestCase):
         self.assertIn("current_version=M0.19A", output.getvalue())
         self.assertIn("pressed=KEY0,KEY5 mask=0x21", output.getvalue())
 
+    def test_device_status_prints_complete_machine_snapshot(self) -> None:
+        output = io.StringIO()
+        transport = FakeTransport()
+        with mock.patch.object(cli.HidTransport, "open", return_value=transport):
+            with contextlib.redirect_stdout(output):
+                self.assertEqual(cli.main(["device-status"]), 0)
+        text = output.getvalue()
+        self.assertIn("firmware=M0.52A", text)
+        self.assertIn("protocol=1.0", text)
+        self.assertIn("firmware-update,motor-control,motor-tacho", text)
+        self.assertIn("battery_level=4/4", text)
+        self.assertIn("battery_percent=100", text)
+        self.assertIn("motor_A=state:coast power:0 tacho:12", text)
+        self.assertIn("motor_C=state:drive power:-30 tacho:-456", text)
+        self.assertIn("input_1=state:streaming model:EST/EV3-color", text)
+        self.assertIn("input_3=state:streaming model:EST-temperature", text)
+
     def test_flash_id_identifies_w25q64(self) -> None:
         output = io.StringIO()
         transport = FakeTransport(jedec_id=bytes.fromhex("EF4017"))
@@ -293,6 +310,59 @@ class CliTests(unittest.TestCase):
         self.assertIn("A_safe_final_state=coast", text)
         self.assertIn("D_safe_final_state=coast", text)
         self.assertEqual(transport.motor_control_state, [0, 0, 0, 0])
+
+    def test_sensor_read_reports_reflected_value_and_uart_health(self) -> None:
+        output = io.StringIO()
+        transport = FakeTransport()
+        with mock.patch.object(cli.HidTransport, "open", return_value=transport):
+            with contextlib.redirect_stdout(output):
+                self.assertEqual(cli.main(["sensor-read"]), 0)
+        text = output.getvalue()
+        self.assertIn("current_version=M0.19A", text)
+        self.assertIn("input_port=1", text)
+        self.assertIn("sensor_state=streaming", text)
+        self.assertIn("sensor_type=0x1D", text)
+        self.assertIn("sensor_model=EST/EV3-color", text)
+        self.assertIn("sensor_mode=reflect", text)
+        self.assertIn("sensor_value=42", text)
+        self.assertIn("checksum_errors=2", text)
+
+    def test_sensor_read_can_select_color_mode(self) -> None:
+        output = io.StringIO()
+        transport = FakeTransport()
+        with mock.patch.object(cli.HidTransport, "open", return_value=transport):
+            with contextlib.redirect_stdout(output):
+                self.assertEqual(cli.main(["sensor-read", "--mode", "color"]), 0)
+        text = output.getvalue()
+        self.assertIn("sensor_mode=color", text)
+        self.assertIn("sensor_value=5", text)
+        self.assertIn("color_name=red", text)
+
+    def test_sensor_read_formats_ultrasonic_distance(self) -> None:
+        output = io.StringIO()
+        transport = FakeTransport(sensor_type=0x1E, sensor_value=123)
+        with mock.patch.object(cli.HidTransport, "open", return_value=transport):
+            with contextlib.redirect_stdout(output):
+                self.assertEqual(cli.main(["sensor-read", "--mode", "cm"]), 0)
+        text = output.getvalue()
+        self.assertIn("sensor_type=0x1E", text)
+        self.assertIn("sensor_model=EST/EV3-ultrasonic", text)
+        self.assertIn("sensor_mode=cm", text)
+        self.assertIn("distance_cm=12.3", text)
+
+    def test_sensor_read_formats_temperature(self) -> None:
+        output = io.StringIO()
+        transport = FakeTransport(sensor_type=0x06, sensor_value=235)
+        with mock.patch.object(cli.HidTransport, "open", return_value=transport):
+            with contextlib.redirect_stdout(output):
+                self.assertEqual(
+                    cli.main(["sensor-read", "--mode", "celsius"]), 0
+                )
+        text = output.getvalue()
+        self.assertIn("sensor_type=0x06", text)
+        self.assertIn("sensor_model=EST-temperature", text)
+        self.assertIn("sensor_mode=celsius", text)
+        self.assertIn("temperature_c=23.5", text)
 
     def test_flash_shows_versions_and_writes_success_log(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

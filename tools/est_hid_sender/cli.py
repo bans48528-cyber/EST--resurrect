@@ -5,6 +5,14 @@ import sys
 import time
 from pathlib import Path
 
+from .constants import (
+    DEVICE_CAPABILITY_BATTERY,
+    DEVICE_CAPABILITY_INPUT_SENSOR,
+    DEVICE_CAPABILITY_KEYS,
+    DEVICE_CAPABILITY_MOTOR_CONTROL,
+    DEVICE_CAPABILITY_MOTOR_TACHO,
+    DEVICE_CAPABILITY_UPDATE,
+)
 from .errors import EstUpdaterError, VersionSafetyError
 from .firmware import FirmwarePackage, compare_versions, load_firmware_package
 from .hid_transport import HidTransport
@@ -13,11 +21,16 @@ from .updater import FirmwareUpdater, PacketProgress
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="EST USB HID firmware update tool")
+    parser = argparse.ArgumentParser(description="EST USB HID device and firmware tool")
     commands = parser.add_subparsers(dest="mode", required=True)
 
     ping = commands.add_parser("ping", help="读取当前设备版本")
     add_device_options(ping)
+
+    device_status = commands.add_parser(
+        "device-status", help="一次读取版本、电量、按键、四个马达和四个输入口"
+    )
+    add_device_options(device_status)
 
     keys = commands.add_parser("keys", help="查看六个按键的状态")
     add_device_options(keys)
@@ -128,6 +141,32 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="测试结束时自由滑行或短暂主动刹车，默认 coast",
     )
 
+    sensor_read = commands.add_parser(
+        "sensor-read", help="读取 1-4 号输入口传感器"
+    )
+    add_device_options(sensor_read)
+    sensor_read.add_argument(
+        "--port", choices=("1", "2", "3", "4"), default="1",
+		help="输入端口，默认 1；M0.46A 起支持 1-4 号口",
+    )
+    sensor_read.add_argument(
+        "--mode", dest="sensor_mode",
+        choices=(
+            "reflect", "ambient", "color", "cm", "inch", "presence",
+            "celsius", "fahrenheit",
+        ),
+        default="reflect",
+        help=(
+            "颜色传感器模式、超声波 cm/inch/presence，或温度传感器 "
+            "celsius/fahrenheit；默认 reflect"
+        ),
+    )
+    sensor_read.add_argument("--watch", action="store_true", help="持续读取传感器")
+    sensor_read.add_argument(
+        "--interval", type=float, default=0.2, help="读取间隔，默认 0.2 秒"
+    )
+    sensor_read.add_argument("--duration", type=float, help="持续读取秒数")
+
     info = commands.add_parser("info", help="显示升级包信息，不连接设备")
     add_package_options(info)
 
@@ -229,6 +268,208 @@ def run_keys(args: argparse.Namespace) -> int:
                 time.sleep(args.interval)
         except KeyboardInterrupt:
             print("key watch stopped", flush=True)
+    return 0
+
+
+SENSOR_STATES = {
+    0: "off",
+    1: "syncing",
+    2: "streaming",
+    3: "stale",
+}
+SENSOR_MODES = {
+    "reflect": 0,
+    "ambient": 1,
+    "color": 2,
+    "cm": 0,
+    "inch": 1,
+    "presence": 2,
+    "celsius": 0,
+    "fahrenheit": 1,
+}
+SENSOR_MODE_NAMES = {0: "reflect", 1: "ambient", 2: "color"}
+ULTRASONIC_MODE_NAMES = {0: "cm", 1: "inch", 2: "presence"}
+TEMPERATURE_MODE_NAMES = {0: "celsius", 1: "fahrenheit"}
+SENSOR_MODEL_NAMES = {
+    0x06: "EST-temperature",
+    0x10: "EST/EV3-touch",
+    0x1D: "EST/EV3-color",
+    0x1E: "EST/EV3-ultrasonic",
+}
+SENSOR_COLOR_NAMES = {
+    0: "none",
+    1: "black",
+    2: "blue",
+    3: "green",
+    4: "yellow",
+    5: "red",
+    6: "white",
+    7: "brown",
+}
+MOTOR_OUTPUT_NAMES = {0: "coast", 1: "drive", 2: "brake"}
+DEVICE_CAPABILITY_NAMES = (
+    (DEVICE_CAPABILITY_UPDATE, "firmware-update"),
+    (DEVICE_CAPABILITY_MOTOR_CONTROL, "motor-control"),
+    (DEVICE_CAPABILITY_MOTOR_TACHO, "motor-tacho"),
+    (DEVICE_CAPABILITY_INPUT_SENSOR, "input-sensor"),
+    (DEVICE_CAPABILITY_BATTERY, "battery"),
+    (DEVICE_CAPABILITY_KEYS, "keys"),
+)
+
+
+def device_sensor_mode_name(sensor_type: int, mode: int) -> str:
+    if sensor_type == 0x1E:
+        names = ULTRASONIC_MODE_NAMES
+    elif sensor_type == 0x06:
+        names = TEMPERATURE_MODE_NAMES
+    else:
+        names = SENSOR_MODE_NAMES
+    return names.get(mode, "unknown")
+
+
+def device_sensor_value_text(sensor: object) -> str:
+    if not sensor.value_valid:
+        return "unavailable"
+    if sensor.sensor_type == 0x10:
+        return "down" if sensor.value else "up"
+    if sensor.sensor_type == 0x1D and sensor.mode == 2:
+        return SENSOR_COLOR_NAMES.get(sensor.value, "unknown")
+    if sensor.sensor_type == 0x1E:
+        if sensor.mode == 0:
+            return f"{sensor.value / 10:.1f}cm"
+        if sensor.mode == 1:
+            return f"{sensor.value / 10:.1f}inch"
+        return "yes" if sensor.value else "no"
+    if sensor.sensor_type == 0x06:
+        signed = sensor.value if sensor.value < 0x8000 else sensor.value - 0x10000
+        unit = "F" if sensor.mode == 1 else "C"
+        return f"{signed / 10:.1f}{unit}"
+    return str(sensor.value)
+
+
+def run_device_status(args: argparse.Namespace) -> int:
+    with open_transport(args) as transport:
+        print(f"device={transport.path}", flush=True)
+        print(f"report input={transport.input_len} output={transport.output_len}", flush=True)
+        status = FirmwareUpdater(transport).read_device_status()
+        capabilities = ",".join(
+            name for bit, name in DEVICE_CAPABILITY_NAMES if status.capabilities & bit
+        )
+        print(f"firmware={status.firmware_version}", flush=True)
+        print(f"protocol={status.protocol_major}.{status.protocol_minor}", flush=True)
+        print(f"capabilities={capabilities or 'none'}", flush=True)
+        print(f"uptime_ms={status.uptime_ms}", flush=True)
+        print(f"pressed={format_pressed_keys(status.key_mask)}", flush=True)
+        print(f"battery_level={status.battery_level}/4", flush=True)
+        print(f"battery_percent={min(status.battery_level, 4) * 25}", flush=True)
+        print(f"battery_adc_raw={status.battery_adc_raw}", flush=True)
+        print(f"battery_sample_mv={status.battery_sample_mv}", flush=True)
+        for index, motor in enumerate(status.motors[: status.motor_port_count]):
+            port = chr(ord("A") + index)
+            print(
+                f"motor_{port}=state:{MOTOR_OUTPUT_NAMES.get(motor.output_state, 'unknown')} "
+                f"power:{motor.power_percent} tacho:{motor.tacho_count}",
+                flush=True,
+            )
+        for index, sensor in enumerate(status.sensors[: status.sensor_port_count]):
+            print(
+                f"input_{index + 1}=state:{SENSOR_STATES.get(sensor.state, 'unknown')} "
+                f"model:{SENSOR_MODEL_NAMES.get(sensor.sensor_type, 'none')} "
+                f"mode:{device_sensor_mode_name(sensor.sensor_type, sensor.mode)} "
+                f"value:{device_sensor_value_text(sensor)}",
+                flush=True,
+            )
+    return 0
+
+
+def require_sensor_success(result: object, operation: str) -> None:
+    if result.result == 2:
+        raise EstUpdaterError(f"传感器尚未完成连接，暂时不能执行 {operation}")
+    if result.result != 1:
+        raise EstUpdaterError(f"当前固件不支持该输入口或参数：{operation}")
+
+
+def print_sensor_sample(result: object) -> None:
+    print(f"sensor_state={SENSOR_STATES.get(result.state, 'unknown')}", flush=True)
+    print(f"sensor_type=0x{result.sensor_type:02X}", flush=True)
+    print(f"sensor_model={SENSOR_MODEL_NAMES.get(result.sensor_type, 'unknown')}", flush=True)
+    if result.sensor_type == 0x1E:
+        mode_names = ULTRASONIC_MODE_NAMES
+    elif result.sensor_type == 0x06:
+        mode_names = TEMPERATURE_MODE_NAMES
+    else:
+        mode_names = SENSOR_MODE_NAMES
+    print(f"sensor_mode={mode_names.get(result.mode, 'unknown')}", flush=True)
+    print(f"value_valid={'yes' if result.value_valid else 'no'}", flush=True)
+    print(f"sensor_value={result.value if result.value_valid else 'unavailable'}", flush=True)
+    if result.value_valid and result.sensor_type == 0x1D and result.mode == 2:
+        print(f"color_name={SENSOR_COLOR_NAMES.get(result.value, 'unknown')}", flush=True)
+    if result.value_valid and result.sensor_type == 0x1E:
+        if result.mode == 0:
+            print(f"distance_cm={result.value / 10:.1f}", flush=True)
+        elif result.mode == 1:
+            print(f"distance_inch={result.value / 10:.1f}", flush=True)
+        elif result.mode == 2:
+            print(f"object_present={'yes' if result.value else 'no'}", flush=True)
+    if result.value_valid and result.sensor_type == 0x06:
+        signed_value = result.value if result.value < 0x8000 else result.value - 0x10000
+        if result.mode == 1:
+            print(f"temperature_f={signed_value / 10:.1f}", flush=True)
+        else:
+            print(f"temperature_c={signed_value / 10:.1f}", flush=True)
+    print(f"adc0_raw={result.adc0_raw}", flush=True)
+    print(f"adc1_raw={result.adc1_raw}", flush=True)
+    print(f"digital_mask=0x{result.digital_mask:02X}", flush=True)
+    print(f"uart_rx_bytes={result.rx_count}", flush=True)
+    print(f"checksum_errors={result.checksum_errors}", flush=True)
+
+
+def run_sensor_read(args: argparse.Namespace) -> int:
+    if args.interval <= 0:
+        raise ValueError("--interval 必须大于 0")
+    if args.duration is not None and args.duration <= 0:
+        raise ValueError("--duration 必须大于 0")
+    sensor_port = int(args.port) - 1
+    requested_mode = SENSOR_MODES[args.sensor_mode]
+    with open_transport(args) as transport:
+        print(f"device={transport.path}", flush=True)
+        print(f"report input={transport.input_len} output={transport.output_len}", flush=True)
+        updater = FirmwareUpdater(transport)
+        print(f"current_version={updater.ping()}", flush=True)
+        print(f"input_port={args.port}", flush=True)
+
+        status = updater.read_input_sensor(sensor_port)
+        require_sensor_success(status, "status")
+        sync_started = time.monotonic()
+        while status.state != 2 and time.monotonic() - sync_started < 4.0:
+            time.sleep(0.1)
+            status = updater.read_input_sensor(sensor_port)
+            require_sensor_success(status, "status")
+        if status.state != 2:
+            print_sensor_sample(status)
+            raise EstUpdaterError("在 4 秒内没有识别到输入传感器")
+
+        selected = updater.set_input_sensor_mode(sensor_port, requested_mode)
+        require_sensor_success(selected, "set-mode")
+        value_started = time.monotonic()
+        while (
+            (not selected.value_valid or selected.mode != requested_mode)
+            and time.monotonic() - value_started < 2.0
+        ):
+            time.sleep(0.05)
+            selected = updater.read_input_sensor(sensor_port)
+            require_sensor_success(selected, "status")
+
+        started = time.monotonic()
+        while True:
+            print_sensor_sample(selected)
+            if not args.watch:
+                break
+            if args.duration is not None and time.monotonic() - started >= args.duration:
+                break
+            time.sleep(args.interval)
+            selected = updater.read_input_sensor(sensor_port)
+            require_sensor_success(selected, "status")
     return 0
 
 
@@ -902,6 +1143,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.mode == "ping":
             return run_ping(args)
+        if args.mode == "device-status":
+            return run_device_status(args)
         if args.mode == "keys":
             return run_keys(args)
         if args.mode == "flash-id":
@@ -926,6 +1169,8 @@ def main(argv: list[str] | None = None) -> int:
             return run_motor_control(args)
         if args.mode == "motor-pair-control":
             return run_motor_pair_control(args)
+        if args.mode == "sensor-read":
+            return run_sensor_read(args)
         if args.mode == "info":
             return run_package_check(args, require_manifest=False)
         if args.mode == "verify":

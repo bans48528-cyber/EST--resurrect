@@ -5,12 +5,19 @@
 
 #include "app_config.h"
 #include "app_version.h"
+#include "board_battery.h"
 #include "board_flash.h"
 #include "board_keys.h"
 #include "board_motor.h"
+#include "board_sensor.h"
 #include "update_protocol.h"
 #include "update_storage.h"
 #include "usb_hid.h"
+
+#define DEVICE_STATUS_PAYLOAD_LENGTH 72U
+#define DEVICE_STATUS_MOTOR_OFFSET 24U
+#define DEVICE_STATUS_SENSOR_OFFSET 48U
+#define DEVICE_STATUS_PORT_ENTRY_LENGTH 6U
 
 enum update_ack_flag {
 	UPDATE_ACK_FAILURE = 0x00,
@@ -49,6 +56,20 @@ static void write_i32_le(uint8_t *bytes, int32_t value)
 	bytes[3] = (uint8_t)(encoded >> 24U);
 }
 
+static void write_u16_le(uint8_t *bytes, uint16_t value)
+{
+	bytes[0] = (uint8_t)value;
+	bytes[1] = (uint8_t)(value >> 8U);
+}
+
+static void write_u32_le(uint8_t *bytes, uint32_t value)
+{
+	bytes[0] = (uint8_t)value;
+	bytes[1] = (uint8_t)(value >> 8U);
+	bytes[2] = (uint8_t)(value >> 16U);
+	bytes[3] = (uint8_t)(value >> 24U);
+}
+
 static uint8_t checksum(const uint8_t *bytes, size_t length)
 {
 	uint8_t sum = 0U;
@@ -72,7 +93,8 @@ static bool report_starts_logical_frame(const uint8_t *report, size_t length)
 	if (report[2] == HEARTBEAT_COMMAND || report[2] == KEY_STATUS_COMMAND ||
 	    report[2] == FLASH_ID_COMMAND || report[2] == FLASH_SCAN_COMMAND ||
 	    report[2] == FLASH_TEST_COMMAND || report[2] == FLASH_STATUS_COMMAND ||
-	    report[2] == FLASH_MODE_PROBE_COMMAND) {
+	    report[2] == FLASH_MODE_PROBE_COMMAND ||
+	    report[2] == DEVICE_STATUS_COMMAND) {
 		return data_length == 0U;
 	}
 	if (report[2] == MOTOR_TEST_COMMAND) {
@@ -88,6 +110,9 @@ static bool report_starts_logical_frame(const uint8_t *report, size_t length)
 		return data_length == 1U || data_length == 2U;
 	}
 	if (report[2] == MOTOR_CONTROL_COMMAND) {
+		return data_length == 2U || data_length == 3U;
+	}
+	if (report[2] == INPUT_SENSOR_COMMAND) {
 		return data_length == 2U || data_length == 3U;
 	}
 	return report[2] == UPDATE_COMMAND && data_length >= 4U &&
@@ -363,6 +388,92 @@ static void queue_motor_control_result(uint8_t result,
 	(void)usb_hid_queue_report(report, false);
 }
 
+static void queue_input_sensor_result(uint8_t result, uint8_t port)
+{
+	struct board_sensor_snapshot snapshot = {0};
+	uint8_t report[USB_HID_REPORT_SIZE] = {0};
+
+	(void)board_sensor_get_snapshot((enum board_sensor_port)port, &snapshot);
+	report[0] = FRAME_START_BYTE;
+	report[1] = DEVICE_FRAME_DIRECTION;
+	report[2] = INPUT_SENSOR_COMMAND;
+	report[3] = 19U;
+	report[4] = 0U;
+	report[5] = result;
+	report[6] = port;
+	report[7] = (uint8_t)snapshot.state;
+	report[8] = snapshot.sensor_type;
+	report[9] = snapshot.mode;
+	report[10] = snapshot.value_valid ? 1U : 0U;
+	write_u16_le(&report[11], snapshot.value);
+	write_u16_le(&report[13], snapshot.adc0_raw);
+	write_u16_le(&report[15], snapshot.adc1_raw);
+	report[17] = snapshot.digital_mask;
+	write_u32_le(&report[18], snapshot.rx_count);
+	write_u16_le(&report[22], snapshot.checksum_errors);
+	report[24] = checksum(report, 24U);
+	report[25] = FRAME_END_BYTE;
+	(void)usb_hid_queue_report(report, false);
+}
+
+static void queue_device_status(uint32_t now_ms)
+{
+	struct board_battery_snapshot battery = board_battery_snapshot();
+	uint8_t report[USB_HID_REPORT_SIZE] = {0};
+	uint8_t *payload = &report[5];
+	uint8_t index;
+	uint32_t capabilities = DEVICE_CAPABILITY_UPDATE |
+		DEVICE_CAPABILITY_MOTOR_CONTROL | DEVICE_CAPABILITY_MOTOR_TACHO |
+		DEVICE_CAPABILITY_INPUT_SENSOR | DEVICE_CAPABILITY_BATTERY |
+		DEVICE_CAPABILITY_KEYS;
+
+	report[0] = FRAME_START_BYTE;
+	report[1] = DEVICE_FRAME_DIRECTION;
+	report[2] = DEVICE_STATUS_COMMAND;
+	report[3] = DEVICE_STATUS_PAYLOAD_LENGTH;
+	report[4] = 0U;
+	payload[0] = DEVICE_PROTOCOL_MAJOR;
+	payload[1] = DEVICE_PROTOCOL_MINOR;
+	memcpy(&payload[2], app_version_text, 6U);
+	payload[8] = BOARD_MOTOR_PORT_COUNT;
+	payload[9] = BOARD_SENSOR_PORT_COUNT;
+	payload[10] = board_keys_pressed_mask();
+	payload[11] = battery.valid ? battery.level : 0U;
+	write_u16_le(&payload[12], battery.adc_raw);
+	write_u16_le(&payload[14], battery.sample_mv);
+	write_u32_le(&payload[16], capabilities);
+	write_u32_le(&payload[20], now_ms);
+
+	for (index = 0U; index < BOARD_MOTOR_PORT_COUNT; index++) {
+		struct board_motor_control_snapshot motor = {0};
+		uint8_t *entry = &payload[DEVICE_STATUS_MOTOR_OFFSET +
+			(index * DEVICE_STATUS_PORT_ENTRY_LENGTH)];
+
+		(void)board_motor_control_snapshot((enum board_motor_port)index,
+			&motor);
+		entry[0] = (uint8_t)motor.state;
+		entry[1] = (uint8_t)motor.power_percent;
+		write_i32_le(&entry[2], motor.tacho_count);
+	}
+	for (index = 0U; index < BOARD_SENSOR_PORT_COUNT; index++) {
+		struct board_sensor_snapshot sensor = {0};
+		uint8_t *entry = &payload[DEVICE_STATUS_SENSOR_OFFSET +
+			(index * DEVICE_STATUS_PORT_ENTRY_LENGTH)];
+
+		(void)board_sensor_get_snapshot((enum board_sensor_port)index,
+			&sensor);
+		entry[0] = (uint8_t)sensor.state;
+		entry[1] = sensor.sensor_type;
+		entry[2] = sensor.mode;
+		entry[3] = sensor.value_valid ? 1U : 0U;
+		write_u16_le(&entry[4], sensor.value);
+	}
+	report[5U + DEVICE_STATUS_PAYLOAD_LENGTH] = checksum(report,
+		5U + DEVICE_STATUS_PAYLOAD_LENGTH);
+	report[6U + DEVICE_STATUS_PAYLOAD_LENGTH] = FRAME_END_BYTE;
+	(void)usb_hid_queue_report(report, false);
+}
+
 static uint8_t apply_motor_test_action(uint8_t action, uint32_t now_ms,
 	uint8_t power_percent, bool custom_power)
 {
@@ -490,6 +601,34 @@ static void handle_motor_control(const uint8_t *data, uint16_t data_length)
 	queue_motor_control_result(result, port);
 }
 
+static void handle_input_sensor(const uint8_t *data, uint16_t data_length,
+	uint32_t now_ms)
+{
+	uint8_t action = data[0];
+	uint8_t port = data[1];
+	uint8_t result = 1U;
+
+	if (port >= BOARD_SENSOR_PORT_COUNT) {
+		result = 0U;
+	} else if (action == INPUT_SENSOR_ACTION_STATUS && data_length == 2U) {
+		/* Status is always available, including during synchronisation. */
+	} else if (action == INPUT_SENSOR_ACTION_SET_MODE && data_length == 3U) {
+		if (data[2] > BOARD_SENSOR_MODE_COLOR) {
+			result = 0U;
+		} else if (!board_sensor_set_mode((enum board_sensor_port)port,
+			   (enum board_sensor_mode)data[2], now_ms)) {
+			result = 2U;
+		}
+	} else if (action == INPUT_SENSOR_ACTION_RESTART && data_length == 2U) {
+		if (!board_sensor_restart((enum board_sensor_port)port, now_ms)) {
+			result = 0U;
+		}
+	} else {
+		result = 0U;
+	}
+	queue_input_sensor_result(result, port);
+}
+
 static void abort_session(void)
 {
 	update_storage_abort();
@@ -509,6 +648,7 @@ static void handle_update_frame(const uint8_t *frame, uint16_t data_length,
 		return;
 	}
 	board_motor_stop();
+	board_sensor_stop();
 	total_frames = read_u16_le(&frame[5]);
 	frame_index = read_u16_le(&frame[7]);
 	payload_length = data_length - 4U;
@@ -622,6 +762,11 @@ static void handle_logical_frame(uint32_t now_ms)
 	} else if (logical_frame[2] == MOTOR_CONTROL_COMMAND &&
 		   (data_length == 2U || data_length == 3U)) {
 		handle_motor_control(&logical_frame[5], data_length);
+	} else if (logical_frame[2] == INPUT_SENSOR_COMMAND &&
+		   (data_length == 2U || data_length == 3U)) {
+		handle_input_sensor(&logical_frame[5], data_length, now_ms);
+	} else if (logical_frame[2] == DEVICE_STATUS_COMMAND && data_length == 0U) {
+		queue_device_status(now_ms);
 	} else if (logical_frame[2] == UPDATE_COMMAND) {
 		handle_update_frame(logical_frame, data_length, now_ms);
 	}

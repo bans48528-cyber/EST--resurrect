@@ -7,12 +7,17 @@ from dataclasses import dataclass
 from typing import Literal, Protocol
 
 from .constants import (
+    DEVICE_STATUS_TIMEOUT_SECONDS,
     FIRST_PACKET_ACK_TIMEOUT_SECONDS,
     FLASH_DIAGNOSTIC_TIMEOUT_SECONDS,
     FLASH_ID_TIMEOUT_SECONDS,
     FRAGMENT_WRITE_DELAY_SECONDS,
     HEARTBEAT_TIMEOUT_SECONDS,
     HID_READ_TIMEOUT_MS,
+    INPUT_SENSOR_ACTION_RESTART,
+    INPUT_SENSOR_ACTION_SET_MODE,
+    INPUT_SENSOR_ACTION_STATUS,
+    INPUT_SENSOR_TIMEOUT_SECONDS,
     LEGACY_REPORT_SIZE,
     KEY_STATUS_TIMEOUT_SECONDS,
     MAX_PAYLOAD,
@@ -34,7 +39,9 @@ from .errors import (
     HeartbeatTimeoutError,
 )
 from .protocol import (
+    build_device_status_frame,
     build_heartbeat_frame,
+    build_input_sensor_frame,
     build_flash_id_frame,
     build_flash_scan_frame,
     build_flash_test_frame,
@@ -48,6 +55,8 @@ from .protocol import (
     build_motor_test_frame,
     build_update_frame,
     parse_heartbeat_response,
+    parse_device_status_response,
+    parse_input_sensor_response,
     parse_flash_id_response,
     parse_flash_scan_response,
     parse_flash_test_response,
@@ -70,6 +79,8 @@ from .protocol import (
     MotorStopTestResult,
     MotorDualTestResult,
     MotorControlResult,
+    InputSensorResult,
+    DeviceStatus,
 )
 
 
@@ -130,6 +141,21 @@ class FirmwareUpdater:
                 return key_mask
         raise DiagnosticTimeoutError(
             "设备没有返回按键状态；请确认固件支持 keys 命令"
+        )
+
+    def read_device_status(self) -> DeviceStatus:
+        report = build_device_status_frame().ljust(LEGACY_REPORT_SIZE, b"\x00")
+        self.transport.write_report(report)
+        deadline = time.monotonic() + DEVICE_STATUS_TIMEOUT_SECONDS
+        while time.monotonic() < deadline:
+            response = self.transport.read_report()
+            if not response:
+                continue
+            status = parse_device_status_response(response)
+            if status is not None:
+                return status
+        raise DiagnosticTimeoutError(
+            "设备没有返回整机状态；请确认固件支持 device-status 命令"
         )
 
     def read_flash_id(self) -> bytes:
@@ -385,6 +411,41 @@ class FirmwareUpdater:
                 return result
         raise DiagnosticTimeoutError(
             "设备没有返回通用马达控制状态；请确认固件支持 motor-control 命令"
+        )
+
+    def read_input_sensor(self, sensor_port: int = 0) -> InputSensorResult:
+        return self._input_sensor_action(INPUT_SENSOR_ACTION_STATUS, sensor_port)
+
+    def set_input_sensor_mode(
+        self, sensor_port: int, mode: int
+    ) -> InputSensorResult:
+        return self._input_sensor_action(
+            INPUT_SENSOR_ACTION_SET_MODE, sensor_port, mode=mode
+        )
+
+    def restart_input_sensor(self, sensor_port: int = 0) -> InputSensorResult:
+        return self._input_sensor_action(INPUT_SENSOR_ACTION_RESTART, sensor_port)
+
+    def _input_sensor_action(
+        self,
+        action: int,
+        sensor_port: int,
+        mode: int | None = None,
+    ) -> InputSensorResult:
+        report = build_input_sensor_frame(action, sensor_port, mode).ljust(
+            LEGACY_REPORT_SIZE, b"\x00"
+        )
+        self.transport.write_report(report)
+        deadline = time.monotonic() + INPUT_SENSOR_TIMEOUT_SECONDS
+        while time.monotonic() < deadline:
+            response = self.transport.read_report()
+            if not response:
+                continue
+            result = parse_input_sensor_response(response)
+            if result is not None:
+                return result
+        raise DiagnosticTimeoutError(
+            "设备没有返回输入传感器状态；请确认固件支持 sensor-read 命令"
         )
 
     def flash(

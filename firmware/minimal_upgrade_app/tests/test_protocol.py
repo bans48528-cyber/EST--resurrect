@@ -127,6 +127,18 @@ class BoardModuleLayoutTests(unittest.TestCase):
         self.assertIn("GPIOF, GPIO2", led)
         self.assertIn("GPIOC, GPIO13", led)
 
+    def test_battery_driver_uses_v5_adc_pin_and_original_level_thresholds(self) -> None:
+        battery = (SOURCE_DIR / "board_battery.c").read_text(encoding="utf-8")
+        main = (SOURCE_DIR / "main.c").read_text(encoding="utf-8")
+        self.assertIn("#define BATTERY_ADC_PORT GPIOF", battery)
+        self.assertIn("#define BATTERY_ADC_PIN GPIO3", battery)
+        self.assertIn("#define BATTERY_ADC ADC3", battery)
+        self.assertIn("#define BATTERY_ADC_CHANNEL ADC_CHANNEL9", battery)
+        for threshold in ("1661U", "1591U", "1521U", "1451U"):
+            self.assertIn(threshold, battery)
+        self.assertIn("board_battery_init(system_time_millis());", main)
+        self.assertIn("board_battery_tick(now_ms);", main)
+
     def test_main_initializes_power_before_other_board_services(self) -> None:
         main = (SOURCE_DIR / "main.c").read_text(encoding="utf-8")
         power = main.index("board_power_init();")
@@ -355,6 +367,216 @@ class BoardModuleLayoutTests(unittest.TestCase):
         self.assertIn("board_motor_diagnostic_active()", protocol)
         self.assertIn("queue_motor_control_result", protocol)
         self.assertIn("write_i32_le(&report[9], snapshot.tacho_count)", protocol)
+
+    def test_input_port_one_uses_verified_v5_sensor_pins(self) -> None:
+        sensor = (SOURCE_DIR / "board_sensor.c").read_text(encoding="utf-8")
+        expected_macros = (
+            "#define SENSOR_A_ADC0_PORT GPIOF",
+            "#define SENSOR_A_ADC0_PIN GPIO4",
+            "#define SENSOR_A_ADC1_PORT GPIOF",
+            "#define SENSOR_A_ADC1_PIN GPIO5",
+            "#define SENSOR_A_POWER_PORT GPIOF",
+            "#define SENSOR_A_POWER_PIN GPIO6",
+            "#define SENSOR_A_DIGITAL0_PORT GPIOB",
+            "#define SENSOR_A_DIGITAL0_PIN GPIO3",
+            "#define SENSOR_A_DIGITAL1_PORT GPIOF",
+            "#define SENSOR_A_DIGITAL1_PIN GPIO7",
+            "#define SENSOR_A_LEGACY_DETECT_PORT GPIOB",
+            "#define SENSOR_A_LEGACY_DETECT_PIN GPIO4",
+            "#define SENSOR_A_UART_PORT GPIOA",
+            "#define SENSOR_A_UART_TX_PIN GPIO0",
+            "#define SENSOR_A_UART_RX_PIN GPIO1",
+            "#define SENSOR_A_UART_ENABLE_PORT GPIOG",
+            "#define SENSOR_A_UART_ENABLE_PIN GPIO15",
+        )
+        for macro in expected_macros:
+            self.assertIn(macro, sensor)
+
+    def test_color_sensor_driver_uses_ev3_uart_handshake_and_modes(self) -> None:
+        sensor = (SOURCE_DIR / "board_sensor.c").read_text(encoding="utf-8")
+        header = (ROOT / "include" / "board_sensor.h").read_text(encoding="utf-8")
+        main = (SOURCE_DIR / "main.c").read_text(encoding="utf-8")
+        self.assertIn("SENSOR_SYNC_BAUD 2400U", sensor)
+        self.assertIn("SENSOR_DEFAULT_DATA_BAUD 57600U", sensor)
+        self.assertIn("BOARD_SENSOR_TYPE_EV3_COLOR 0x1DU", header)
+        self.assertIn("SENSOR_SYSTEM_ACK 0x04U", sensor)
+        self.assertIn("SENSOR_SYSTEM_NACK 0x02U", sensor)
+        self.assertIn("SENSOR_SELECT_MODE 0x43U", sensor)
+        self.assertIn("BOARD_SENSOR_MODE_REFLECTED", header)
+        self.assertIn("BOARD_SENSOR_MODE_AMBIENT", header)
+        self.assertIn("BOARD_SENSOR_MODE_COLOR", header)
+        self.assertLess(main.index("board_sensor_init"), main.index("usb_hid_init"))
+        self.assertIn("board_sensor_tick(now_ms);", main)
+
+    def test_touch_sensor_preserves_legacy_adc_thresholds_and_shows_state(self) -> None:
+        sensor = (SOURCE_DIR / "board_sensor.c").read_text(encoding="utf-8")
+        header = (ROOT / "include" / "board_sensor.h").read_text(encoding="utf-8")
+        main = (SOURCE_DIR / "main.c").read_text(encoding="utf-8")
+        self.assertIn("BOARD_SENSOR_TYPE_TOUCH 0x10U", header)
+        self.assertIn("SENSOR_TOUCH_ID_MIN_RAW 82U", sensor)
+        self.assertIn("SENSOR_TOUCH_ID_MAX_RAW 656U", sensor)
+        self.assertIn("SENSOR_TOUCH_PRESS_MAX_RAW 655U", sensor)
+        self.assertIn("SENSOR_TOUCH_RELEASE_MIN_RAW 1229U", sensor)
+        self.assertIn("update_touch_detection(port, now_ms);", sensor)
+        self.assertIn('return snapshot->value != 0U ? "DOWN" : "UP";', main)
+
+    def test_ultrasonic_sensor_uses_existing_uart_modes_and_formats_distance(self) -> None:
+        sensor = (SOURCE_DIR / "board_sensor.c").read_text(encoding="utf-8")
+        header = (ROOT / "include" / "board_sensor.h").read_text(encoding="utf-8")
+        main = (SOURCE_DIR / "main.c").read_text(encoding="utf-8")
+        self.assertIn("BOARD_SENSOR_TYPE_ULTRASONIC 0x1EU", header)
+        self.assertIn(
+            "runtime->rx_message[1] == BOARD_SENSOR_TYPE_ULTRASONIC", sensor
+        )
+        self.assertIn("BOARD_SENSOR_MODE_DISTANCE_CM", header)
+        self.assertIn("BOARD_SENSOR_MODE_DISTANCE_INCH", header)
+        self.assertIn("BOARD_SENSOR_MODE_PRESENCE", header)
+        self.assertIn(
+            'format_tenths((int16_t)snapshot->value, "CM", formatted);', main
+        )
+        self.assertIn(
+            'format_tenths((int16_t)snapshot->value, "IN", formatted);', main
+        )
+        self.assertIn('return snapshot->value != 0U ? "YES" : "NO";', main)
+        for label in ("DIST CM", "DIST IN", "PRESENCE"):
+            self.assertIn(f'"{label}"', main)
+
+    def test_temperature_sensor_uses_original_i2c_protocol_and_signed_units(self) -> None:
+        sensor = (SOURCE_DIR / "board_sensor.c").read_text(encoding="utf-8")
+        header = (ROOT / "include" / "board_sensor.h").read_text(encoding="utf-8")
+        main = (SOURCE_DIR / "main.c").read_text(encoding="utf-8")
+        self.assertIn("BOARD_SENSOR_TYPE_TEMPERATURE 0x06U", header)
+        self.assertIn("SENSOR_I2C_ADDRESS 0x4CU", sensor)
+        self.assertIn("SENSOR_I2C_IDENTIFY_REGISTER 0x01U", sensor)
+        self.assertIn("SENSOR_I2C_IDENTIFY_VALUE 0x60U", sensor)
+        self.assertIn("SENSOR_I2C_TEMPERATURE_REGISTER 0x00U", sensor)
+        self.assertIn("SENSOR_I2C_DELAY_CYCLES 1000U", sensor)
+        self.assertIn("SENSOR_I2C_SWITCH_SETTLE_MS 20U", sensor)
+        self.assertIn("SENSOR_I2C_DETECT_ADC0_MIN_RAW 656U", sensor)
+        self.assertIn("SENSOR_I2C_DETECT_ADC1_MIN_RAW 984U", sensor)
+        self.assertIn("temperature_candidate(&runtime->snapshot)", sensor)
+        self.assertIn("gpio_set(hardware->enable_port, hardware->enable_pin);", sensor)
+        self.assertIn("temperature_probe(port)", sensor)
+        self.assertIn("((uint16_t)response[0] << 4U)", sensor)
+        self.assertIn("raw_value | 0xF000U", sensor)
+        self.assertIn("* 10) / 16", sensor)
+        self.assertIn("* 18) / 16 + 320", sensor)
+        self.assertIn("BOARD_SENSOR_MODE_CELSIUS", header)
+        self.assertIn("BOARD_SENSOR_MODE_FAHRENHEIT", header)
+        self.assertIn('"TEMP C"', main)
+        self.assertIn('"TEMP F"', main)
+        self.assertIn('? "F" : "C"', main)
+        for pin in (
+            "SENSOR_A_DIGITAL0_PIN GPIO3",
+            "SENSOR_A_DIGITAL1_PIN GPIO7",
+            "SENSOR_B_DIGITAL0_PIN GPIO13",
+            "SENSOR_B_DIGITAL1_PIN GPIO11",
+            "SENSOR_C_DIGITAL0_PIN GPIO1",
+            "SENSOR_C_DIGITAL1_PIN GPIO0",
+            "SENSOR_D_DIGITAL0_PIN GPIO11",
+            "SENSOR_D_DIGITAL1_PIN GPIO12",
+        ):
+            self.assertIn(pin, sensor)
+
+    def test_sensor_command_is_additive_and_update_stops_sensor(self) -> None:
+        protocol = (SOURCE_DIR / "update_protocol.c").read_text(encoding="utf-8")
+        config = (ROOT / "include" / "app_config.h").read_text(encoding="utf-8")
+        self.assertIn("UPDATE_COMMAND                  0x05U", config)
+        self.assertIn("MOTOR_CONTROL_COMMAND           0x17U", config)
+        self.assertIn("INPUT_SENSOR_COMMAND            0x18U", config)
+        self.assertIn("handle_input_sensor", protocol)
+        self.assertIn("queue_input_sensor_result", protocol)
+        self.assertIn("board_sensor_stop();", protocol)
+
+    def test_device_status_is_additive_and_returns_all_runtime_subsystems(self) -> None:
+        protocol = (SOURCE_DIR / "update_protocol.c").read_text(encoding="utf-8")
+        config = (ROOT / "include" / "app_config.h").read_text(encoding="utf-8")
+        self.assertIn("DEVICE_STATUS_COMMAND           0x19U", config)
+        self.assertIn("DEVICE_PROTOCOL_MAJOR           1U", config)
+        self.assertIn("DEVICE_STATUS_PAYLOAD_LENGTH 72U", protocol)
+        self.assertIn("board_battery_snapshot()", protocol)
+        self.assertIn("board_keys_pressed_mask()", protocol)
+        self.assertIn("board_motor_control_snapshot", protocol)
+        self.assertIn("board_sensor_get_snapshot", protocol)
+        self.assertIn("queue_device_status(now_ms);", protocol)
+        self.assertIn("UPDATE_COMMAND                  0x05U", config)
+
+    def test_sensor_screen_shows_live_modes_and_cycles_with_a_key(self) -> None:
+        lcd = (SOURCE_DIR / "board_lcd.c").read_text(encoding="utf-8")
+        header = (ROOT / "include" / "board_lcd.h").read_text(encoding="utf-8")
+        main = (SOURCE_DIR / "main.c").read_text(encoding="utf-8")
+        self.assertIn("board_lcd_show_sensor", header)
+        self.assertIn("board_lcd_show_sensor_ports", header)
+        self.assertIn("board_lcd_show_io_ports", header)
+        self.assertIn("board_lcd_show_io_ports", main)
+        self.assertIn("format_motor_line", main)
+        self.assertIn('draw_text_at(108U, 19U, "MOTOR", 1U);', lcd)
+        self.assertIn("format_status_line", main)
+        self.assertIn('append_status_text(output, &output_index, "BAT:");', main)
+        self.assertIn('append_status_text(output, &output_index, " SND:");', main)
+        self.assertIn("glyph_percent", lcd)
+        self.assertIn("draw_text_centered(116U, status, 1U);", lcd)
+        self.assertIn("BOARD_SENSOR_PORT_COUNT", main)
+        self.assertIn("board_sensor_set_all_modes", main)
+        self.assertIn('draw_text_centered(112U, "ANY KEY", 1U);', lcd)
+        for label in ("REFLECT", "AMBIENT", "COLOR"):
+            self.assertIn(f'"{label}"', main)
+        for color in ("NONE", "BLACK", "BLUE", "GREEN", "YELLOW", "RED", "WHITE", "BROWN"):
+            self.assertIn(f'"{color}"', main)
+        self.assertIn("key_mask != 0U && last_key_mask == 0U", main)
+        self.assertIn("SENSOR_DISPLAY_INTERVAL_MS 100U", main)
+
+    def test_startup_exercises_backlight_and_audio_without_blocking_main_loop(self) -> None:
+        main = (SOURCE_DIR / "main.c").read_text(encoding="utf-8")
+        backlight = (SOURCE_DIR / "board_backlight.c").read_text(encoding="utf-8")
+        audio = (SOURCE_DIR / "board_audio.c").read_text(encoding="utf-8")
+        self.assertIn("board_backlight_set_percent(20U);", main)
+        self.assertIn("board_backlight_set_percent(0U);", main)
+        self.assertIn("board_backlight_set_percent(100U);", main)
+        self.assertIn("board_audio_start_test(now_ms)", main)
+        self.assertIn("board_audio_tick(now_ms);", main)
+        self.assertIn("BACKLIGHT_PORT GPIOA", backlight)
+        self.assertIn("BACKLIGHT_PIN GPIO8", backlight)
+        self.assertIn("timer_set_oc_value(TIM1, TIM_OC1", backlight)
+        self.assertIn("timer_enable_break_main_output(TIM1);", backlight)
+        for pin in (
+            "AUDIO_COMMAND_SELECT_PIN GPIO4",
+            "AUDIO_DREQ_PIN GPIO5",
+            "AUDIO_RESET_PIN GPIO6",
+            "AUDIO_DATA_SELECT_PIN GPIO7",
+        ):
+            self.assertIn(pin, audio)
+        self.assertIn("AUDIO_TEST_STREAMING", audio)
+        self.assertIn("AUDIO_TEST_DRAINING", audio)
+        self.assertIn("AUDIO_VOLUME_TEST 0x0000U", audio)
+        self.assertIn("AUDIO_PCM_SAMPLE_RATE 8000U", audio)
+        self.assertIn("AUDIO_PCM_SAMPLE_COUNT 40000U", audio)
+        self.assertIn("'R', 'I', 'F', 'F'", audio)
+        self.assertIn("'W', 'A', 'V', 'E'", audio)
+        self.assertIn("send_stream_chunk();", audio)
+        self.assertIn("AUDIO_STREAM_CHUNK_SIZE 32U", audio)
+        self.assertIn("spi_set_clock_polarity_1", audio)
+        self.assertIn("restore_flash_bus();", audio)
+
+    def test_sensor_uart_uses_rx_interrupt_buffer_during_lcd_refresh(self) -> None:
+        sensor = (SOURCE_DIR / "board_sensor.c").read_text(encoding="utf-8")
+        self.assertIn("SENSOR_RX_RING_SIZE 256U", sensor)
+        self.assertIn("usart_enable_rx_interrupt(hardware->uart);", sensor)
+        for irq in (
+            "NVIC_UART4_IRQ",
+            "NVIC_USART2_IRQ",
+            "NVIC_USART1_IRQ",
+            "NVIC_USART3_IRQ",
+        ):
+            self.assertIn(irq, sensor)
+        for handler in (
+            "void uart4_isr(void)",
+            "void usart2_isr(void)",
+            "void usart1_isr(void)",
+            "void usart3_isr(void)",
+        ):
+            self.assertIn(handler, sensor)
+        self.assertIn("while (runtime->rx_tail != runtime->rx_head)", sensor)
 
 
 if __name__ == "__main__":

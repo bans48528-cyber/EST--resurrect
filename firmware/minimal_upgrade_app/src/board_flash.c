@@ -16,11 +16,6 @@
 #define FLASH_MOSI_PORT GPIOC
 #define FLASH_MOSI_PIN GPIO12
 
-#define AUDIO_COMMAND_SELECT_PORT GPIOG
-#define AUDIO_COMMAND_SELECT_PIN GPIO4
-#define AUDIO_DATA_SELECT_PORT GPIOG
-#define AUDIO_DATA_SELECT_PIN GPIO7
-
 #define READ_JEDEC_ID_COMMAND 0x9FU
 #define READ_DATA_4BYTE_COMMAND 0x13U
 #define READ_DATA_COMMAND 0x03U
@@ -183,22 +178,14 @@ void board_flash_init(void)
 
 	rcc_periph_clock_enable(RCC_GPIOA);
 	rcc_periph_clock_enable(RCC_GPIOC);
-	rcc_periph_clock_enable(RCC_GPIOG);
 	rcc_periph_clock_enable(RCC_SPI3);
 
-	/* Keep every device deselected before enabling their shared SPI3 bus. */
+	/* Keep the flash deselected before enabling its shared SPI3 bus. */
 	gpio_set(FLASH_CHIP_SELECT_PORT, FLASH_CHIP_SELECT_PIN);
 	gpio_mode_setup(FLASH_CHIP_SELECT_PORT, GPIO_MODE_OUTPUT, GPIO_PUPD_NONE,
 		FLASH_CHIP_SELECT_PIN);
 	gpio_set_output_options(FLASH_CHIP_SELECT_PORT, GPIO_OTYPE_PP,
 		GPIO_OSPEED_50MHZ, FLASH_CHIP_SELECT_PIN);
-
-	gpio_set(AUDIO_COMMAND_SELECT_PORT, AUDIO_COMMAND_SELECT_PIN);
-	gpio_set(AUDIO_DATA_SELECT_PORT, AUDIO_DATA_SELECT_PIN);
-	gpio_mode_setup(AUDIO_COMMAND_SELECT_PORT, GPIO_MODE_OUTPUT, GPIO_PUPD_NONE,
-		AUDIO_COMMAND_SELECT_PIN | AUDIO_DATA_SELECT_PIN);
-	gpio_set_output_options(AUDIO_COMMAND_SELECT_PORT, GPIO_OTYPE_PP,
-		GPIO_OSPEED_50MHZ, AUDIO_COMMAND_SELECT_PIN | AUDIO_DATA_SELECT_PIN);
 
 	gpio_mode_setup(FLASH_CLOCK_PORT, GPIO_MODE_AF, GPIO_PUPD_NONE, spi_pins);
 	gpio_set_output_options(FLASH_CLOCK_PORT, GPIO_OTYPE_PP, GPIO_OSPEED_50MHZ,

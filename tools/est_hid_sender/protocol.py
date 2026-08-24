@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 from .constants import (
     DEVICE_DIRECTION,
+    DEVICE_STATUS_COMMAND,
     FLASH_ID_COMMAND,
     FLASH_SCAN_COMMAND,
     FLASH_TEST_COMMAND,
@@ -13,6 +14,8 @@ from .constants import (
     FRAME_START,
     HEARTBEAT_COMMAND,
     HOST_DIRECTION,
+    INPUT_SENSOR_ACTION_SET_MODE,
+    INPUT_SENSOR_COMMAND,
     KEY_STATUS_COMMAND,
     LEGACY_REPORT_SIZE,
     MAX_PAYLOAD,
@@ -109,6 +112,55 @@ class MotorControlResult:
     tacho_count: int
 
 
+@dataclass(frozen=True)
+class InputSensorResult:
+    result: int
+    port: int
+    state: int
+    sensor_type: int
+    mode: int
+    value_valid: bool
+    value: int
+    adc0_raw: int
+    adc1_raw: int
+    digital_mask: int
+    rx_count: int
+    checksum_errors: int
+
+
+@dataclass(frozen=True)
+class DeviceMotorStatus:
+    output_state: int
+    power_percent: int
+    tacho_count: int
+
+
+@dataclass(frozen=True)
+class DeviceSensorStatus:
+    state: int
+    sensor_type: int
+    mode: int
+    value_valid: bool
+    value: int
+
+
+@dataclass(frozen=True)
+class DeviceStatus:
+    protocol_major: int
+    protocol_minor: int
+    firmware_version: str
+    motor_port_count: int
+    sensor_port_count: int
+    key_mask: int
+    battery_level: int
+    battery_adc_raw: int
+    battery_sample_mv: int
+    capabilities: int
+    uptime_ms: int
+    motors: tuple[DeviceMotorStatus, ...]
+    sensors: tuple[DeviceSensorStatus, ...]
+
+
 def checksum(data: bytes | bytearray) -> int:
     return sum(data) & 0xFF
 
@@ -128,6 +180,10 @@ def build_heartbeat_frame() -> bytes:
 
 def build_key_status_frame() -> bytes:
     return build_frame(KEY_STATUS_COMMAND)
+
+
+def build_device_status_frame() -> bytes:
+    return build_frame(DEVICE_STATUS_COMMAND)
 
 
 def build_flash_id_frame() -> bytes:
@@ -235,6 +291,25 @@ def build_motor_control_frame(
     elif power_percent is not None:
         raise ValueError("motor power is valid only for the set-power action")
     return build_frame(MOTOR_CONTROL_COMMAND, payload)
+
+
+def build_input_sensor_frame(
+    action: int,
+    sensor_port: int,
+    mode: int | None = None,
+) -> bytes:
+    if not 0 <= action <= 0xFF:
+        raise ValueError("input sensor action must fit uint8")
+    if sensor_port not in (0, 1, 2, 3):
+        raise ValueError("input sensor port must be 0, 1, 2, or 3")
+    payload = bytes((action, sensor_port))
+    if action == INPUT_SENSOR_ACTION_SET_MODE:
+        if mode not in (0, 1, 2):
+            raise ValueError("input sensor mode must be 0, 1, or 2")
+        payload += bytes((mode,))
+    elif mode is not None:
+        raise ValueError("input sensor mode is valid only for set-mode")
+    return build_frame(INPUT_SENSOR_COMMAND, payload)
 
 
 def build_update_frame(total_frames: int, frame_index: int, payload: bytes) -> bytes:
@@ -453,6 +528,94 @@ def parse_motor_control_response(report: bytes) -> MotorControlResult | None:
         output_state=report[7],
         power_percent=int.from_bytes(report[8:9], "little", signed=True),
         tacho_count=int.from_bytes(report[9:13], "little", signed=True),
+    )
+
+
+def parse_input_sensor_response(report: bytes) -> InputSensorResult | None:
+    if len(report) < 26:
+        return None
+    if report[0] != FRAME_START:
+        return None
+    if report[1] != DEVICE_DIRECTION or report[2] != INPUT_SENSOR_COMMAND:
+        return None
+    if report[3:5] != b"\x13\x00" or report[25] != FRAME_END:
+        return None
+    if checksum(report[:24]) != report[24]:
+        return None
+    return InputSensorResult(
+        result=report[5],
+        port=report[6],
+        state=report[7],
+        sensor_type=report[8],
+        mode=report[9],
+        value_valid=report[10] == 1,
+        value=int.from_bytes(report[11:13], "little"),
+        adc0_raw=int.from_bytes(report[13:15], "little"),
+        adc1_raw=int.from_bytes(report[15:17], "little"),
+        digital_mask=report[17],
+        rx_count=int.from_bytes(report[18:22], "little"),
+        checksum_errors=int.from_bytes(report[22:24], "little"),
+    )
+
+
+def parse_device_status_response(report: bytes) -> DeviceStatus | None:
+    payload_length = 72
+    checksum_index = 5 + payload_length
+    end_index = checksum_index + 1
+    if len(report) <= end_index:
+        return None
+    if report[0] != FRAME_START:
+        return None
+    if report[1] != DEVICE_DIRECTION or report[2] != DEVICE_STATUS_COMMAND:
+        return None
+    if report[3:5] != payload_length.to_bytes(2, "little"):
+        return None
+    if report[end_index] != FRAME_END:
+        return None
+    if checksum(report[:checksum_index]) != report[checksum_index]:
+        return None
+
+    payload = report[5:checksum_index]
+    motors = []
+    for index in range(4):
+        offset = 24 + (index * 6)
+        motors.append(
+            DeviceMotorStatus(
+                output_state=payload[offset],
+                power_percent=int.from_bytes(
+                    payload[offset + 1 : offset + 2], "little", signed=True
+                ),
+                tacho_count=int.from_bytes(
+                    payload[offset + 2 : offset + 6], "little", signed=True
+                ),
+            )
+        )
+    sensors = []
+    for index in range(4):
+        offset = 48 + (index * 6)
+        sensors.append(
+            DeviceSensorStatus(
+                state=payload[offset],
+                sensor_type=payload[offset + 1],
+                mode=payload[offset + 2],
+                value_valid=payload[offset + 3] == 1,
+                value=int.from_bytes(payload[offset + 4 : offset + 6], "little"),
+            )
+        )
+    return DeviceStatus(
+        protocol_major=payload[0],
+        protocol_minor=payload[1],
+        firmware_version=payload[2:8].decode("ascii", errors="replace"),
+        motor_port_count=payload[8],
+        sensor_port_count=payload[9],
+        key_mask=payload[10] & 0x3F,
+        battery_level=payload[11],
+        battery_adc_raw=int.from_bytes(payload[12:14], "little"),
+        battery_sample_mv=int.from_bytes(payload[14:16], "little"),
+        capabilities=int.from_bytes(payload[16:20], "little"),
+        uptime_ms=int.from_bytes(payload[20:24], "little"),
+        motors=tuple(motors),
+        sensors=tuple(sensors),
     )
 
 

@@ -391,4 +391,6 @@ def read_report(
     data = bytes(buf.raw[: read.value])
     if len(data) > LEGACY_REPORT_SIZE and data[:1] == b"\x00":
         data = data[1:]
-    return data.ljust(LEGACY_REPORT_SIZE, b"\x00")[:LEGACY_REPORT_SIZE]
+    # Keep legacy short replies padded to 64 bytes, but do not truncate newer
+    # replies whose logical frame is longer than one legacy report.
+    return data.ljust(LEGACY_REPORT_SIZE, b"\x00")

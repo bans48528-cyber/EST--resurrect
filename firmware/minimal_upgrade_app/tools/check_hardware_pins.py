@@ -15,6 +15,7 @@ PIN_TABLE_RELATIVE = Path(
 
 FIRMWARE_NETS = {
     "PB_CON": "board_power.c",
+    "PB_VOL": "board_battery.c",
     "RED": "board_led.c",
     "BLUE": "board_led.c",
     "KEY0": "board_keys.c",
@@ -26,12 +27,15 @@ FIRMWARE_NETS = {
     "LCD_SCK": "board_lcd.c",
     "LCD_SDAI": "board_lcd.c",
     "LCD_RST": "board_lcd.c",
+    "LCD_LED": "board_backlight.c",
     "SPI0_CS": "board_flash.c",
     "VS_SCK": "board_flash.c",
     "VS_MISO": "board_flash.c",
     "VS_MOSI": "board_flash.c",
-    "VS_CS": "board_flash.c",
-    "VS_XDCS": "board_flash.c",
+    "VS_CS": "board_audio.c",
+    "VS_DREQ": "board_audio.c",
+    "VS_RST": "board_audio.c",
+    "VS_XDCS": "board_audio.c",
     "MAPWM": "board_motor.c",
     "MAIN0": "board_motor.c",
     "MAIN1": "board_motor.c",
@@ -52,6 +56,42 @@ FIRMWARE_NETS = {
     "MDIN1": "board_motor.c",
     "TACHOD0": "board_motor.c",
     "TACHOD1": "board_motor.c",
+    "ADC_A0": "board_sensor.c",
+    "ADC_A1": "board_sensor.c",
+    "I_ONA": "board_sensor.c",
+    "DIGIA0": "board_sensor.c",
+    "DIGIA1": "board_sensor.c",
+    "LEGDETA": "board_sensor.c",
+    "TXINA": "board_sensor.c",
+    "RXINA": "board_sensor.c",
+    "RXINA_EN": "board_sensor.c",
+    "ADC_B0": "board_sensor.c",
+    "ADC_B1": "board_sensor.c",
+    "I_ONB": "board_sensor.c",
+    "DIGIB0": "board_sensor.c",
+    "DIGIB1": "board_sensor.c",
+    "LEGDETB": "board_sensor.c",
+    "TXINB": "board_sensor.c",
+    "RXINB": "board_sensor.c",
+    "RXINB_EN": "board_sensor.c",
+    "ADC_C0": "board_sensor.c",
+    "ADC_C1": "board_sensor.c",
+    "I_ONC": "board_sensor.c",
+    "DIGIC0": "board_sensor.c",
+    "DIGIC1": "board_sensor.c",
+    "LEGDETC": "board_sensor.c",
+    "TXINC": "board_sensor.c",
+    "RXINC": "board_sensor.c",
+    "RXINC_EN": "board_sensor.c",
+    "ADC_D0": "board_sensor.c",
+    "ADC_D1": "board_sensor.c",
+    "I_OND": "board_sensor.c",
+    "DIGID0": "board_sensor.c",
+    "DIGID1": "board_sensor.c",
+    "LEGDETD": "board_sensor.c",
+    "TXIND": "board_sensor.c",
+    "RXIND": "board_sensor.c",
+    "RXIND_EN": "board_sensor.c",
     "ULPI_D0": "usb_hid.c",
     "ULPI_D1": "usb_hid.c",
     "ULPI_D2": "usb_hid.c",
@@ -132,6 +172,20 @@ def validate_simple_modules(source_dir: Path, net_to_pin: dict[str, str]) -> Non
             raise ValueError(f"{source_name} does not use {net}={net_to_pin[net]}")
 
 
+def validate_battery(source_dir: Path, net_to_pin: dict[str, str]) -> None:
+    source = read_source(source_dir, "board_battery.c")
+    port_match = re.search(r"#define BATTERY_ADC_PORT GPIO([A-Z])", source)
+    pin_match = re.search(r"#define BATTERY_ADC_PIN GPIO(\d+)", source)
+    if port_match is None or pin_match is None:
+        raise ValueError("board_battery.c is missing the battery ADC pin macros")
+    actual_pin = f"P{port_match.group(1)}{int(pin_match.group(1))}"
+    if actual_pin != net_to_pin["PB_VOL"]:
+        raise ValueError(
+            f"board_battery.c uses PB_VOL={actual_pin}, "
+            f"expected {net_to_pin['PB_VOL']}"
+        )
+
+
 def read_lcd_pin(source: str, role: str) -> str:
     port_match = re.search(rf"#define LCD_{role}_PORT GPIO([A-Z])", source)
     pin_match = re.search(rf"#define LCD_{role}_PIN GPIO(\d+)", source)
@@ -151,6 +205,42 @@ def validate_lcd(source_dir: Path, net_to_pin: dict[str, str]) -> None:
             )
 
 
+def validate_backlight(source_dir: Path, net_to_pin: dict[str, str]) -> None:
+    source = read_source(source_dir, "board_backlight.c")
+    port_match = re.search(r"#define BACKLIGHT_PORT GPIO([A-Z])", source)
+    pin_match = re.search(r"#define BACKLIGHT_PIN GPIO(\d+)", source)
+    if port_match is None or pin_match is None:
+        raise ValueError("board_backlight.c is missing its GPIO macros")
+    actual_pin = f"P{port_match.group(1)}{int(pin_match.group(1))}"
+    if actual_pin != net_to_pin["LCD_LED"]:
+        raise ValueError(
+            f"board_backlight.c uses LCD_LED={actual_pin}, "
+            f"expected {net_to_pin['LCD_LED']}"
+        )
+
+
+def validate_audio(source_dir: Path, net_to_pin: dict[str, str]) -> None:
+    source = read_source(source_dir, "board_audio.c")
+    roles = {
+        "VS_CS": ("AUDIO_COMMAND_SELECT_PORT", "AUDIO_COMMAND_SELECT_PIN"),
+        "VS_DREQ": ("AUDIO_DREQ_PORT", "AUDIO_DREQ_PIN"),
+        "VS_RST": ("AUDIO_RESET_PORT", "AUDIO_RESET_PIN"),
+        "VS_XDCS": ("AUDIO_DATA_SELECT_PORT", "AUDIO_DATA_SELECT_PIN"),
+    }
+    for net, (port_macro, pin_macro) in roles.items():
+        port_match = re.search(rf"#define {port_macro} GPIO([A-Z])", source)
+        pin_match = re.search(rf"#define {pin_macro} GPIO(\d+)", source)
+        if port_match is None or pin_match is None:
+            raise ValueError(
+                f"board_audio.c is missing the {port_macro}/{pin_macro} macros"
+            )
+        actual_pin = f"P{port_match.group(1)}{int(pin_match.group(1))}"
+        if actual_pin != net_to_pin[net]:
+            raise ValueError(
+                f"board_audio.c uses {net}={actual_pin}, expected {net_to_pin[net]}"
+            )
+
+
 def validate_external_flash(source_dir: Path, net_to_pin: dict[str, str]) -> None:
     source = read_source(source_dir, "board_flash.c")
     roles = {
@@ -158,8 +248,6 @@ def validate_external_flash(source_dir: Path, net_to_pin: dict[str, str]) -> Non
         "FLASH_CLOCK": "VS_SCK",
         "FLASH_MISO": "VS_MISO",
         "FLASH_MOSI": "VS_MOSI",
-        "AUDIO_COMMAND_SELECT": "VS_CS",
-        "AUDIO_DATA_SELECT": "VS_XDCS",
     }
     for role, net in roles.items():
         port_match = re.search(rf"#define {role}_PORT GPIO([A-Z])", source)
@@ -211,6 +299,64 @@ def validate_motor_ports(source_dir: Path, net_to_pin: dict[str, str]) -> None:
             )
 
 
+def validate_sensor_ports(source_dir: Path, net_to_pin: dict[str, str]) -> None:
+    source = read_source(source_dir, "board_sensor.c")
+    roles: dict[str, tuple[str, str]] = {}
+    for letter in "ABCD":
+        roles.update(
+            {
+                f"ADC_{letter}0": (
+                    f"SENSOR_{letter}_ADC0_PORT",
+                    f"SENSOR_{letter}_ADC0_PIN",
+                ),
+                f"ADC_{letter}1": (
+                    f"SENSOR_{letter}_ADC1_PORT",
+                    f"SENSOR_{letter}_ADC1_PIN",
+                ),
+                f"I_ON{letter}": (
+                    f"SENSOR_{letter}_POWER_PORT",
+                    f"SENSOR_{letter}_POWER_PIN",
+                ),
+                f"DIGI{letter}0": (
+                    f"SENSOR_{letter}_DIGITAL0_PORT",
+                    f"SENSOR_{letter}_DIGITAL0_PIN",
+                ),
+                f"DIGI{letter}1": (
+                    f"SENSOR_{letter}_DIGITAL1_PORT",
+                    f"SENSOR_{letter}_DIGITAL1_PIN",
+                ),
+                f"LEGDET{letter}": (
+                    f"SENSOR_{letter}_LEGACY_DETECT_PORT",
+                    f"SENSOR_{letter}_LEGACY_DETECT_PIN",
+                ),
+                f"TXIN{letter}": (
+                    f"SENSOR_{letter}_UART_PORT",
+                    f"SENSOR_{letter}_UART_TX_PIN",
+                ),
+                f"RXIN{letter}": (
+                    f"SENSOR_{letter}_UART_PORT",
+                    f"SENSOR_{letter}_UART_RX_PIN",
+                ),
+                f"RXIN{letter}_EN": (
+                    f"SENSOR_{letter}_UART_ENABLE_PORT",
+                    f"SENSOR_{letter}_UART_ENABLE_PIN",
+                ),
+            }
+        )
+    for net, (port_macro, pin_macro) in roles.items():
+        port_match = re.search(rf"#define {port_macro} GPIO([A-Z])", source)
+        pin_match = re.search(rf"#define {pin_macro} GPIO(\d+)", source)
+        if port_match is None or pin_match is None:
+            raise ValueError(
+                f"board_sensor.c is missing the {port_macro}/{pin_macro} macros"
+            )
+        actual_pin = f"P{port_match.group(1)}{int(pin_match.group(1))}"
+        if actual_pin != net_to_pin[net]:
+            raise ValueError(
+                f"board_sensor.c uses {net}={actual_pin}, expected {net_to_pin[net]}"
+            )
+
+
 def read_mask_pins(source: str, variable: str, port: str) -> set[str]:
     match = re.search(rf"const uint16_t {variable} = (.*?);", source, re.DOTALL)
     if match is None:
@@ -248,9 +394,13 @@ def validate_repository(repo_root: Path) -> tuple[int, int, int]:
     net_to_pin = validate_table(rows)
     source_dir = repo_root / "firmware/minimal_upgrade_app/src"
     validate_simple_modules(source_dir, net_to_pin)
+    validate_battery(source_dir, net_to_pin)
     validate_lcd(source_dir, net_to_pin)
+    validate_backlight(source_dir, net_to_pin)
+    validate_audio(source_dir, net_to_pin)
     validate_external_flash(source_dir, net_to_pin)
     validate_motor_ports(source_dir, net_to_pin)
+    validate_sensor_ports(source_dir, net_to_pin)
     validate_usb(source_dir, net_to_pin)
     validate_claim_conflicts(net_to_pin)
     gpio_count = sum(row["kind"] == "gpio" for row in rows)

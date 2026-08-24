@@ -1,6 +1,6 @@
 # EST HID 固件升级工具
 
-该工具用于 Windows 上的 EST USB HID 心跳检测和固件升级。通信、协议、固件解析与升级流程分别位于独立模块中，保留现有 HID 协议、帧格式和逐包 ACK 机制。
+该工具用于 Windows 上的 EST USB HID 设备检测、功能验证和固件升级。通信、协议、固件解析与升级流程分别位于独立模块中，保留现有 HID 协议、帧格式和逐包 ACK 机制。
 
 ## 常用命令
 
@@ -11,6 +11,14 @@
 ```powershell
 python tools/est_hid_sender/est_hid_sender.py ping
 ```
+
+`M0.52A` 起可一次读取新上位机需要的整机状态：
+
+```powershell
+python tools/est_hid_sender/est_hid_sender.py device-status
+```
+
+输出包括固件与应用协议版本、支持功能、电量、按键、A-D 马达状态和 1-4 号输入口状态。该命令只读，不会让马达转动，也不会改变传感器模式。精确帧定义见 `docs/EST_USB应用协议_V1.md`。
 
 只读检测外部 Flash 型号（不会擦除或写入）：
 
@@ -87,6 +95,19 @@ python tools/est_hid_sender/est_hid_sender.py motor-pair-control `
 ```
 
 底层 `0x17` 命令还提供状态读取和测速计数清零。通用控制不设置固件自动超时：设定功率会保持到收到下一条功率、自由滑行或刹车命令；升级开始、关机和旧诊断停止命令仍会关闭全部输出。新上位机应明确管理启动与停止，不依赖固件定时续约。
+
+`M0.44A` 起可读取 EST/EV3 兼容颜色/灰度传感器；`M0.46A` 起支持 1-4 号输入口：
+
+```powershell
+python tools/est_hid_sender/est_hid_sender.py sensor-read --port 1 --mode reflect
+python tools/est_hid_sender/est_hid_sender.py sensor-read --port 1 --mode ambient
+python tools/est_hid_sender/est_hid_sender.py sensor-read --port 1 --mode color
+python tools/est_hid_sender/est_hid_sender.py sensor-read --port 4 --mode reflect
+python tools/est_hid_sender/est_hid_sender.py sensor-read --port 1 --mode celsius
+python tools/est_hid_sender/est_hid_sender.py sensor-read --port 1 --mode fahrenheit
+```
+
+持续观察数值可增加 `--watch --duration 10`。输出包括传感器连接状态、型号、模式、读数、两路原始 ADC、接收字节数和通信错误数。M0.44A-M0.45A 只启用 1 号输入口；M0.46A 可分别访问 1-4 号口；M0.49A 起支持温度传感器的 `celsius` 和 `fahrenheit` 模式。
 
 只查看升级包信息，不连接设备：
 
