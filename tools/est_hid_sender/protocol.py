@@ -22,8 +22,13 @@ from .constants import (
     MOTOR_CONTROL_ACTION_SET_POWER,
     MOTOR_CONTROL_COMMAND,
     MOTOR_DUAL_TEST_COMMAND,
+    MOTOR_POSITION_ACTION_START,
+    MOTOR_POSITION_COMMAND,
+    MOTOR_SPEED_ACTION_START,
+    MOTOR_SPEED_COMMAND,
     MOTOR_STOP_TEST_COMMAND,
     MOTOR_TACHO_TEST_COMMAND,
+    MOTOR_TYPE_COMMAND,
     MOTOR_TEST_ACTION_START,
     MOTOR_TEST_COMMAND,
     UPDATE_COMMAND,
@@ -113,6 +118,51 @@ class MotorControlResult:
 
 
 @dataclass(frozen=True)
+class MotorPositionResult:
+    result: int
+    port: int
+    state: int
+    motor_type: int
+    requested_speed_percent: int
+    measured_speed_percent: int
+    start_count: int
+    target_count: int
+    current_count: int
+    error_count: int
+
+
+@dataclass(frozen=True)
+class MotorSpeedResult:
+    result: int
+    port: int
+    state: int
+    output_state: int
+    motor_type: int
+    requested_speed_percent: int
+    measured_speed_percent: int
+    power_percent: int
+    tacho_count: int
+
+
+@dataclass(frozen=True)
+class MotorIdentification:
+    motor_type: int
+    adc_raw: int
+    millivolts: int
+    pin6_low_adc_raw: int = 0
+    pin6_low_millivolts: int = 0
+    pin5_pullup_adc_raw: int = 0
+    pin5_pullup_millivolts: int = 0
+    pin5_pullup_high: bool = False
+
+
+@dataclass(frozen=True)
+class MotorTypeResult:
+    result: int
+    motors: tuple[MotorIdentification, ...]
+
+
+@dataclass(frozen=True)
 class InputSensorResult:
     result: int
     port: int
@@ -172,6 +222,18 @@ def build_frame(command: int, payload: bytes = b"") -> bytes:
     frame.append(checksum(frame))
     frame.append(FRAME_END)
     return bytes(frame)
+
+
+def build_motor_type_frame(
+    action: int | None = None, motor_port: int | None = None
+) -> bytes:
+    if action is None and motor_port is None:
+        return build_frame(MOTOR_TYPE_COMMAND)
+    if action is None or not 0 <= action <= 0xFF:
+        raise ValueError("motor type action must fit uint8")
+    if motor_port not in (0, 1, 2, 3):
+        raise ValueError("motor port must be 0, 1, 2, or 3")
+    return build_frame(MOTOR_TYPE_COMMAND, bytes((action, motor_port)))
 
 
 def build_heartbeat_frame() -> bytes:
@@ -291,6 +353,53 @@ def build_motor_control_frame(
     elif power_percent is not None:
         raise ValueError("motor power is valid only for the set-power action")
     return build_frame(MOTOR_CONTROL_COMMAND, payload)
+
+
+def build_motor_position_frame(
+    action: int,
+    motor_port: int,
+    speed_percent: int | None = None,
+    degrees: int | None = None,
+) -> bytes:
+    if not 0 <= action <= 0xFF:
+        raise ValueError("motor position action must fit uint8")
+    if motor_port not in (0, 1, 2, 3):
+        raise ValueError("motor port must be 0, 1, 2, or 3")
+    payload = bytes((action, motor_port))
+    if action == MOTOR_POSITION_ACTION_START:
+        if speed_percent is None or not 10 <= speed_percent <= 100:
+            raise ValueError("motor speed must be between 10 and 100 percent")
+        if degrees is None or degrees == 0 or not -3600 <= degrees <= 3600:
+            raise ValueError("motor degrees must be between -3600 and 3600, excluding 0")
+        payload += bytes((speed_percent,))
+        payload += degrees.to_bytes(4, "little", signed=True)
+    elif speed_percent is not None or degrees is not None:
+        raise ValueError("speed and degrees are valid only for the start action")
+    return build_frame(MOTOR_POSITION_COMMAND, payload)
+
+
+def build_motor_speed_frame(
+    action: int,
+    motor_port: int,
+    speed_percent: int | None = None,
+) -> bytes:
+    if not 0 <= action <= 0xFF:
+        raise ValueError("motor speed action must fit uint8")
+    if motor_port not in (0, 1, 2, 3):
+        raise ValueError("motor port must be 0, 1, 2, or 3")
+    payload = bytes((action, motor_port))
+    if action == MOTOR_SPEED_ACTION_START:
+        if (
+            speed_percent is None
+            or speed_percent == 0
+            or not -100 <= speed_percent <= 100
+            or abs(speed_percent) < 10
+        ):
+            raise ValueError("motor speed must be between -100 and 100 percent with magnitude at least 10")
+        payload += bytes((speed_percent & 0xFF,))
+    elif speed_percent is not None:
+        raise ValueError("speed is valid only for the start action")
+    return build_frame(MOTOR_SPEED_COMMAND, payload)
 
 
 def build_input_sensor_frame(
@@ -529,6 +638,110 @@ def parse_motor_control_response(report: bytes) -> MotorControlResult | None:
         power_percent=int.from_bytes(report[8:9], "little", signed=True),
         tacho_count=int.from_bytes(report[9:13], "little", signed=True),
     )
+
+
+def parse_motor_position_response(report: bytes) -> MotorPositionResult | None:
+    if len(report) < 29:
+        return None
+    if report[0] != FRAME_START:
+        return None
+    if report[1] != DEVICE_DIRECTION or report[2] != MOTOR_POSITION_COMMAND:
+        return None
+    if report[3:5] != b"\x16\x00" or report[28] != FRAME_END:
+        return None
+    if checksum(report[:27]) != report[27]:
+        return None
+    return MotorPositionResult(
+        result=report[5],
+        port=report[6],
+        state=report[7],
+        motor_type=report[8],
+        requested_speed_percent=int.from_bytes(report[9:10], "little", signed=True),
+        measured_speed_percent=int.from_bytes(report[10:11], "little", signed=True),
+        start_count=int.from_bytes(report[11:15], "little", signed=True),
+        target_count=int.from_bytes(report[15:19], "little", signed=True),
+        current_count=int.from_bytes(report[19:23], "little", signed=True),
+        error_count=int.from_bytes(report[23:27], "little", signed=True),
+    )
+
+
+def parse_motor_speed_response(report: bytes) -> MotorSpeedResult | None:
+    if len(report) < 19:
+        return None
+    if report[0] != FRAME_START:
+        return None
+    if report[1] != DEVICE_DIRECTION or report[2] != MOTOR_SPEED_COMMAND:
+        return None
+    if report[3:5] != b"\x0c\x00" or report[18] != FRAME_END:
+        return None
+    if checksum(report[:17]) != report[17]:
+        return None
+    return MotorSpeedResult(
+        result=report[5],
+        port=report[6],
+        state=report[7],
+        output_state=report[8],
+        motor_type=report[9],
+        requested_speed_percent=int.from_bytes(report[10:11], "little", signed=True),
+        measured_speed_percent=int.from_bytes(report[11:12], "little", signed=True),
+        power_percent=int.from_bytes(report[12:13], "little", signed=True),
+        tacho_count=int.from_bytes(report[13:17], "little", signed=True),
+    )
+
+
+def parse_motor_type_response(report: bytes) -> MotorTypeResult | None:
+    if len(report) < 5:
+        return None
+    payload_length = int.from_bytes(report[3:5], "little")
+    if payload_length not in (21, 53, 57):
+        return None
+    checksum_index = 5 + payload_length
+    end_index = checksum_index + 1
+    if len(report) <= end_index:
+        return None
+    if report[0] != FRAME_START:
+        return None
+    if report[1] != DEVICE_DIRECTION or report[2] != MOTOR_TYPE_COMMAND:
+        return None
+    if report[end_index] != FRAME_END:
+        return None
+    if checksum(report[:checksum_index]) != report[checksum_index]:
+        return None
+    motors = []
+    entry_size = {21: 5, 53: 13, 57: 14}[payload_length]
+    for index in range(4):
+        offset = 6 + (index * entry_size)
+        motors.append(
+            MotorIdentification(
+                motor_type=report[offset],
+                adc_raw=int.from_bytes(report[offset + 1 : offset + 3], "little"),
+                millivolts=int.from_bytes(report[offset + 3 : offset + 5], "little"),
+                pin6_low_adc_raw=(
+                    int.from_bytes(report[offset + 5 : offset + 7], "little")
+                    if entry_size >= 13
+                    else 0
+                ),
+                pin6_low_millivolts=(
+                    int.from_bytes(report[offset + 7 : offset + 9], "little")
+                    if entry_size >= 13
+                    else 0
+                ),
+                pin5_pullup_adc_raw=(
+                    int.from_bytes(report[offset + 9 : offset + 11], "little")
+                    if entry_size >= 13
+                    else 0
+                ),
+                pin5_pullup_millivolts=(
+                    int.from_bytes(report[offset + 11 : offset + 13], "little")
+                    if entry_size >= 13
+                    else 0
+                ),
+                pin5_pullup_high=(
+                    report[offset + 13] != 0 if entry_size == 14 else False
+                ),
+            )
+        )
+    return MotorTypeResult(result=report[5], motors=tuple(motors))
 
 
 def parse_input_sensor_response(report: bytes) -> InputSensorResult | None:

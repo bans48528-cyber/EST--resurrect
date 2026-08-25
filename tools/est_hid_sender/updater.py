@@ -26,6 +26,14 @@ from .constants import (
     MOTOR_CONTROL_ACTION_RESET_TACHO,
     MOTOR_CONTROL_ACTION_SET_POWER,
     MOTOR_CONTROL_ACTION_STATUS,
+    MOTOR_POSITION_ACTION_START,
+    MOTOR_POSITION_ACTION_STATUS,
+    MOTOR_POSITION_ACTION_STOP,
+    MOTOR_SPEED_ACTION_BRAKE,
+    MOTOR_SPEED_ACTION_COAST,
+    MOTOR_SPEED_ACTION_START,
+    MOTOR_SPEED_ACTION_STATUS,
+    MOTOR_TYPE_ACTION_REFRESH,
     MOTOR_TEST_ACTION_START,
     MOTOR_TEST_ACTION_STATUS,
     MOTOR_TEST_ACTION_STOP,
@@ -50,9 +58,12 @@ from .protocol import (
     build_key_status_frame,
     build_motor_control_frame,
     build_motor_dual_test_frame,
+    build_motor_position_frame,
+    build_motor_speed_frame,
     build_motor_stop_test_frame,
     build_motor_tacho_test_frame,
     build_motor_test_frame,
+    build_motor_type_frame,
     build_update_frame,
     parse_heartbeat_response,
     parse_device_status_response,
@@ -65,9 +76,12 @@ from .protocol import (
     parse_key_status_response,
     parse_motor_control_response,
     parse_motor_dual_test_response,
+    parse_motor_position_response,
+    parse_motor_speed_response,
     parse_motor_stop_test_response,
     parse_motor_tacho_test_response,
     parse_motor_test_response,
+    parse_motor_type_response,
     parse_update_ack,
     split_reports,
     FlashScanResult,
@@ -78,7 +92,10 @@ from .protocol import (
     MotorTachoTestResult,
     MotorStopTestResult,
     MotorDualTestResult,
+    MotorPositionResult,
+    MotorSpeedResult,
     MotorControlResult,
+    MotorTypeResult,
     InputSensorResult,
     DeviceStatus,
 )
@@ -371,6 +388,38 @@ class FirmwareUpdater:
     def read_motor_control_status(self, motor_port: int) -> MotorControlResult:
         return self._motor_control_action(MOTOR_CONTROL_ACTION_STATUS, motor_port)
 
+    def read_motor_types(self) -> MotorTypeResult:
+        report = build_motor_type_frame().ljust(LEGACY_REPORT_SIZE, b"\x00")
+        self.transport.write_report(report)
+        deadline = time.monotonic() + MOTOR_TEST_TIMEOUT_SECONDS
+        while time.monotonic() < deadline:
+            response = self.transport.read_report()
+            if not response:
+                continue
+            result = parse_motor_type_response(response)
+            if result is not None:
+                return result
+        raise DiagnosticTimeoutError(
+            "设备没有返回马达类型；请确认固件支持 motor-types 命令"
+        )
+
+    def refresh_motor_type(self, motor_port: int) -> MotorTypeResult:
+        report = build_motor_type_frame(
+            MOTOR_TYPE_ACTION_REFRESH, motor_port
+        ).ljust(LEGACY_REPORT_SIZE, b"\x00")
+        self.transport.write_report(report)
+        deadline = time.monotonic() + MOTOR_TEST_TIMEOUT_SECONDS
+        while time.monotonic() < deadline:
+            response = self.transport.read_report()
+            if not response:
+                continue
+            result = parse_motor_type_response(response)
+            if result is not None:
+                return result
+        raise DiagnosticTimeoutError(
+            "设备没有返回马达静止识别状态；请确认固件支持 motor-identify 命令"
+        )
+
     def set_motor_power(
         self, motor_port: int, power_percent: int
     ) -> MotorControlResult:
@@ -411,6 +460,89 @@ class FirmwareUpdater:
                 return result
         raise DiagnosticTimeoutError(
             "设备没有返回通用马达控制状态；请确认固件支持 motor-control 命令"
+        )
+
+    def start_motor_position(
+        self, motor_port: int, speed_percent: int, degrees: int
+    ) -> MotorPositionResult:
+        return self._motor_position_action(
+            MOTOR_POSITION_ACTION_START,
+            motor_port,
+            speed_percent=speed_percent,
+            degrees=degrees,
+        )
+
+    def read_motor_position_status(self, motor_port: int) -> MotorPositionResult:
+        return self._motor_position_action(MOTOR_POSITION_ACTION_STATUS, motor_port)
+
+    def stop_motor_position(self, motor_port: int) -> MotorPositionResult:
+        return self._motor_position_action(MOTOR_POSITION_ACTION_STOP, motor_port)
+
+    def _motor_position_action(
+        self,
+        action: int,
+        motor_port: int,
+        speed_percent: int | None = None,
+        degrees: int | None = None,
+    ) -> MotorPositionResult:
+        report = build_motor_position_frame(
+            action, motor_port, speed_percent, degrees
+        ).ljust(LEGACY_REPORT_SIZE, b"\x00")
+        self.transport.write_report(report)
+        deadline = time.monotonic() + MOTOR_TEST_TIMEOUT_SECONDS
+        while time.monotonic() < deadline:
+            response = self.transport.read_report()
+            if not response:
+                continue
+            result = parse_motor_position_response(response)
+            if result is not None:
+                return result
+        raise DiagnosticTimeoutError(
+            "设备没有返回马达位置状态；请确认固件支持 motor-position 命令"
+        )
+
+    def start_motor_speed(
+        self, motor_port: int, speed_percent: int
+    ) -> MotorSpeedResult:
+        return self._motor_speed_action(
+            MOTOR_SPEED_ACTION_START,
+            motor_port,
+            speed_percent=speed_percent,
+        )
+
+    def read_motor_speed_status(self, motor_port: int) -> MotorSpeedResult:
+        return self._motor_speed_action(MOTOR_SPEED_ACTION_STATUS, motor_port)
+
+    def stop_motor_speed(
+        self, motor_port: int, stop_mode: Literal["coast", "brake"] = "coast"
+    ) -> MotorSpeedResult:
+        action = (
+            MOTOR_SPEED_ACTION_BRAKE
+            if stop_mode == "brake"
+            else MOTOR_SPEED_ACTION_COAST
+        )
+        return self._motor_speed_action(action, motor_port)
+
+    def _motor_speed_action(
+        self,
+        action: int,
+        motor_port: int,
+        speed_percent: int | None = None,
+    ) -> MotorSpeedResult:
+        report = build_motor_speed_frame(
+            action, motor_port, speed_percent
+        ).ljust(LEGACY_REPORT_SIZE, b"\x00")
+        self.transport.write_report(report)
+        deadline = time.monotonic() + MOTOR_TEST_TIMEOUT_SECONDS
+        while time.monotonic() < deadline:
+            response = self.transport.read_report()
+            if not response:
+                continue
+            result = parse_motor_speed_response(response)
+            if result is not None:
+                return result
+        raise DiagnosticTimeoutError(
+            "设备没有返回马达定速状态；请确认固件支持 motor-speed 命令"
         )
 
     def read_input_sensor(self, sensor_port: int = 0) -> InputSensorResult:

@@ -10,7 +10,9 @@ from .constants import (
     DEVICE_CAPABILITY_INPUT_SENSOR,
     DEVICE_CAPABILITY_KEYS,
     DEVICE_CAPABILITY_MOTOR_CONTROL,
+    DEVICE_CAPABILITY_MOTOR_POSITION,
     DEVICE_CAPABILITY_MOTOR_TACHO,
+    DEVICE_CAPABILITY_MOTOR_TYPE,
     DEVICE_CAPABILITY_UPDATE,
 )
 from .errors import EstUpdaterError, VersionSafetyError
@@ -62,6 +64,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     add_device_options(motor_test)
 
+    motor_types = commands.add_parser(
+        "motor-types", help="只读识别 A-D 输出口的大型或中型电机"
+    )
+    add_device_options(motor_types)
+
+    motor_identify = commands.add_parser(
+        "motor-identify", help="不转动马达，刷新指定输出口的大型或中型识别"
+    )
+    add_device_options(motor_identify)
+    motor_identify.add_argument(
+        "--port", choices=("A", "B", "C", "D"), default="A", help="输出端口，默认 A"
+    )
+
     motor_tacho_test = commands.add_parser(
         "motor-tacho-test", help="测试指定输出口正反转并读取内部测速脉冲"
     )
@@ -112,6 +127,45 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="测试结束时自由滑行或短暂主动刹车，默认 coast",
     )
 
+    motor_position = commands.add_parser(
+        "motor-position", help="按已识别的大型或中型电机参数运行指定角度或圈数"
+    )
+    add_device_options(motor_position)
+    motor_position.add_argument(
+        "--port", choices=("A", "B", "C", "D"), default="A", help="输出端口，默认 A"
+    )
+    motor_position.add_argument(
+        "--speed", type=int, default=30,
+        help="目标转速百分比，范围 10-100，默认 30；短行程会自动限速",
+    )
+    position_target = motor_position.add_mutually_exclusive_group(required=True)
+    position_target.add_argument(
+        "--degrees", type=int, help="目标角度，范围 -3600 到 3600，负数反转"
+    )
+    position_target.add_argument(
+        "--rotations", type=float, help="目标圈数，范围 -10 到 10，负数反转"
+    )
+
+    motor_speed = commands.add_parser(
+        "motor-speed", help="按已识别的马达类型持续闭环维持目标转速"
+    )
+    add_device_options(motor_speed)
+    motor_speed.add_argument(
+        "--port", choices=("A", "B", "C", "D"), default="A", help="输出端口，默认 A"
+    )
+    motor_speed.add_argument(
+        "--speed", type=int, default=30,
+        help="有方向的目标转速百分比，范围 -100 到 100，绝对值至少 10，默认 30",
+    )
+    motor_speed.add_argument(
+        "--duration", type=float, default=5.0,
+        help="测试秒数，范围 0.5-30，默认 5",
+    )
+    motor_speed.add_argument(
+        "--stop", choices=("coast", "brake"), default="coast",
+        help="测试结束时自由滑行或短暂主动刹车，默认 coast",
+    )
+
     motor_pair_control = commands.add_parser(
         "motor-pair-control", help="同时以不同方向和功率控制两个输出口"
     )
@@ -153,12 +207,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--mode", dest="sensor_mode",
         choices=(
             "reflect", "ambient", "color", "cm", "inch", "presence",
-            "celsius", "fahrenheit",
+            "celsius", "fahrenheit", "angle", "rate",
+            "sound", "db", "proximity", "beacon", "remote",
         ),
         default="reflect",
         help=(
             "颜色传感器模式、超声波 cm/inch/presence，或温度传感器 "
-            "celsius/fahrenheit；默认 reflect"
+            "celsius/fahrenheit；陀螺仪 angle/rate；声音 sound/db；"
+            "红外 proximity/beacon/remote；默认 reflect"
         ),
     )
     sensor_read.add_argument("--watch", action="store_true", help="持续读取传感器")
@@ -286,15 +342,28 @@ SENSOR_MODES = {
     "presence": 2,
     "celsius": 0,
     "fahrenheit": 1,
+    "angle": 0,
+    "rate": 1,
+    "sound": 0,
+    "db": 0,
+    "proximity": 0,
+    "beacon": 1,
+    "remote": 2,
 }
 SENSOR_MODE_NAMES = {0: "reflect", 1: "ambient", 2: "color"}
 ULTRASONIC_MODE_NAMES = {0: "cm", 1: "inch", 2: "presence"}
 TEMPERATURE_MODE_NAMES = {0: "celsius", 1: "fahrenheit"}
+GYRO_MODE_NAMES = {0: "angle", 1: "rate"}
+SOUND_MODE_NAMES = {0: "db"}
+INFRARED_MODE_NAMES = {0: "proximity", 1: "beacon", 2: "remote"}
 SENSOR_MODEL_NAMES = {
+    0x03: "NXT-sound",
     0x06: "EST-temperature",
     0x10: "EST/EV3-touch",
     0x1D: "EST/EV3-color",
     0x1E: "EST/EV3-ultrasonic",
+    0x20: "EST/EV3-gyro",
+    0x21: "EST/EV3-infrared",
 }
 SENSOR_COLOR_NAMES = {
     0: "none",
@@ -314,14 +383,22 @@ DEVICE_CAPABILITY_NAMES = (
     (DEVICE_CAPABILITY_INPUT_SENSOR, "input-sensor"),
     (DEVICE_CAPABILITY_BATTERY, "battery"),
     (DEVICE_CAPABILITY_KEYS, "keys"),
+    (DEVICE_CAPABILITY_MOTOR_TYPE, "motor-type"),
+    (DEVICE_CAPABILITY_MOTOR_POSITION, "motor-position"),
 )
 
 
 def device_sensor_mode_name(sensor_type: int, mode: int) -> str:
-    if sensor_type == 0x1E:
+    if sensor_type == 0x03:
+        names = SOUND_MODE_NAMES
+    elif sensor_type == 0x1E:
         names = ULTRASONIC_MODE_NAMES
     elif sensor_type == 0x06:
         names = TEMPERATURE_MODE_NAMES
+    elif sensor_type == 0x20:
+        names = GYRO_MODE_NAMES
+    elif sensor_type == 0x21:
+        names = INFRARED_MODE_NAMES
     else:
         names = SENSOR_MODE_NAMES
     return names.get(mode, "unknown")
@@ -332,6 +409,8 @@ def device_sensor_value_text(sensor: object) -> str:
         return "unavailable"
     if sensor.sensor_type == 0x10:
         return "down" if sensor.value else "up"
+    if sensor.sensor_type == 0x03:
+        return f"{sensor.value}dB"
     if sensor.sensor_type == 0x1D and sensor.mode == 2:
         return SENSOR_COLOR_NAMES.get(sensor.value, "unknown")
     if sensor.sensor_type == 0x1E:
@@ -344,6 +423,18 @@ def device_sensor_value_text(sensor: object) -> str:
         signed = sensor.value if sensor.value < 0x8000 else sensor.value - 0x10000
         unit = "F" if sensor.mode == 1 else "C"
         return f"{signed / 10:.1f}{unit}"
+    if sensor.sensor_type == 0x20:
+        signed = sensor.value if sensor.value < 0x8000 else sensor.value - 0x10000
+        return str(signed)
+    if sensor.sensor_type == 0x21:
+        if sensor.mode == 1:
+            heading_byte = sensor.value & 0xFF
+            heading = heading_byte if heading_byte <= 180 else -(255 - heading_byte)
+            distance = (sensor.value >> 8) & 0xFF
+            if distance == 128:
+                return "beacon unavailable"
+            return f"heading {heading}, distance {distance}"
+        return str(sensor.value & 0xFF)
     return str(sensor.value)
 
 
@@ -393,15 +484,30 @@ def print_sensor_sample(result: object) -> None:
     print(f"sensor_state={SENSOR_STATES.get(result.state, 'unknown')}", flush=True)
     print(f"sensor_type=0x{result.sensor_type:02X}", flush=True)
     print(f"sensor_model={SENSOR_MODEL_NAMES.get(result.sensor_type, 'unknown')}", flush=True)
-    if result.sensor_type == 0x1E:
+    if result.sensor_type == 0x03:
+        mode_names = SOUND_MODE_NAMES
+    elif result.sensor_type == 0x1E:
         mode_names = ULTRASONIC_MODE_NAMES
     elif result.sensor_type == 0x06:
         mode_names = TEMPERATURE_MODE_NAMES
+    elif result.sensor_type == 0x20:
+        mode_names = GYRO_MODE_NAMES
+    elif result.sensor_type == 0x21:
+        mode_names = INFRARED_MODE_NAMES
     else:
         mode_names = SENSOR_MODE_NAMES
     print(f"sensor_mode={mode_names.get(result.mode, 'unknown')}", flush=True)
     print(f"value_valid={'yes' if result.value_valid else 'no'}", flush=True)
-    print(f"sensor_value={result.value if result.value_valid else 'unavailable'}", flush=True)
+    if result.value_valid and result.sensor_type == 0x20:
+        sensor_value = (
+            result.value if result.value < 0x8000 else result.value - 0x10000
+        )
+    else:
+        sensor_value = result.value
+    print(
+        f"sensor_value={sensor_value if result.value_valid else 'unavailable'}",
+        flush=True,
+    )
     if result.value_valid and result.sensor_type == 0x1D and result.mode == 2:
         print(f"color_name={SENSOR_COLOR_NAMES.get(result.value, 'unknown')}", flush=True)
     if result.value_valid and result.sensor_type == 0x1E:
@@ -417,6 +523,26 @@ def print_sensor_sample(result: object) -> None:
             print(f"temperature_f={signed_value / 10:.1f}", flush=True)
         else:
             print(f"temperature_c={signed_value / 10:.1f}", flush=True)
+    if result.value_valid and result.sensor_type == 0x20:
+        signed_value = result.value if result.value < 0x8000 else result.value - 0x10000
+        label = "gyro_rate" if result.mode == 1 else "gyro_angle"
+        print(f"{label}={signed_value}", flush=True)
+    if result.value_valid and result.sensor_type == 0x03:
+        print(f"sound_level_db={result.value}", flush=True)
+    if result.value_valid and result.sensor_type == 0x21:
+        if result.mode == 0:
+            print(f"infrared_proximity={result.value & 0xFF}", flush=True)
+        elif result.mode == 1:
+            heading_byte = result.value & 0xFF
+            heading = heading_byte if heading_byte <= 180 else -(255 - heading_byte)
+            distance = (result.value >> 8) & 0xFF
+            print(f"beacon_heading={heading}", flush=True)
+            print(
+                f"beacon_distance={distance if distance != 128 else 'unavailable'}",
+                flush=True,
+            )
+        else:
+            print(f"remote_code={result.value & 0xFF}", flush=True)
     print(f"adc0_raw={result.adc0_raw}", flush=True)
     print(f"adc1_raw={result.adc1_raw}", flush=True)
     print(f"digital_mask=0x{result.digital_mask:02X}", flush=True)
@@ -601,6 +727,69 @@ MOTOR_TEST_STATES = {
     3: "reverse",
     4: "complete",
 }
+
+MOTOR_TYPE_NAMES = {
+    0: "none",
+    4: "large",
+    5: "medium",
+    0xFF: "unknown",
+}
+
+
+def run_motor_types(args: argparse.Namespace) -> int:
+    with open_transport(args) as transport:
+        print(f"device={transport.path}", flush=True)
+        print(f"report input={transport.input_len} output={transport.output_len}", flush=True)
+        updater = FirmwareUpdater(transport)
+        print(f"current_version={updater.ping()}", flush=True)
+        result = updater.read_motor_types()
+        if result.result != 1:
+            raise EstUpdaterError("设备未能读取马达类型")
+        for index, motor in enumerate(result.motors):
+            port = chr(ord("A") + index)
+            print(
+                f"motor_{port}=type:{MOTOR_TYPE_NAMES.get(motor.motor_type, 'unknown')} "
+                f"id_mv:{motor.millivolts} adc_raw:{motor.adc_raw} "
+                f"pin6_low_mv:{motor.pin6_low_millivolts} "
+                f"pin5_pullup_mv:{motor.pin5_pullup_millivolts} "
+                f"pin5_pullup_high:{int(motor.pin5_pullup_high)}",
+                flush=True,
+            )
+    return 0
+
+
+def run_motor_identify(args: argparse.Namespace) -> int:
+    motor_port = {"A": 0, "B": 1, "C": 2, "D": 3}[args.port]
+    with open_transport(args) as transport:
+        print(f"device={transport.path}", flush=True)
+        print(f"report input={transport.input_len} output={transport.output_len}", flush=True)
+        updater = FirmwareUpdater(transport)
+        print(f"current_version={updater.ping()}", flush=True)
+        print(f"motor_port={args.port}", flush=True)
+        print("identification_motion=none", flush=True)
+        result = updater.refresh_motor_type(motor_port)
+        if result.result == 2:
+            raise EstUpdaterError("该端口正在运行或其他马达任务尚未结束，不能刷新类型")
+        if result.result != 1:
+            raise EstUpdaterError("设备拒绝了马达静止识别命令")
+        deadline = time.monotonic() + 2.0
+        motor = result.motors[motor_port]
+        while motor.motor_type == 0xFF and time.monotonic() < deadline:
+            time.sleep(0.05)
+            result = updater.read_motor_types()
+            motor = result.motors[motor_port]
+        print(f"motor_type={MOTOR_TYPE_NAMES.get(motor.motor_type, 'unknown')}", flush=True)
+        print(f"id_mv={motor.millivolts}", flush=True)
+        print(f"adc_raw={motor.adc_raw}", flush=True)
+        print(f"pin6_low_mv={motor.pin6_low_millivolts}", flush=True)
+        print(f"pin6_low_adc_raw={motor.pin6_low_adc_raw}", flush=True)
+        print(f"pin5_pullup_mv={motor.pin5_pullup_millivolts}", flush=True)
+        print(f"pin5_pullup_adc_raw={motor.pin5_pullup_adc_raw}", flush=True)
+        print(f"pin5_pullup_high={int(motor.pin5_pullup_high)}", flush=True)
+        if motor.motor_type == 0xFF:
+            raise EstUpdaterError("静止刷新后仍未得到有效马达类型，请检查插头和线缆")
+        print("motor_identify=complete", flush=True)
+    return 0
 
 
 def run_motor_test(args: argparse.Namespace) -> int:
@@ -969,6 +1158,148 @@ def run_motor_control(args: argparse.Namespace) -> int:
                     print("safe_final_state=unconfirmed", flush=True)
 
 
+MOTOR_POSITION_STATES = {
+    0: "idle",
+    1: "running",
+    2: "complete",
+    3: "timeout",
+}
+
+
+def run_motor_position(args: argparse.Namespace) -> int:
+    if not 10 <= args.speed <= 100:
+        raise ValueError("--speed 必须在 10 到 100 之间")
+    if args.rotations is not None:
+        if args.rotations == 0 or not -10 <= args.rotations <= 10:
+            raise ValueError("--rotations 必须在 -10 到 10 之间且不能为 0")
+        degrees = round(args.rotations * 360)
+    else:
+        degrees = args.degrees
+    if degrees == 0 or not -3600 <= degrees <= 3600:
+        raise ValueError("目标角度必须在 -3600 到 3600 之间且不能为 0")
+
+    motor_port = {"A": 0, "B": 1, "C": 2, "D": 3}[args.port]
+    with open_transport(args) as transport:
+        print(f"device={transport.path}", flush=True)
+        updater = FirmwareUpdater(transport)
+        print(f"current_version={updater.ping()}", flush=True)
+        print(f"motor_port={args.port}", flush=True)
+        print(f"requested_degrees={degrees}", flush=True)
+        print(f"requested_rotations={degrees / 360:g}", flush=True)
+        print(f"requested_speed={args.speed}%", flush=True)
+        started = False
+        try:
+            result = updater.start_motor_position(motor_port, args.speed, degrees)
+            if result.result == 2:
+                raise EstUpdaterError(
+                    "设备未启动位置控制；请确认该端口已稳定识别为大型或中型电机，且没有其他马达任务"
+                )
+            if result.result != 1:
+                raise EstUpdaterError("设备拒绝了马达位置控制命令")
+            started = True
+            print(
+                f"motor_type={MOTOR_TYPE_NAMES.get(result.motor_type, 'unknown')}",
+                flush=True,
+            )
+            print(f"effective_speed={result.requested_speed_percent}%", flush=True)
+            previous_state = None
+            deadline = time.monotonic() + 18.0
+            while time.monotonic() < deadline:
+                if result.state != previous_state:
+                    print(
+                        f"position_state={MOTOR_POSITION_STATES.get(result.state, 'unknown')}",
+                        flush=True,
+                    )
+                    previous_state = result.state
+                if result.state == 2:
+                    actual_degrees = result.current_count - result.start_count
+                    print(f"target_count={result.target_count}", flush=True)
+                    print(f"current_count={result.current_count}", flush=True)
+                    print(f"actual_degrees={actual_degrees}", flush=True)
+                    print(f"actual_rotations={actual_degrees / 360:g}", flush=True)
+                    print(f"position_error={result.error_count}", flush=True)
+                    print(f"measured_speed={result.measured_speed_percent}%", flush=True)
+                    print("motor_position=complete", flush=True)
+                    return 0
+                if result.state == 3:
+                    raise EstUpdaterError(
+                        f"马达位置控制超时，剩余误差 {result.error_count} 度"
+                    )
+                time.sleep(0.1)
+                result = updater.read_motor_position_status(motor_port)
+            raise EstUpdaterError("马达位置控制没有按时返回，已发送停止命令")
+        finally:
+            if started:
+                try:
+                    updater.stop_motor_position(motor_port)
+                    print("safe_final_state=coast", flush=True)
+                except (EstUpdaterError, OSError):
+                    print("safe_final_state=unconfirmed", flush=True)
+
+
+def run_motor_speed(args: argparse.Namespace) -> int:
+    if args.speed == 0 or not -100 <= args.speed <= 100 or abs(args.speed) < 10:
+        raise ValueError("--speed 必须在 -100 到 100 之间，且绝对值至少为 10")
+    if not 0.5 <= args.duration <= 30.0:
+        raise ValueError("--duration 必须在 0.5 到 30 秒之间")
+
+    motor_port = {"A": 0, "B": 1, "C": 2, "D": 3}[args.port]
+    sample_count = max(1, int(args.duration / 0.25 + 0.999))
+    sample_delay = args.duration / sample_count
+    with open_transport(args) as transport:
+        print(f"device={transport.path}", flush=True)
+        updater = FirmwareUpdater(transport)
+        print(f"current_version={updater.ping()}", flush=True)
+        print(f"motor_port={args.port}", flush=True)
+        print(f"requested_speed={args.speed}%", flush=True)
+        print(f"duration_seconds={args.duration:g}", flush=True)
+        started = False
+        samples: list[int] = []
+        try:
+            result = updater.start_motor_speed(motor_port, args.speed)
+            if result.result == 2:
+                raise EstUpdaterError(
+                    "设备未启动定速控制；请先静止识别马达类型并确认没有其他马达任务"
+                )
+            if result.result != 1:
+                raise EstUpdaterError("设备拒绝了马达定速控制命令")
+            started = True
+            print(f"motor_type={MOTOR_TYPE_NAMES.get(result.motor_type, 'unknown')}", flush=True)
+            for _ in range(sample_count):
+                time.sleep(sample_delay)
+                result = updater.read_motor_speed_status(motor_port)
+                if result.result != 1 or result.state != 1:
+                    raise EstUpdaterError("马达定速控制意外停止")
+                samples.append(result.measured_speed_percent)
+            stopped = updater.stop_motor_speed(motor_port, args.stop)
+            if stopped.result != 1:
+                raise EstUpdaterError(f"设备未能按 {args.stop} 停止定速控制")
+            print(f"measured_speed_last={samples[-1]}%", flush=True)
+            print(f"measured_speed_min={min(samples)}%", flush=True)
+            print(f"measured_speed_max={max(samples)}%", flush=True)
+            print(f"measured_speed_average={sum(samples) / len(samples):.1f}%", flush=True)
+            print(f"applied_power_last={result.power_percent}%", flush=True)
+            print(f"tacho_count={stopped.tacho_count}", flush=True)
+            print(f"requested_stop={args.stop}", flush=True)
+            print(
+                f"stop_state={MOTOR_OUTPUT_STATES.get(stopped.output_state, 'unknown')}",
+                flush=True,
+            )
+            if args.stop == "brake":
+                time.sleep(0.3)
+            print("motor_speed=complete", flush=True)
+            return 0
+        finally:
+            if started:
+                try:
+                    safe = updater.stop_motor_speed(motor_port, "coast")
+                    if safe.result != 1:
+                        raise EstUpdaterError("最终自由滑行命令被设备拒绝")
+                    print("safe_final_state=coast", flush=True)
+                except (EstUpdaterError, OSError):
+                    print("safe_final_state=unconfirmed", flush=True)
+
+
 def run_motor_pair_control(args: argparse.Namespace) -> int:
     powers = (args.first_power, args.second_power)
     if any(power == 0 or not -100 <= power <= 100 for power in powers):
@@ -1159,6 +1490,10 @@ def main(argv: list[str] | None = None) -> int:
             return run_flash_mode_probe(args)
         if args.mode == "motor-test":
             return run_motor_test(args)
+        if args.mode == "motor-types":
+            return run_motor_types(args)
+        if args.mode == "motor-identify":
+            return run_motor_identify(args)
         if args.mode == "motor-tacho-test":
             return run_motor_tacho_test(args)
         if args.mode == "motor-stop-compare":
@@ -1167,6 +1502,10 @@ def main(argv: list[str] | None = None) -> int:
             return run_motor_dual_test(args)
         if args.mode == "motor-control":
             return run_motor_control(args)
+        if args.mode == "motor-position":
+            return run_motor_position(args)
+        if args.mode == "motor-speed":
+            return run_motor_speed(args)
         if args.mode == "motor-pair-control":
             return run_motor_pair_control(args)
         if args.mode == "sensor-read":

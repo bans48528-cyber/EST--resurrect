@@ -18,8 +18,58 @@ enum board_motor_output_state {
 	BOARD_MOTOR_OUTPUT_BRAKE = 2
 };
 
+enum board_motor_type {
+	BOARD_MOTOR_TYPE_NONE = 0,
+	BOARD_MOTOR_TYPE_LARGE = 4,
+	BOARD_MOTOR_TYPE_MEDIUM = 5,
+	BOARD_MOTOR_TYPE_UNKNOWN = 0xFF
+};
+
 struct board_motor_control_snapshot {
 	enum board_motor_output_state state;
+	enum board_motor_type type;
+	int8_t power_percent;
+	int8_t speed_percent;
+	int32_t tacho_count;
+	uint16_t id_adc_raw;
+	uint16_t id_mv;
+	uint16_t id_pin6_low_adc_raw;
+	uint16_t id_pin6_low_mv;
+	uint16_t id_pin5_pullup_adc_raw;
+	uint16_t id_pin5_pullup_mv;
+	uint8_t id_pin5_pullup_high;
+};
+
+enum board_motor_position_state {
+	BOARD_MOTOR_POSITION_IDLE = 0,
+	BOARD_MOTOR_POSITION_RUNNING = 1,
+	BOARD_MOTOR_POSITION_COMPLETE = 2,
+	BOARD_MOTOR_POSITION_TIMEOUT = 3
+};
+
+struct board_motor_position_snapshot {
+	enum board_motor_position_state state;
+	enum board_motor_port port;
+	enum board_motor_type type;
+	int8_t requested_speed_percent;
+	int8_t measured_speed_percent;
+	int32_t start_count;
+	int32_t target_count;
+	int32_t current_count;
+};
+
+enum board_motor_speed_state {
+	BOARD_MOTOR_SPEED_IDLE = 0,
+	BOARD_MOTOR_SPEED_RUNNING = 1
+};
+
+struct board_motor_speed_snapshot {
+	enum board_motor_speed_state state;
+	enum board_motor_port port;
+	enum board_motor_output_state output_state;
+	enum board_motor_type type;
+	int8_t requested_speed_percent;
+	int8_t measured_speed_percent;
 	int8_t power_percent;
 	int32_t tacho_count;
 };
@@ -85,6 +135,16 @@ bool board_motor_brake(enum board_motor_port port);
 bool board_motor_reset_tacho(enum board_motor_port port);
 bool board_motor_control_snapshot(enum board_motor_port port,
 	struct board_motor_control_snapshot *snapshot);
+bool board_motor_refresh_identification(uint32_t now_ms,
+	enum board_motor_port port);
+bool board_motor_start_position(uint32_t now_ms, enum board_motor_port port,
+	uint8_t speed_percent, int32_t degrees);
+struct board_motor_position_snapshot board_motor_position_snapshot(void);
+bool board_motor_start_speed(uint32_t now_ms, enum board_motor_port port,
+	int8_t speed_percent);
+bool board_motor_stop_speed(enum board_motor_port port,
+	enum board_motor_stop_mode stop_mode);
+struct board_motor_speed_snapshot board_motor_speed_snapshot(void);
 bool board_motor_start_test(uint32_t now_ms);
 bool board_motor_start_test_with_power(uint32_t now_ms, uint8_t power_percent);
 bool board_motor_start_port_test_with_power(uint32_t now_ms,

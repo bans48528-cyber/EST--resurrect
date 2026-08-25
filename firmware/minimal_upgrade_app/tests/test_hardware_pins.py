@@ -19,7 +19,7 @@ class HardwarePinCheckTests(unittest.TestCase):
         package_count, gpio_count, claim_count = CHECKER.validate_repository(REPO_ROOT)
         self.assertEqual(package_count, 144)
         self.assertEqual(gpio_count, 112)
-        self.assertEqual(claim_count, 90)
+        self.assertEqual(claim_count, 94)
 
     def test_duplicate_gpio_pin_is_rejected(self) -> None:
         rows = CHECKER.load_pin_table(REPO_ROOT / CHECKER.PIN_TABLE_RELATIVE)

@@ -96,6 +96,32 @@ python tools/est_hid_sender/est_hid_sender.py motor-pair-control `
 
 底层 `0x17` 命令还提供状态读取和测速计数清零。通用控制不设置固件自动超时：设定功率会保持到收到下一条功率、自由滑行或刹车命令；升级开始、关机和旧诊断停止命令仍会关闭全部输出。新上位机应明确管理启动与停止，不依赖固件定时续约。
 
+`M0.62A` 起可按已识别的电机类型运行指定角度或圈数：
+
+```powershell
+python tools/est_hid_sender/est_hid_sender.py motor-position --port A --speed 30 --degrees 360
+python tools/est_hid_sender/est_hid_sender.py motor-position --port A --speed 30 --rotations -1
+```
+
+`--degrees` 与 `--rotations` 必须二选一；负数代表反转。固件按大型/中型电机分别选择测速和减速参数，短行程会自动降低有效转速。单次范围限制为 `±3600°` 或 `±10` 圈，执行中会回报实测转速、当前计数和剩余误差；到位后短暂主动刹车并自动自由滑行，堵转或计数异常会超时停机。
+
+`M0.65A` 起提供不转动马达、不重启设备的单口类型刷新命令；应使用已修正识别时序和低相位窗口的 `M0.67A` 或更高版本：
+
+```powershell
+python tools/est_hid_sender/est_hid_sender.py motor-identify --port B
+```
+
+刷新前必须确保 A-D 四路马达均已停止。`M0.68A` 起会在 H 桥关闭时依次采集 pin 6 浮空、pin 6 拉低和 pin 5 弱上拉三组 ADC 数据，随后恢复输入模式和原测速计数；电脑端打印 `id_mv`、`pin6_low_mv` 和 `pin5_pullup_mv`。`M0.71A` 起还打印 `pin5_pullup_high` 数字状态；电脑端兼容协议 1.1-1.5 的 21/53/57 字节回包。M0.70A 已证明只靠三组模拟电压仍会把部分空口误判为大型。
+
+按已识别的大型或中型马达类型持续闭环定速：
+
+```powershell
+python tools/est_hid_sender/est_hid_sender.py motor-speed --port B --speed 30 --duration 5 --stop coast
+python tools/est_hid_sender/est_hid_sender.py motor-speed --port B --speed -30 --duration 5 --stop brake
+```
+
+`--speed` 接受 `-100..-10` 或 `10..100`，`--duration` 限制为 0.5-30 秒。电脑端会持续读取实测转速和输出功率，并在结束或异常时发送停车命令；执行前仍须保证马达轴及周围机构可以安全转动。
+
 `M0.44A` 起可读取 EST/EV3 兼容颜色/灰度传感器；`M0.46A` 起支持 1-4 号输入口：
 
 ```powershell

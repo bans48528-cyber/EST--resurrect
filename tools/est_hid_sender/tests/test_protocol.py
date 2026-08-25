@@ -34,9 +34,12 @@ from est_hid_sender.protocol import (  # noqa: E402
     build_key_status_frame,
     build_motor_control_frame,
     build_motor_dual_test_frame,
+    build_motor_position_frame,
+    build_motor_speed_frame,
     build_motor_stop_test_frame,
     build_motor_tacho_test_frame,
     build_motor_test_frame,
+    build_motor_type_frame,
     build_update_frame,
     checksum,
     parse_heartbeat_response,
@@ -50,9 +53,12 @@ from est_hid_sender.protocol import (  # noqa: E402
     parse_key_status_response,
     parse_motor_control_response,
     parse_motor_dual_test_response,
+    parse_motor_position_response,
+    parse_motor_speed_response,
     parse_motor_stop_test_response,
     parse_motor_tacho_test_response,
     parse_motor_test_response,
+    parse_motor_type_response,
     parse_update_ack,
     split_reports,
 )
@@ -183,6 +189,79 @@ def build_motor_control_result(
         (0x68, 0x21, 0x17, 0x08, 0x00, result, port, output_state, power & 0xFF)
     )
     frame += tacho.to_bytes(4, "little", signed=True)
+    frame.append(checksum(frame))
+    frame.append(0x16)
+    return bytes(frame).ljust(LEGACY_REPORT_SIZE, b"\x00")
+
+
+def build_motor_position_result(
+    result: int = 1,
+    port: int = 0,
+    state: int = 2,
+    motor_type: int = 4,
+    requested_speed: int = 30,
+    measured_speed: int = 0,
+    start_count: int = 12,
+    target_count: int = 372,
+    current_count: int = 370,
+) -> bytes:
+    frame = bytearray(
+        (
+            0x68, 0x21, 0x1B, 0x16, 0x00, result, port, state, motor_type,
+            requested_speed & 0xFF, measured_speed & 0xFF,
+        )
+    )
+    frame += start_count.to_bytes(4, "little", signed=True)
+    frame += target_count.to_bytes(4, "little", signed=True)
+    frame += current_count.to_bytes(4, "little", signed=True)
+    frame += (target_count - current_count).to_bytes(4, "little", signed=True)
+    frame.append(checksum(frame))
+    frame.append(0x16)
+    return bytes(frame).ljust(LEGACY_REPORT_SIZE, b"\x00")
+
+
+def build_motor_speed_result(
+    result: int = 1,
+    port: int = 1,
+    state: int = 1,
+    output_state: int = 1,
+    motor_type: int = 4,
+    requested_speed: int = 30,
+    measured_speed: int = 29,
+    power: int = 34,
+    tacho: int = 456,
+) -> bytes:
+    frame = bytearray(
+        (
+            0x68, 0x21, 0x1C, 0x0C, 0x00, result, port, state,
+            output_state, motor_type, requested_speed & 0xFF,
+            measured_speed & 0xFF, power & 0xFF,
+        )
+    )
+    frame += tacho.to_bytes(4, "little", signed=True)
+    frame.append(checksum(frame))
+    frame.append(0x16)
+    return bytes(frame).ljust(LEGACY_REPORT_SIZE, b"\x00")
+
+
+def build_motor_type_result(include_digital: bool = True) -> bytes:
+    payload_size = 0x39 if include_digital else 0x35
+    frame = bytearray((0x68, 0x21, 0x1A, payload_size, 0x00, 0x01))
+    for motor_type, adc_raw, millivolts, low_raw, low_mv, pullup_raw, pullup_mv, high in (
+        (4, 286, 349, 280, 341, 310, 378, 0),
+        (5, 1640, 2001, 1600, 1953, 1680, 2050, 1),
+        (0, 614, 749, 610, 744, 900, 1098, 1),
+        (0xFF, 4095, 4998, 4090, 4992, 4080, 4980, 0),
+    ):
+        frame.append(motor_type)
+        frame += adc_raw.to_bytes(2, "little")
+        frame += millivolts.to_bytes(2, "little")
+        frame += low_raw.to_bytes(2, "little")
+        frame += low_mv.to_bytes(2, "little")
+        frame += pullup_raw.to_bytes(2, "little")
+        frame += pullup_mv.to_bytes(2, "little")
+        if include_digital:
+            frame.append(high)
     frame.append(checksum(frame))
     frame.append(0x16)
     return bytes(frame).ljust(LEGACY_REPORT_SIZE, b"\x00")
@@ -415,6 +494,40 @@ class ProtocolTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "-100 and 100"):
             build_motor_control_frame(1, 0, 101)
 
+    def test_motor_position_builds_signed_degrees_and_parses_runtime_state(self) -> None:
+        self.assertEqual(
+            build_motor_position_frame(1, 1, 30, -360),
+            build_frame(0x1B, bytes((1, 1, 30)) + (-360).to_bytes(4, "little", signed=True)),
+        )
+        result = parse_motor_position_response(build_motor_position_result())
+        self.assertIsNotNone(result)
+        self.assertEqual(result.motor_type, 4)
+        self.assertEqual(result.requested_speed_percent, 30)
+        self.assertEqual(result.start_count, 12)
+        self.assertEqual(result.target_count, 372)
+        self.assertEqual(result.current_count, 370)
+        self.assertEqual(result.error_count, 2)
+        with self.assertRaisesRegex(ValueError, "between 10 and 100"):
+            build_motor_position_frame(1, 0, 9, 360)
+
+    def test_motor_speed_builds_signed_target_and_parses_closed_loop_state(self) -> None:
+        self.assertEqual(
+            build_motor_speed_frame(1, 1, -30),
+            build_frame(0x1C, bytes((1, 1, 0xE2))),
+        )
+        result = parse_motor_speed_response(
+            build_motor_speed_result(requested_speed=-30, measured_speed=-29,
+                                     power=-34, tacho=-456)
+        )
+        self.assertIsNotNone(result)
+        self.assertEqual(result.motor_type, 4)
+        self.assertEqual(result.requested_speed_percent, -30)
+        self.assertEqual(result.measured_speed_percent, -29)
+        self.assertEqual(result.power_percent, -34)
+        self.assertEqual(result.tacho_count, -456)
+        with self.assertRaisesRegex(ValueError, "magnitude at least 10"):
+            build_motor_speed_frame(1, 0, 9)
+
     def test_input_sensor_command_builds_modes_and_parses_diagnostics(self) -> None:
         self.assertEqual(
             build_input_sensor_frame(0, 0),
@@ -454,6 +567,25 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(status.motors[2].tacho_count, -456)
         self.assertEqual(status.sensors[0].sensor_type, 0x1D)
         self.assertEqual(status.sensors[2].value, 235)
+
+    def test_motor_type_query_parses_all_four_output_ports(self) -> None:
+        self.assertEqual(build_motor_type_frame(), build_frame(0x1A))
+        self.assertEqual(build_motor_type_frame(1, 1), build_frame(0x1A, bytes((1, 1))))
+        result = parse_motor_type_response(build_motor_type_result())
+        self.assertIsNotNone(result)
+        self.assertEqual(result.result, 1)
+        self.assertEqual(result.motors[0].motor_type, 4)
+        self.assertEqual(result.motors[1].motor_type, 5)
+        self.assertEqual(result.motors[1].millivolts, 2001)
+        self.assertEqual(result.motors[2].adc_raw, 614)
+        self.assertEqual(result.motors[0].pin6_low_millivolts, 341)
+        self.assertEqual(result.motors[1].pin5_pullup_millivolts, 2050)
+        self.assertTrue(result.motors[1].pin5_pullup_high)
+
+        legacy_result = parse_motor_type_response(build_motor_type_result(False))
+        self.assertIsNotNone(legacy_result)
+        self.assertEqual(legacy_result.motors[1].pin5_pullup_millivolts, 2050)
+        self.assertFalse(legacy_result.motors[1].pin5_pullup_high)
 
 
 class FirmwareTests(unittest.TestCase):
@@ -511,6 +643,14 @@ class FakeTransport:
         self.motor_control_state = [0, 0, 0, 0]
         self.motor_control_power = [0, 0, 0, 0]
         self.motor_control_tacho = [0, 0, 0, 0]
+        self.motor_position_status_index = 0
+        self.motor_position_port = 0
+        self.motor_position_speed = 30
+        self.motor_position_target = 360
+        self.motor_speed_state = 0
+        self.motor_speed_port = 0
+        self.motor_speed_target = 0
+        self.motor_speed_tacho = 0
         self.sensor_state = 2
         self.sensor_type = sensor_type
         self.sensor_mode = 0
@@ -701,6 +841,74 @@ class FakeTransport:
                 )
             )
             return
+        if report[0:3] == b"\x68\x11\x1b":
+            action = report[5]
+            port = report[6]
+            if action == 1:
+                self.motor_position_status_index = 0
+                self.motor_position_port = port
+                self.motor_position_speed = report[7]
+                self.motor_position_target = int.from_bytes(
+                    report[8:12], "little", signed=True
+                )
+                response = build_motor_position_result(
+                    port=port, state=1, requested_speed=self.motor_position_speed,
+                    start_count=0, target_count=self.motor_position_target,
+                    current_count=0,
+                )
+            elif action == 2:
+                response = build_motor_position_result(
+                    port=port, state=0, requested_speed=0,
+                    start_count=0, target_count=0, current_count=0,
+                )
+            else:
+                current_values = (
+                    self.motor_position_target * 2 // 3,
+                    self.motor_position_target,
+                )
+                current = current_values[
+                    min(self.motor_position_status_index, len(current_values) - 1)
+                ]
+                state = 2 if current == self.motor_position_target else 1
+                self.motor_position_status_index += 1
+                response = build_motor_position_result(
+                    port=port, state=state,
+                    requested_speed=self.motor_position_speed,
+                    measured_speed=0 if state == 2 else self.motor_position_speed,
+                    start_count=0, target_count=self.motor_position_target,
+                    current_count=current,
+                )
+            self.acks.append(response)
+            return
+        if report[0:3] == b"\x68\x11\x1c":
+            action = report[5]
+            port = report[6]
+            if action == 1:
+                self.motor_speed_state = 1
+                self.motor_speed_port = port
+                self.motor_speed_target = int.from_bytes(
+                    report[7:8], "little", signed=True
+                )
+            elif action == 0 and self.motor_speed_state == 1:
+                direction = 1 if self.motor_speed_target > 0 else -1
+                self.motor_speed_tacho += direction * 120
+            elif action in (2, 3):
+                self.motor_speed_state = 0
+            output_state = 1 if self.motor_speed_state else (2 if action == 3 else 0)
+            requested = self.motor_speed_target if self.motor_speed_state else 0
+            measured = self.motor_speed_target if self.motor_speed_state else 0
+            self.acks.append(
+                build_motor_speed_result(
+                    port=port,
+                    state=self.motor_speed_state,
+                    output_state=output_state,
+                    requested_speed=requested,
+                    measured_speed=measured,
+                    power=requested,
+                    tacho=self.motor_speed_tacho,
+                )
+            )
+            return
         if report[0:3] == b"\x68\x11\x18":
             action = report[5]
             port = report[6]
@@ -713,6 +921,12 @@ class FakeTransport:
                     values = (123, 48, 1)
                 elif self.sensor_type == 0x06:
                     values = (235, 743, 235)
+                elif self.sensor_type == 0x20:
+                    values = (123, 0xFFD6, 123)
+                elif self.sensor_type == 0x03:
+                    values = (self.sensor_value,) * 3
+                elif self.sensor_type == 0x21:
+                    values = (72, (65 << 8) | 0xF6, 5)
                 else:
                     values = (42, 17, 5)
                 self.sensor_value = values[self.sensor_mode]
@@ -734,6 +948,9 @@ class FakeTransport:
             return
         if report[0:3] == b"\x68\x11\x19":
             self.acks.append(build_device_status_result())
+            return
+        if report[0:3] == b"\x68\x11\x1A":
+            self.acks.append(build_motor_type_result())
             return
         if report[0:3] == b"\x68\x11\x05":
             total = int.from_bytes(report[5:7], "little")
@@ -764,6 +981,27 @@ class UpdaterTests(unittest.TestCase):
         self.assertEqual(status.battery_level, 4)
         self.assertEqual(len(status.motors), 4)
         self.assertEqual(len(status.sensors), 4)
+
+    def test_reads_large_and_medium_motor_identification(self) -> None:
+        result = FirmwareUpdater(FakeTransport()).read_motor_types()
+        self.assertEqual(result.motors[0].motor_type, 4)
+        self.assertEqual(result.motors[1].motor_type, 5)
+
+    def test_refreshes_motor_identification_without_a_motor_drive_command(self) -> None:
+        transport = FakeTransport()
+        result = FirmwareUpdater(transport).refresh_motor_type(1)
+        self.assertEqual(result.motors[1].motor_type, 5)
+        self.assertEqual(transport.reports[-1][0:8], b"\x68\x11\x1a\x02\x00\x01\x01\x97")
+
+    def test_starts_reads_and_stops_closed_loop_motor_speed(self) -> None:
+        transport = FakeTransport()
+        updater = FirmwareUpdater(transport)
+        started = updater.start_motor_speed(1, -30)
+        self.assertEqual(started.requested_speed_percent, -30)
+        running = updater.read_motor_speed_status(1)
+        self.assertEqual(running.measured_speed_percent, -30)
+        stopped = updater.stop_motor_speed(1, "brake")
+        self.assertEqual(stopped.output_state, 2)
 
     def test_reads_and_selects_input_sensor_mode(self) -> None:
         transport = FakeTransport()

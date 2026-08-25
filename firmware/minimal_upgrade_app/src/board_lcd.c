@@ -13,6 +13,12 @@
 #define LCD_WIDTH 180U
 #define LCD_HEIGHT 128U
 #define LCD_PAGES (LCD_HEIGHT / 8U)
+#define LCD_TEXT_CELL_WIDTH 6U
+#define LCD_MOTOR_COLUMN_X 72U
+
+_Static_assert(LCD_MOTOR_COLUMN_X +
+	BOARD_LCD_MOTOR_LINE_CHARACTERS * LCD_TEXT_CELL_WIDTH <= LCD_WIDTH,
+	"motor display column exceeds the LCD width");
 #define LCD_TRANSFER_COLUMNS 184U
 
 #define LCD_CLOCK_PORT GPIOD
@@ -325,7 +331,7 @@ static void draw_text_at(uint16_t x, uint16_t y, const char *text,
 {
 	while (*text != '\0' && x < LCD_WIDTH) {
 		draw_character(x, y, *text, scale);
-		x = (uint16_t)(x + 6U * scale);
+		x = (uint16_t)(x + LCD_TEXT_CELL_WIDTH * scale);
 		text++;
 	}
 }
@@ -339,11 +345,11 @@ static void draw_text_centered(uint16_t y, const char *text, uint8_t scale)
 	if (length == 0U) {
 		return;
 	}
-	width = (uint16_t)(((length * 6U) - 1U) * scale);
+	width = (uint16_t)(((length * LCD_TEXT_CELL_WIDTH) - 1U) * scale);
 	x = width < LCD_WIDTH ? (uint16_t)((LCD_WIDTH - width) / 2U) : 0U;
 	while (*text != '\0' && x < LCD_WIDTH) {
 		draw_character(x, y, *text, scale);
-		x = (uint16_t)(x + 6U * scale);
+		x = (uint16_t)(x + LCD_TEXT_CELL_WIDTH * scale);
 		text++;
 	}
 }
@@ -424,11 +430,11 @@ void board_lcd_show_io_ports(const char *version, const char *mode,
 	memset(framebuffer, 0, sizeof(framebuffer));
 	draw_text_centered(1U, version, 2U);
 	draw_text_at(4U, 19U, mode, 1U);
-	draw_text_at(108U, 19U, "MOTOR", 1U);
+	draw_text_at(LCD_MOTOR_COLUMN_X, 19U, "MTR S% DEG REV", 1U);
 	for (index = 0U; index < 4U; index++) {
 		draw_text_at(4U, (uint16_t)(35U + index * 19U),
 			sensor_readings[index], 1U);
-		draw_text_at(96U, (uint16_t)(35U + index * 19U),
+		draw_text_at(LCD_MOTOR_COLUMN_X, (uint16_t)(35U + index * 19U),
 			motor_readings[index], 1U);
 	}
 	draw_text_centered(116U, status, 1U);

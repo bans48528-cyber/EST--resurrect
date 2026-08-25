@@ -46,6 +46,16 @@ static uint16_t read_u16_le(const uint8_t *bytes)
 	return (uint16_t)bytes[0] | ((uint16_t)bytes[1] << 8U);
 }
 
+static int32_t read_i32_le(const uint8_t *bytes)
+{
+	uint32_t value = (uint32_t)bytes[0] |
+		((uint32_t)bytes[1] << 8U) |
+		((uint32_t)bytes[2] << 16U) |
+		((uint32_t)bytes[3] << 24U);
+
+	return (int32_t)value;
+}
+
 static void write_i32_le(uint8_t *bytes, int32_t value)
 {
 	uint32_t encoded = (uint32_t)value;
@@ -94,7 +104,8 @@ static bool report_starts_logical_frame(const uint8_t *report, size_t length)
 	    report[2] == FLASH_ID_COMMAND || report[2] == FLASH_SCAN_COMMAND ||
 	    report[2] == FLASH_TEST_COMMAND || report[2] == FLASH_STATUS_COMMAND ||
 	    report[2] == FLASH_MODE_PROBE_COMMAND ||
-	    report[2] == DEVICE_STATUS_COMMAND) {
+	    report[2] == DEVICE_STATUS_COMMAND ||
+	    report[2] == MOTOR_TYPE_COMMAND) {
 		return data_length == 0U;
 	}
 	if (report[2] == MOTOR_TEST_COMMAND) {
@@ -111,6 +122,9 @@ static bool report_starts_logical_frame(const uint8_t *report, size_t length)
 	}
 	if (report[2] == MOTOR_CONTROL_COMMAND) {
 		return data_length == 2U || data_length == 3U;
+	}
+	if (report[2] == MOTOR_POSITION_COMMAND) {
+		return data_length == 2U || data_length == 7U;
 	}
 	if (report[2] == INPUT_SENSOR_COMMAND) {
 		return data_length == 2U || data_length == 3U;
@@ -416,6 +430,87 @@ static void queue_input_sensor_result(uint8_t result, uint8_t port)
 	(void)usb_hid_queue_report(report, false);
 }
 
+static void queue_motor_type_result(uint8_t result)
+{
+	uint8_t report[USB_HID_REPORT_SIZE] = {0};
+	uint8_t index;
+
+	report[0] = FRAME_START_BYTE;
+	report[1] = DEVICE_FRAME_DIRECTION;
+	report[2] = MOTOR_TYPE_COMMAND;
+	report[3] = 57U;
+	report[4] = 0U;
+	report[5] = result;
+	for (index = 0U; index < BOARD_MOTOR_PORT_COUNT; index++) {
+		struct board_motor_control_snapshot motor = {0};
+		uint8_t *entry = &report[6U + (index * 14U)];
+
+		(void)board_motor_control_snapshot((enum board_motor_port)index,
+			&motor);
+		entry[0] = (uint8_t)motor.type;
+		write_u16_le(&entry[1], motor.id_adc_raw);
+		write_u16_le(&entry[3], motor.id_mv);
+		write_u16_le(&entry[5], motor.id_pin6_low_adc_raw);
+		write_u16_le(&entry[7], motor.id_pin6_low_mv);
+		write_u16_le(&entry[9], motor.id_pin5_pullup_adc_raw);
+		write_u16_le(&entry[11], motor.id_pin5_pullup_mv);
+		entry[13] = motor.id_pin5_pullup_high;
+	}
+	report[62] = checksum(report, 62U);
+	report[63] = FRAME_END_BYTE;
+	(void)usb_hid_queue_report(report, false);
+}
+
+static void queue_motor_position_result(uint8_t result)
+{
+	struct board_motor_position_snapshot snapshot =
+		board_motor_position_snapshot();
+	uint8_t report[USB_HID_REPORT_SIZE] = {0};
+
+	report[0] = FRAME_START_BYTE;
+	report[1] = DEVICE_FRAME_DIRECTION;
+	report[2] = MOTOR_POSITION_COMMAND;
+	report[3] = 22U;
+	report[4] = 0U;
+	report[5] = result;
+	report[6] = (uint8_t)snapshot.port;
+	report[7] = (uint8_t)snapshot.state;
+	report[8] = (uint8_t)snapshot.type;
+	report[9] = (uint8_t)snapshot.requested_speed_percent;
+	report[10] = (uint8_t)snapshot.measured_speed_percent;
+	write_i32_le(&report[11], snapshot.start_count);
+	write_i32_le(&report[15], snapshot.target_count);
+	write_i32_le(&report[19], snapshot.current_count);
+	write_i32_le(&report[23], snapshot.target_count - snapshot.current_count);
+	report[27] = checksum(report, 27U);
+	report[28] = FRAME_END_BYTE;
+	(void)usb_hid_queue_report(report, false);
+}
+
+static void queue_motor_speed_result(uint8_t result)
+{
+	struct board_motor_speed_snapshot snapshot = board_motor_speed_snapshot();
+	uint8_t report[USB_HID_REPORT_SIZE] = {0};
+
+	report[0] = FRAME_START_BYTE;
+	report[1] = DEVICE_FRAME_DIRECTION;
+	report[2] = MOTOR_SPEED_COMMAND;
+	report[3] = 12U;
+	report[4] = 0U;
+	report[5] = result;
+	report[6] = (uint8_t)snapshot.port;
+	report[7] = (uint8_t)snapshot.state;
+	report[8] = (uint8_t)snapshot.output_state;
+	report[9] = (uint8_t)snapshot.type;
+	report[10] = (uint8_t)snapshot.requested_speed_percent;
+	report[11] = (uint8_t)snapshot.measured_speed_percent;
+	report[12] = (uint8_t)snapshot.power_percent;
+	write_i32_le(&report[13], snapshot.tacho_count);
+	report[17] = checksum(report, 17U);
+	report[18] = FRAME_END_BYTE;
+	(void)usb_hid_queue_report(report, false);
+}
+
 static void queue_device_status(uint32_t now_ms)
 {
 	struct board_battery_snapshot battery = board_battery_snapshot();
@@ -425,7 +520,8 @@ static void queue_device_status(uint32_t now_ms)
 	uint32_t capabilities = DEVICE_CAPABILITY_UPDATE |
 		DEVICE_CAPABILITY_MOTOR_CONTROL | DEVICE_CAPABILITY_MOTOR_TACHO |
 		DEVICE_CAPABILITY_INPUT_SENSOR | DEVICE_CAPABILITY_BATTERY |
-		DEVICE_CAPABILITY_KEYS;
+		DEVICE_CAPABILITY_KEYS | DEVICE_CAPABILITY_MOTOR_TYPE |
+		DEVICE_CAPABILITY_MOTOR_POSITION;
 
 	report[0] = FRAME_START_BYTE;
 	report[1] = DEVICE_FRAME_DIRECTION;
@@ -601,6 +697,82 @@ static void handle_motor_control(const uint8_t *data, uint16_t data_length)
 	queue_motor_control_result(result, port);
 }
 
+static void handle_motor_position(const uint8_t *data, uint16_t data_length,
+	uint32_t now_ms)
+{
+	uint8_t action = data[0];
+	enum board_motor_port port = (enum board_motor_port)data[1];
+	uint8_t result = 1U;
+
+	if (data[1] >= BOARD_MOTOR_PORT_COUNT) {
+		result = 0U;
+	} else if (action == MOTOR_POSITION_ACTION_STATUS && data_length == 2U) {
+		/* Status is always available, including after completion or timeout. */
+	} else if (action == MOTOR_POSITION_ACTION_START && data_length == 7U) {
+		if (!board_motor_start_position(now_ms, port, data[2],
+		    read_i32_le(&data[3]))) {
+			result = 2U;
+		}
+	} else if (action == MOTOR_POSITION_ACTION_STOP && data_length == 2U) {
+		board_motor_stop();
+	} else {
+		result = 0U;
+	}
+	queue_motor_position_result(result);
+}
+
+static void handle_motor_type(const uint8_t *data, uint16_t data_length,
+	uint32_t now_ms)
+{
+	uint8_t result = 1U;
+
+	if (data_length == 0U) {
+		/* Preserve the V1.1 read-only all-port query. */
+	} else if (data_length == 2U && data[0] == MOTOR_TYPE_ACTION_REFRESH &&
+		   data[1] < BOARD_MOTOR_PORT_COUNT) {
+		if (!board_motor_refresh_identification(now_ms,
+		    (enum board_motor_port)data[1])) {
+			result = 2U;
+		}
+	} else {
+		result = 0U;
+	}
+	queue_motor_type_result(result);
+}
+
+static void handle_motor_speed(const uint8_t *data, uint16_t data_length,
+	uint32_t now_ms)
+{
+	uint8_t action = data[0];
+	enum board_motor_port port = (enum board_motor_port)data[1];
+	uint8_t result = 1U;
+
+	if (data[1] >= BOARD_MOTOR_PORT_COUNT) {
+		result = 0U;
+	} else if (action == MOTOR_SPEED_ACTION_STATUS && data_length == 2U) {
+		/* Status remains available while closed-loop speed control runs. */
+	} else if (action == MOTOR_SPEED_ACTION_START && data_length == 3U) {
+		int8_t speed_percent = (int8_t)data[2];
+
+		if (!board_motor_start_speed(now_ms, port, speed_percent)) {
+			result = 2U;
+		}
+	} else if (action == MOTOR_SPEED_ACTION_COAST && data_length == 2U) {
+		if (!board_motor_stop_speed(port,
+		    BOARD_MOTOR_STOP_LOW_OPEN_DRAIN)) {
+			result = 2U;
+		}
+	} else if (action == MOTOR_SPEED_ACTION_BRAKE && data_length == 2U) {
+		if (!board_motor_stop_speed(port,
+		    BOARD_MOTOR_STOP_HIGH_PUSH_PULL)) {
+			result = 2U;
+		}
+	} else {
+		result = 0U;
+	}
+	queue_motor_speed_result(result);
+}
+
 static void handle_input_sensor(const uint8_t *data, uint16_t data_length,
 	uint32_t now_ms)
 {
@@ -767,6 +939,15 @@ static void handle_logical_frame(uint32_t now_ms)
 		handle_input_sensor(&logical_frame[5], data_length, now_ms);
 	} else if (logical_frame[2] == DEVICE_STATUS_COMMAND && data_length == 0U) {
 		queue_device_status(now_ms);
+	} else if (logical_frame[2] == MOTOR_TYPE_COMMAND &&
+		   (data_length == 0U || data_length == 2U)) {
+		handle_motor_type(&logical_frame[5], data_length, now_ms);
+	} else if (logical_frame[2] == MOTOR_POSITION_COMMAND &&
+		   (data_length == 2U || data_length == 7U)) {
+		handle_motor_position(&logical_frame[5], data_length, now_ms);
+	} else if (logical_frame[2] == MOTOR_SPEED_COMMAND &&
+		   (data_length == 2U || data_length == 3U)) {
+		handle_motor_speed(&logical_frame[5], data_length, now_ms);
 	} else if (logical_frame[2] == UPDATE_COMMAND) {
 		handle_update_frame(logical_frame, data_length, now_ms);
 	}

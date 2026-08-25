@@ -167,6 +167,34 @@ class CliTests(unittest.TestCase):
         self.assertIn("motor_tacho_test=complete", text)
         self.assertIn("motor_stopped=yes", text)
 
+    def test_motor_types_prints_large_medium_and_id_voltage(self) -> None:
+        output = io.StringIO()
+        transport = FakeTransport()
+        with mock.patch.object(cli.HidTransport, "open", return_value=transport):
+            with contextlib.redirect_stdout(output):
+                self.assertEqual(cli.main(["motor-types"]), 0)
+        text = output.getvalue()
+        self.assertIn("motor_A=type:large id_mv:349 adc_raw:286", text)
+        self.assertIn("motor_B=type:medium id_mv:2001 adc_raw:1640", text)
+        self.assertIn("motor_C=type:none", text)
+
+    def test_motor_identify_refreshes_one_port_without_motion(self) -> None:
+        output = io.StringIO()
+        transport = FakeTransport()
+        with mock.patch.object(cli.HidTransport, "open", return_value=transport):
+            with contextlib.redirect_stdout(output):
+                self.assertEqual(cli.main(["motor-identify", "--port", "B"]), 0)
+        text = output.getvalue()
+        self.assertIn("motor_port=B", text)
+        self.assertIn("identification_motion=none", text)
+        self.assertIn("motor_type=medium", text)
+        self.assertIn("motor_identify=complete", text)
+        refresh = next(
+            report for report in transport.reports
+            if report[0:3] == b"\x68\x11\x1a" and report[3:5] == b"\x02\x00"
+        )
+        self.assertEqual(refresh[5:7], bytes((1, 1)))
+
     def test_motor_tacho_test_accepts_full_power(self) -> None:
         output = io.StringIO()
         transport = FakeTransport()
@@ -293,6 +321,62 @@ class CliTests(unittest.TestCase):
         self.assertIn("safe_final_state=coast", text)
         self.assertEqual(transport.motor_control_state[3], 0)
 
+    def test_motor_position_converts_rotations_and_finishes_safe(self) -> None:
+        output = io.StringIO()
+        transport = FakeTransport()
+        with mock.patch.object(cli.HidTransport, "open", return_value=transport), \
+             mock.patch.object(cli.time, "sleep"):
+            with contextlib.redirect_stdout(output):
+                self.assertEqual(
+                    cli.main(
+                        [
+                            "motor-position", "--port", "A", "--speed", "30",
+                            "--rotations", "1",
+                        ]
+                    ),
+                    0,
+                )
+        text = output.getvalue()
+        self.assertIn("motor_type=large", text)
+        self.assertIn("requested_degrees=360", text)
+        self.assertIn("effective_speed=30%", text)
+        self.assertIn("actual_degrees=360", text)
+        self.assertIn("actual_rotations=1", text)
+        self.assertIn("position_error=0", text)
+        self.assertIn("motor_position=complete", text)
+        self.assertIn("safe_final_state=coast", text)
+        motor_start = next(
+            report for report in transport.reports if report[0:3] == b"\x68\x11\x1b"
+            and report[5] == 1
+        )
+        self.assertEqual(motor_start[6:8], bytes((0, 30)))
+        self.assertEqual(
+            int.from_bytes(motor_start[8:12], "little", signed=True), 360
+        )
+
+    def test_motor_speed_maintains_signed_target_and_finishes_safe(self) -> None:
+        output = io.StringIO()
+        transport = FakeTransport()
+        with mock.patch.object(cli.HidTransport, "open", return_value=transport), \
+             mock.patch.object(cli.time, "sleep"):
+            with contextlib.redirect_stdout(output):
+                self.assertEqual(
+                    cli.main(
+                        [
+                            "motor-speed", "--port", "B", "--speed", "-30",
+                            "--duration", "0.5", "--stop", "brake",
+                        ]
+                    ),
+                    0,
+                )
+        text = output.getvalue()
+        self.assertIn("motor_type=large", text)
+        self.assertIn("requested_speed=-30%", text)
+        self.assertIn("measured_speed_average=-30.0%", text)
+        self.assertIn("stop_state=brake", text)
+        self.assertIn("safe_final_state=coast", text)
+        self.assertEqual(transport.motor_speed_state, 0)
+
     def test_motor_pair_control_runs_two_ports_independently(self) -> None:
         output = io.StringIO()
         transport = FakeTransport()
@@ -363,6 +447,55 @@ class CliTests(unittest.TestCase):
         self.assertIn("sensor_model=EST-temperature", text)
         self.assertIn("sensor_mode=celsius", text)
         self.assertIn("temperature_c=23.5", text)
+
+    def test_sensor_read_formats_gyro_angle_and_signed_rate(self) -> None:
+        output = io.StringIO()
+        transport = FakeTransport(sensor_type=0x20, sensor_value=123)
+        with mock.patch.object(cli.HidTransport, "open", return_value=transport):
+            with contextlib.redirect_stdout(output):
+                self.assertEqual(cli.main(["sensor-read", "--mode", "angle"]), 0)
+        text = output.getvalue()
+        self.assertIn("sensor_type=0x20", text)
+        self.assertIn("sensor_model=EST/EV3-gyro", text)
+        self.assertIn("sensor_mode=angle", text)
+        self.assertIn("sensor_value=123", text)
+        self.assertIn("gyro_angle=123", text)
+
+    def test_sensor_read_formats_gyro_signed_rate(self) -> None:
+        output = io.StringIO()
+        transport = FakeTransport(sensor_type=0x20, sensor_value=0xFFD6)
+        with mock.patch.object(cli.HidTransport, "open", return_value=transport):
+            with contextlib.redirect_stdout(output):
+                self.assertEqual(cli.main(["sensor-read", "--mode", "rate"]), 0)
+        text = output.getvalue()
+        self.assertIn("sensor_mode=rate", text)
+        self.assertIn("sensor_value=-42", text)
+        self.assertIn("gyro_rate=-42", text)
+
+    def test_sensor_read_formats_nxt_sound_level(self) -> None:
+        output = io.StringIO()
+        transport = FakeTransport(sensor_type=0x03, sensor_value=64)
+        with mock.patch.object(cli.HidTransport, "open", return_value=transport):
+            with contextlib.redirect_stdout(output):
+                self.assertEqual(cli.main(["sensor-read", "--mode", "db"]), 0)
+        text = output.getvalue()
+        self.assertIn("sensor_type=0x03", text)
+        self.assertIn("sensor_model=NXT-sound", text)
+        self.assertIn("sensor_mode=db", text)
+        self.assertIn("sound_level_db=64", text)
+
+    def test_sensor_read_formats_infrared_beacon(self) -> None:
+        output = io.StringIO()
+        transport = FakeTransport(sensor_type=0x21)
+        with mock.patch.object(cli.HidTransport, "open", return_value=transport):
+            with contextlib.redirect_stdout(output):
+                self.assertEqual(cli.main(["sensor-read", "--mode", "beacon"]), 0)
+        text = output.getvalue()
+        self.assertIn("sensor_type=0x21", text)
+        self.assertIn("sensor_model=EST/EV3-infrared", text)
+        self.assertIn("sensor_mode=beacon", text)
+        self.assertIn("beacon_heading=-9", text)
+        self.assertIn("beacon_distance=65", text)
 
     def test_flash_shows_versions_and_writes_success_log(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

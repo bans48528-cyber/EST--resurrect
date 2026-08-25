@@ -108,6 +108,8 @@
 #define SENSOR_STREAM_TIMEOUT_MS 1300U
 #define SENSOR_SYNC_RESTART_MS 2500U
 #define SENSOR_RX_RING_SIZE 256U
+#define SENSOR_SOUND_CONNECT_SAMPLES 5U
+#define SENSOR_SOUND_DISCONNECT_SAMPLES 5U
 #define SENSOR_I2C_ADDRESS 0x4CU
 #define SENSOR_I2C_IDENTIFY_REGISTER 0x01U
 #define SENSOR_I2C_IDENTIFY_VALUE 0x60U
@@ -187,6 +189,8 @@ struct sensor_runtime {
 	uint8_t touch_id_samples;
 	uint8_t touch_disconnect_samples;
 	uint8_t touch_debounce_samples;
+	uint8_t sound_id_samples;
+	uint8_t sound_disconnect_samples;
 	uint8_t temperature_failures;
 	bool touch_candidate_pressed;
 	bool i2c_path_enabled;
@@ -542,6 +546,8 @@ static void start_sync(enum board_sensor_port port, uint32_t now_ms)
 	runtime->touch_id_samples = 0U;
 	runtime->touch_disconnect_samples = 0U;
 	runtime->touch_debounce_samples = 0U;
+	runtime->sound_id_samples = 0U;
+	runtime->sound_disconnect_samples = 0U;
 	runtime->touch_candidate_pressed = false;
 	runtime->temperature_failures = 0U;
 	runtime->i2c_path_enabled = false;
@@ -586,6 +592,80 @@ static void sample_port_pins(enum board_sensor_port port)
 		digital_mask |= 0x04U;
 	}
 	snapshot->digital_mask = digital_mask;
+}
+
+static bool sound_id_present(const struct board_sensor_snapshot *snapshot)
+{
+	/* The original EST 3.0 detector identifies NXT sound when pin 2 is low. */
+	return (snapshot->digital_mask & 0x04U) == 0U;
+}
+
+static uint16_t sound_level_from_adc(uint16_t raw)
+{
+	uint32_t millivolts = (uint32_t)raw * 5000U / 4096U;
+
+	/* Original rule: level = 100 - pin-1 millivolts / 14. */
+	if (millivolts >= 1400U) {
+		return 0U;
+	}
+	return (uint16_t)(100U - millivolts / 14U);
+}
+
+static void enter_sound_mode(enum board_sensor_port port)
+{
+	const struct sensor_hardware *hardware = &sensor_hardware[(uint8_t)port];
+	struct sensor_runtime *runtime = &sensor_runtime[(uint8_t)port];
+
+	usart_disable_rx_interrupt(hardware->uart);
+	usart_disable(hardware->uart);
+	runtime->rx_head = 0U;
+	runtime->rx_tail = 0U;
+	runtime->rx_message_length = 0U;
+	runtime->rx_message_expected = 0U;
+	runtime->snapshot.state = BOARD_SENSOR_STREAMING;
+	runtime->snapshot.sensor_type = BOARD_SENSOR_TYPE_SOUND;
+	runtime->snapshot.mode = BOARD_SENSOR_MODE_SOUND_DB;
+	runtime->snapshot.value = sound_level_from_adc(runtime->snapshot.adc0_raw);
+	runtime->snapshot.value_valid = true;
+	runtime->sound_disconnect_samples = 0U;
+}
+
+static void update_sound_detection(enum board_sensor_port port, uint32_t now_ms)
+{
+	struct sensor_runtime *runtime = &sensor_runtime[(uint8_t)port];
+	bool id_present = sound_id_present(&runtime->snapshot);
+
+	if (runtime->snapshot.sensor_type == BOARD_SENSOR_TYPE_SOUND &&
+	    runtime->snapshot.state == BOARD_SENSOR_STREAMING) {
+		if (!id_present) {
+			if (runtime->sound_disconnect_samples <
+			    SENSOR_SOUND_DISCONNECT_SAMPLES) {
+				runtime->sound_disconnect_samples++;
+			}
+			if (runtime->sound_disconnect_samples >=
+			    SENSOR_SOUND_DISCONNECT_SAMPLES) {
+				start_sync(port, now_ms);
+			}
+			return;
+		}
+		runtime->sound_disconnect_samples = 0U;
+		runtime->snapshot.value = sound_level_from_adc(runtime->snapshot.adc0_raw);
+		runtime->snapshot.value_valid = true;
+		return;
+	}
+	if (runtime->snapshot.state == BOARD_SENSOR_STREAMING) {
+		return;
+	}
+	if (!id_present) {
+		runtime->sound_id_samples = 0U;
+		return;
+	}
+	if (runtime->sound_id_samples < SENSOR_SOUND_CONNECT_SAMPLES) {
+		runtime->sound_id_samples++;
+	}
+	if (runtime->sound_id_samples >= SENSOR_SOUND_CONNECT_SAMPLES) {
+		enter_sound_mode(port);
+	}
 }
 
 static bool touch_id_present(const struct board_sensor_snapshot *snapshot)
@@ -744,7 +824,13 @@ static void handle_command_message(struct sensor_runtime *runtime,
 		runtime->snapshot.sensor_type = runtime->rx_message[1];
 		runtime->received_type =
 			runtime->rx_message[1] == BOARD_SENSOR_TYPE_EV3_COLOR ||
-			runtime->rx_message[1] == BOARD_SENSOR_TYPE_ULTRASONIC;
+			runtime->rx_message[1] == BOARD_SENSOR_TYPE_ULTRASONIC ||
+			runtime->rx_message[1] == BOARD_SENSOR_TYPE_GYRO ||
+			runtime->rx_message[1] == BOARD_SENSOR_TYPE_INFRARED;
+		if (runtime->snapshot.sensor_type == BOARD_SENSOR_TYPE_GYRO &&
+		    runtime->requested_mode > BOARD_SENSOR_MODE_GYRO_RATE) {
+			runtime->requested_mode = BOARD_SENSOR_MODE_GYRO_ANGLE;
+		}
 	} else if (command == SENSOR_COMMAND_SPEED && size == 4U) {
 		uint32_t baud = (uint32_t)runtime->rx_message[1] |
 			((uint32_t)runtime->rx_message[2] << 8U) |
@@ -765,7 +851,9 @@ static void handle_data_message(struct sensor_runtime *runtime,
 	uint8_t size = message_data_size(header);
 	uint16_t value;
 
-	if (runtime->snapshot.state != BOARD_SENSOR_STREAMING || mode > 2U) {
+	if (runtime->snapshot.state != BOARD_SENSOR_STREAMING || mode > 2U ||
+	    (runtime->snapshot.sensor_type == BOARD_SENSOR_TYPE_GYRO &&
+	     mode > BOARD_SENSOR_MODE_GYRO_RATE)) {
 		return;
 	}
 	value = runtime->rx_message[1];
@@ -931,6 +1019,7 @@ static void tick_port(enum board_sensor_port port, uint32_t now_ms)
 	    SENSOR_ADC_SAMPLE_INTERVAL_MS) {
 		runtime->last_adc_ms = now_ms;
 		sample_port_pins(port);
+		update_sound_detection(port, now_ms);
 		update_touch_detection(port, now_ms);
 	}
 
@@ -985,7 +1074,8 @@ static void tick_port(enum board_sensor_port port, uint32_t now_ms)
 		runtime->temperature_failures = 0U;
 	}
 
-	if (runtime->snapshot.sensor_type == BOARD_SENSOR_TYPE_TOUCH &&
+	if ((runtime->snapshot.sensor_type == BOARD_SENSOR_TYPE_TOUCH ||
+	     runtime->snapshot.sensor_type == BOARD_SENSOR_TYPE_SOUND) &&
 	    runtime->snapshot.state == BOARD_SENSOR_STREAMING) {
 		return;
 	}
@@ -1072,6 +1162,10 @@ bool board_sensor_set_mode(enum board_sensor_port port,
 		return false;
 	}
 	runtime = &sensor_runtime[(uint8_t)port];
+	if (runtime->snapshot.sensor_type == BOARD_SENSOR_TYPE_GYRO &&
+	    mode > BOARD_SENSOR_MODE_GYRO_RATE) {
+		return false;
+	}
 	if (runtime->snapshot.sensor_type == BOARD_SENSOR_TYPE_TEMPERATURE &&
 	    runtime->snapshot.state == BOARD_SENSOR_STREAMING) {
 		runtime->requested_mode = (enum board_sensor_mode)
@@ -1082,7 +1176,8 @@ bool board_sensor_set_mode(enum board_sensor_port port,
 		return true;
 	}
 	runtime->requested_mode = mode;
-	if (runtime->snapshot.sensor_type == BOARD_SENSOR_TYPE_TOUCH &&
+	if ((runtime->snapshot.sensor_type == BOARD_SENSOR_TYPE_TOUCH ||
+	     runtime->snapshot.sensor_type == BOARD_SENSOR_TYPE_SOUND) &&
 	    runtime->snapshot.state == BOARD_SENSOR_STREAMING) {
 		runtime->snapshot.mode = BOARD_SENSOR_MODE_REFLECTED;
 		return true;

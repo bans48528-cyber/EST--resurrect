@@ -20,12 +20,15 @@
 
 #define SENSOR_DISPLAY_INTERVAL_MS 100U
 #define SENSOR_DISPLAY_LINE_SIZE 12U
-#define MOTOR_DISPLAY_LINE_SIZE 14U
+#define MOTOR_DISPLAY_LINE_SIZE (BOARD_LCD_MOTOR_LINE_CHARACTERS + 1U)
 #define STATUS_DISPLAY_LINE_SIZE 24U
-#define SENSOR_READING_SIZE 10U
+#define SENSOR_READING_SIZE 12U
 #define SENSOR_KIND_COLOR 0x01U
 #define SENSOR_KIND_ULTRASONIC 0x02U
 #define SENSOR_KIND_TEMPERATURE 0x04U
+#define SENSOR_KIND_GYRO 0x08U
+#define SENSOR_KIND_SOUND 0x10U
+#define SENSOR_KIND_INFRARED 0x20U
 #define BACKLIGHT_DIM_AT_MS 1000U
 #define BACKLIGHT_OFF_AT_MS 2500U
 #define BACKLIGHT_RESTORE_AT_MS 3500U
@@ -71,11 +74,37 @@ static void format_i32(int32_t value, char output[12])
 	output[output_index] = '\0';
 }
 
+static void format_i32_tenths(int32_t value, char output[12])
+{
+	char whole[12];
+	uint32_t magnitude;
+	uint8_t output_index = 0U;
+	uint8_t whole_index = 0U;
+
+	if (value < 0) {
+		output[output_index++] = '-';
+		magnitude = (uint32_t)(-(value + 1)) + 1U;
+	} else {
+		magnitude = (uint32_t)value;
+	}
+	format_i32((int32_t)(magnitude / 10U), whole);
+	while (whole[whole_index] != '\0' && output_index < 9U) {
+		output[output_index++] = whole[whole_index++];
+	}
+	output[output_index++] = '.';
+	output[output_index++] = (char)('0' + (magnitude % 10U));
+	output[output_index] = '\0';
+}
+
 static const char *sensor_mode_text(uint8_t mode, uint8_t sensor_kinds)
 {
 	static const char *const color_names[] = {"REFLECT", "AMBIENT", "COLOR"};
 	static const char *const ultrasonic_names[] = {
 		"DIST CM", "DIST IN", "PRESENCE"
+	};
+	static const char *const gyro_names[] = {"GYRO ANG", "GYRO RATE"};
+	static const char *const infrared_names[] = {
+		"IR PROX", "IR BEACON", "IR REMOTE"
 	};
 
 	if (sensor_kinds != 0U &&
@@ -88,6 +117,17 @@ static const char *sensor_mode_text(uint8_t mode, uint8_t sensor_kinds)
 	if (sensor_kinds == SENSOR_KIND_ULTRASONIC) {
 		return mode <= BOARD_SENSOR_MODE_PRESENCE ?
 			ultrasonic_names[mode] : "SENSOR";
+	}
+	if (sensor_kinds == SENSOR_KIND_GYRO) {
+		return mode <= BOARD_SENSOR_MODE_GYRO_RATE ?
+			gyro_names[mode] : "SENSOR";
+	}
+	if (sensor_kinds == SENSOR_KIND_SOUND) {
+		return "SOUND DB";
+	}
+	if (sensor_kinds == SENSOR_KIND_INFRARED) {
+		return mode <= BOARD_SENSOR_MODE_IR_REMOTE ?
+			infrared_names[mode] : "SENSOR";
 	}
 	return mode <= BOARD_SENSOR_MODE_COLOR ? color_names[mode] : "SENSOR";
 }
@@ -169,6 +209,41 @@ static const char *sensor_reading_text(
 			formatted);
 		return formatted;
 	}
+	if (snapshot->sensor_type == BOARD_SENSOR_TYPE_GYRO) {
+		format_i32((int32_t)(int16_t)snapshot->value, formatted);
+		return formatted;
+	}
+	if (snapshot->sensor_type == BOARD_SENSOR_TYPE_SOUND) {
+		format_u16(snapshot->value, formatted);
+		strcat(formatted, "DB");
+		return formatted;
+	}
+	if (snapshot->sensor_type == BOARD_SENSOR_TYPE_INFRARED) {
+		if (snapshot->mode == BOARD_SENSOR_MODE_IR_BEACON) {
+			uint8_t heading_byte = (uint8_t)snapshot->value;
+			uint8_t distance = (uint8_t)(snapshot->value >> 8U);
+			int16_t heading = heading_byte <= 180U ?
+				(int16_t)heading_byte : -(int16_t)(255U - heading_byte);
+			char heading_text[SENSOR_READING_SIZE];
+
+			if (distance == 128U) {
+				return "NO BEACON";
+			}
+			format_i32(heading, heading_text);
+			strcpy(formatted, "H");
+			strcat(formatted, heading_text);
+			strcat(formatted, " D");
+			{
+				char distance_text[6];
+
+				format_u16(distance, distance_text);
+				strcat(formatted, distance_text);
+			}
+			return formatted;
+		}
+		format_u16((uint8_t)snapshot->value, formatted);
+		return formatted;
+	}
 	if (snapshot->sensor_type == BOARD_SENSOR_TYPE_EV3_COLOR &&
 	    snapshot->mode == BOARD_SENSOR_MODE_COLOR) {
 		color = sensor_color_text(snapshot->value);
@@ -200,16 +275,75 @@ static void format_motor_line(uint8_t port_index,
 	const struct board_motor_control_snapshot *snapshot,
 	char output[MOTOR_DISPLAY_LINE_SIZE])
 {
-	char count[12];
+	char speed[12];
+	char angle[12];
+	char rotations[12];
+	int64_t count = snapshot->tacho_count;
+	int32_t display_speed = snapshot->speed_percent;
+	int32_t display_angle = snapshot->tacho_count;
+	int32_t rotation_tenths;
 	uint8_t output_index = 0U;
-	uint8_t count_index = 0U;
+	uint8_t text_index;
 
-	format_i32(snapshot->tacho_count, count);
+	if (display_speed > 100) {
+		display_speed = 100;
+	} else if (display_speed < -100) {
+		display_speed = -100;
+	}
+	if (display_angle > 9999) {
+		display_angle = 9999;
+	} else if (display_angle < -9999) {
+		display_angle = -9999;
+	}
+	if (count >= 0) {
+		rotation_tenths = (int32_t)((count + 18) / 36);
+	} else {
+		rotation_tenths = -(int32_t)((-count + 18) / 36);
+	}
+	if (rotation_tenths > 999) {
+		rotation_tenths = 999;
+	} else if (rotation_tenths < -999) {
+		rotation_tenths = -999;
+	}
+	format_i32(display_speed, speed);
+	format_i32(display_angle, angle);
+	format_i32_tenths(rotation_tenths, rotations);
 	output[output_index++] = (char)('A' + port_index);
-	output[output_index++] = ':';
-	while (count[count_index] != '\0' &&
+	if (snapshot->type == BOARD_MOTOR_TYPE_NONE) {
+		output[output_index++] = '-';
+		output[output_index] = '\0';
+		return;
+	}
+	if (snapshot->type == BOARD_MOTOR_TYPE_UNKNOWN) {
+		output[output_index++] = '?';
+		output[output_index] = '\0';
+		return;
+	}
+	if (snapshot->type == BOARD_MOTOR_TYPE_LARGE) {
+		output[output_index++] = 'L';
+	} else {
+		output[output_index++] = 'M';
+	}
+	text_index = 0U;
+	while (speed[text_index] != '\0' &&
 	       output_index < MOTOR_DISPLAY_LINE_SIZE - 1U) {
-		output[output_index++] = count[count_index++];
+		output[output_index++] = speed[text_index++];
+	}
+	if (output_index < MOTOR_DISPLAY_LINE_SIZE - 1U) {
+		output[output_index++] = ' ';
+	}
+	text_index = 0U;
+	while (angle[text_index] != '\0' &&
+	       output_index < MOTOR_DISPLAY_LINE_SIZE - 1U) {
+		output[output_index++] = angle[text_index++];
+	}
+	if (output_index < MOTOR_DISPLAY_LINE_SIZE - 1U) {
+		output[output_index++] = ' ';
+	}
+	text_index = 0U;
+	while (rotations[text_index] != '\0' &&
+	       output_index < MOTOR_DISPLAY_LINE_SIZE - 1U) {
+		output[output_index++] = rotations[text_index++];
 	}
 	output[output_index] = '\0';
 }
@@ -323,8 +457,10 @@ int main(void)
 		board_keys_tick(now_ms);
 		key_mask = board_keys_pressed_mask();
 		if (key_mask != 0U && last_key_mask == 0U) {
-			uint8_t mode_count = active_sensor_kinds ==
-				SENSOR_KIND_TEMPERATURE ? 2U : 3U;
+			uint8_t mode_count = active_sensor_kinds == SENSOR_KIND_SOUND ? 1U :
+				active_sensor_kinds ==
+				SENSOR_KIND_TEMPERATURE ||
+				active_sensor_kinds == SENSOR_KIND_GYRO ? 2U : 3U;
 
 			selected_sensor_mode = (uint8_t)
 				((selected_sensor_mode + 1U) % mode_count);
@@ -360,8 +496,17 @@ int main(void)
 					   BOARD_SENSOR_TYPE_ULTRASONIC) {
 					sensor_kinds |= SENSOR_KIND_ULTRASONIC;
 				} else if (sensor.sensor_type ==
-					   BOARD_SENSOR_TYPE_TEMPERATURE) {
+					BOARD_SENSOR_TYPE_TEMPERATURE) {
 					sensor_kinds |= SENSOR_KIND_TEMPERATURE;
+				} else if (sensor.sensor_type ==
+					BOARD_SENSOR_TYPE_GYRO) {
+					sensor_kinds |= SENSOR_KIND_GYRO;
+				} else if (sensor.sensor_type ==
+					BOARD_SENSOR_TYPE_SOUND) {
+					sensor_kinds |= SENSOR_KIND_SOUND;
+				} else if (sensor.sensor_type ==
+					BOARD_SENSOR_TYPE_INFRARED) {
+					sensor_kinds |= SENSOR_KIND_INFRARED;
 				}
 				format_sensor_line(index, &sensor, lines[index]);
 				line_pointers[index] = lines[index];
