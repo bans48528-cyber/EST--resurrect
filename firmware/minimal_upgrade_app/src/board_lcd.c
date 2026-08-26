@@ -10,8 +10,8 @@
 #include "system_time.h"
 #include "watchdog.h"
 
-#define LCD_WIDTH 180U
-#define LCD_HEIGHT 128U
+#define LCD_WIDTH BOARD_LCD_WIDTH
+#define LCD_HEIGHT BOARD_LCD_HEIGHT
 #define LCD_PAGES (LCD_HEIGHT / 8U)
 #define LCD_TEXT_CELL_WIDTH 6U
 #define LCD_MOTOR_COLUMN_X 72U
@@ -257,7 +257,7 @@ static void set_address(uint16_t page, uint8_t column)
 	write_control_byte(0xF9U);
 }
 
-static void refresh(void)
+static void refresh_framebuffer(void)
 {
 	uint16_t column_group;
 	uint8_t page;
@@ -284,10 +284,16 @@ static void refresh(void)
 	}
 }
 
-static void draw_pixel(uint16_t x, uint16_t y)
+static void framebuffer_set_pixel(uint16_t x, uint16_t y, bool on)
 {
 	if (x < LCD_WIDTH && y < LCD_HEIGHT) {
-		framebuffer[x][y / 8U] |= (uint8_t)(1U << (y % 8U));
+		uint8_t bit = (uint8_t)(1U << (y % 8U));
+
+		if (on) {
+			framebuffer[x][y / 8U] |= bit;
+		} else {
+			framebuffer[x][y / 8U] &= (uint8_t)~bit;
+		}
 	}
 }
 
@@ -329,8 +335,9 @@ static void draw_character(uint16_t x, uint16_t y, char character, uint8_t scale
 			}
 			for (scale_x = 0U; scale_x < scale; scale_x++) {
 				for (scale_y = 0U; scale_y < scale; scale_y++) {
-					draw_pixel((uint16_t)(x + glyph_x * scale + scale_x),
-					           (uint16_t)(y + glyph_y * scale + scale_y));
+					framebuffer_set_pixel(
+						(uint16_t)(x + glyph_x * scale + scale_x),
+						(uint16_t)(y + glyph_y * scale + scale_y), true);
 				}
 			}
 		}
@@ -389,6 +396,131 @@ void board_lcd_init(void)
 	controller_init();
 }
 
+void board_lcd_clear(void)
+{
+	memset(framebuffer, 0, sizeof(framebuffer));
+}
+
+bool board_lcd_set_pixel(uint16_t x, uint16_t y, bool on)
+{
+	if (x >= LCD_WIDTH || y >= LCD_HEIGHT) {
+		return false;
+	}
+	framebuffer_set_pixel(x, y, on);
+	return true;
+}
+
+bool board_lcd_draw_line(uint16_t x0, uint16_t y0,
+	uint16_t x1, uint16_t y1, bool on)
+{
+	int32_t current_x = x0;
+	int32_t current_y = y0;
+	int32_t dx;
+	int32_t dy;
+	int32_t step_x;
+	int32_t step_y;
+	int32_t error;
+
+	if (x0 >= LCD_WIDTH || x1 >= LCD_WIDTH ||
+	    y0 >= LCD_HEIGHT || y1 >= LCD_HEIGHT) {
+		return false;
+	}
+	dx = current_x < (int32_t)x1 ? (int32_t)x1 - current_x :
+		current_x - (int32_t)x1;
+	dy = current_y < (int32_t)y1 ? current_y - (int32_t)y1 :
+		(int32_t)y1 - current_y;
+	step_x = current_x < (int32_t)x1 ? 1 : -1;
+	step_y = current_y < (int32_t)y1 ? 1 : -1;
+	error = dx + dy;
+	while (true) {
+		int32_t doubled_error;
+
+		framebuffer_set_pixel((uint16_t)current_x,
+			(uint16_t)current_y, on);
+		if (current_x == (int32_t)x1 && current_y == (int32_t)y1) {
+			break;
+		}
+		doubled_error = 2 * error;
+		if (doubled_error >= dy) {
+			error += dy;
+			current_x += step_x;
+		}
+		if (doubled_error <= dx) {
+			error += dx;
+			current_y += step_y;
+		}
+	}
+	return true;
+}
+
+bool board_lcd_draw_rectangle(uint16_t x, uint16_t y,
+	uint16_t width, uint16_t height, bool filled, bool on)
+{
+	uint16_t offset_x;
+	uint16_t offset_y;
+
+	if (width == 0U || height == 0U || x >= LCD_WIDTH || y >= LCD_HEIGHT ||
+	    width > LCD_WIDTH - x || height > LCD_HEIGHT - y) {
+		return false;
+	}
+	for (offset_y = 0U; offset_y < height; offset_y++) {
+		for (offset_x = 0U; offset_x < width; offset_x++) {
+			if (filled || offset_x == 0U || offset_x == width - 1U ||
+			    offset_y == 0U || offset_y == height - 1U) {
+				framebuffer_set_pixel((uint16_t)(x + offset_x),
+					(uint16_t)(y + offset_y), on);
+			}
+		}
+	}
+	return true;
+}
+
+bool board_lcd_draw_text(uint16_t x, uint16_t y,
+	const char *text, uint8_t scale)
+{
+	if (text == NULL || scale == 0U || scale > 4U ||
+	    x >= LCD_WIDTH || y >= LCD_HEIGHT ||
+	    (uint16_t)(7U * scale) > LCD_HEIGHT - y) {
+		return false;
+	}
+	draw_text_at(x, y, text, scale);
+	return true;
+}
+
+bool board_lcd_draw_bitmap(uint16_t x, uint16_t y,
+	uint16_t width, uint16_t height, const uint8_t *bitmap,
+	size_t bitmap_size)
+{
+	size_t stride;
+	uint16_t bitmap_x;
+	uint16_t bitmap_y;
+
+	if (bitmap == NULL || width == 0U || height == 0U ||
+	    x >= LCD_WIDTH || y >= LCD_HEIGHT || width > LCD_WIDTH - x ||
+	    height > LCD_HEIGHT - y) {
+		return false;
+	}
+	stride = ((size_t)width + 7U) / 8U;
+	if (bitmap_size < stride * height) {
+		return false;
+	}
+	for (bitmap_y = 0U; bitmap_y < height; bitmap_y++) {
+		for (bitmap_x = 0U; bitmap_x < width; bitmap_x++) {
+			bool on = (bitmap[(size_t)bitmap_y * stride + bitmap_x / 8U] &
+				(uint8_t)(0x80U >> (bitmap_x % 8U))) != 0U;
+
+			framebuffer_set_pixel((uint16_t)(x + bitmap_x),
+				(uint16_t)(y + bitmap_y), on);
+		}
+	}
+	return true;
+}
+
+void board_lcd_refresh(void)
+{
+	refresh_framebuffer();
+}
+
 void board_lcd_show_version(const char *version)
 {
 	uint16_t x = 36U;
@@ -399,7 +531,7 @@ void board_lcd_show_version(const char *version)
 		x = (uint16_t)(x + 18U);
 		version++;
 	}
-	refresh();
+	refresh_framebuffer();
 }
 
 void board_lcd_show_sensor(const char *version, const char *mode,
@@ -413,7 +545,7 @@ void board_lcd_show_sensor(const char *version, const char *mode,
 	draw_text_centered(27U, mode, 2U);
 	draw_text_centered(58U, reading, reading_scale);
 	draw_text_centered(112U, "ANY KEY", 1U);
-	refresh();
+	refresh_framebuffer();
 }
 
 void board_lcd_show_sensor_ports(const char *version, const char *mode,
@@ -429,7 +561,7 @@ void board_lcd_show_sensor_ports(const char *version, const char *mode,
 			readings[index], 2U);
 	}
 	draw_text_centered(116U, "KEY MODE", 1U);
-	refresh();
+	refresh_framebuffer();
 }
 
 void board_lcd_show_io_ports(const char *version, const char *mode,
@@ -449,5 +581,5 @@ void board_lcd_show_io_ports(const char *version, const char *mode,
 			motor_readings[index], 1U);
 	}
 	draw_text_centered(116U, status, 1U);
-	refresh();
+	refresh_framebuffer();
 }

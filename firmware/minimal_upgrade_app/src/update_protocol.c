@@ -7,9 +7,9 @@
 #include "app_version.h"
 #include "board_battery.h"
 #include "board_flash.h"
-#include "board_keys.h"
 #include "board_motor.h"
 #include "board_sensor.h"
+#include "est_buttons.h"
 #include "est_drive.h"
 #include "est_motor.h"
 #include "est_sensor.h"
@@ -195,7 +195,7 @@ static void queue_key_status(void)
 	report[2] = KEY_STATUS_COMMAND;
 	report[3] = 1U;
 	report[4] = 0U;
-	report[5] = board_keys_pressed_mask();
+	report[5] = est_buttons_pressed_mask();
 	report[6] = checksum(report, 6U);
 	report[7] = FRAME_END_BYTE;
 	(void)usb_hid_queue_report(report, false);
@@ -717,7 +717,7 @@ static void queue_device_status(uint32_t now_ms)
 	memcpy(&payload[2], app_version_text, 6U);
 	payload[8] = BOARD_MOTOR_PORT_COUNT;
 	payload[9] = BOARD_SENSOR_PORT_COUNT;
-	payload[10] = board_keys_pressed_mask();
+	payload[10] = est_buttons_pressed_mask();
 	payload[11] = battery.valid ? battery.level : 0U;
 	write_u16_le(&payload[12], battery.adc_raw);
 	write_u16_le(&payload[14], battery.sample_mv);

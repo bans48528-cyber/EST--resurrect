@@ -4,15 +4,16 @@
 
 #include "app_version.h"
 #include "board_audio.h"
-#include "board_backlight.h"
 #include "board_battery.h"
 #include "board_flash.h"
 #include "board_lcd.h"
-#include "board_led.h"
-#include "board_keys.h"
 #include "board_motor.h"
 #include "board_power.h"
 #include "board_sensor.h"
+#include "est_backlight.h"
+#include "est_buttons.h"
+#include "est_display.h"
+#include "est_led.h"
 #include "platform.h"
 #include "system_time.h"
 #include "update_protocol.h"
@@ -408,27 +409,29 @@ int main(void)
 	char displayed_status_line[STATUS_DISPLAY_LINE_SIZE] = {0};
 
 	board_power_init();
-	board_backlight_init();
-	board_led_init();
+	est_backlight_init();
+	est_led_init();
 	system_time_init();
-	board_keys_init(system_time_millis());
+	est_buttons_init(system_time_millis());
 	board_flash_init();
 	board_audio_init();
 	board_motor_init();
 	board_sensor_init(system_time_millis());
 	board_battery_init(system_time_millis());
-	board_led_checkpoint(1U);
+	(void)est_led_set(EST_LED_RED);
 	update_protocol_init();
-	board_led_checkpoint(2U);
+	(void)est_led_set(EST_LED_BLUE);
 	usb_hid_init();
-	board_led_checkpoint(3U);
+	(void)est_led_set(EST_LED_RED_BLUE);
 	platform_enable_interrupts();
-	board_led_checkpoint(0U);
+	(void)est_led_set(EST_LED_OFF);
 #ifndef DIAGNOSTIC_SKIP_LCD_STARTUP
-	board_lcd_init();
-	board_lcd_show_version(app_version_text);
+	est_display_init();
+	est_display_clear();
+	(void)est_display_text(36U, 54U, app_version_text, 3U);
+	est_display_refresh();
 #endif
-	last_key_mask = board_keys_pressed_mask();
+	last_key_mask = est_buttons_pressed_mask();
 
 	while (1) {
 		uint32_t now_ms;
@@ -436,26 +439,26 @@ int main(void)
 
 		usb_hid_poll();
 		now_ms = system_time_millis();
-		board_backlight_tick(now_ms);
+		est_backlight_tick(now_ms);
 		board_audio_tick(now_ms);
 		if (backlight_test_phase == 0U && now_ms >= BACKLIGHT_DIM_AT_MS) {
-			board_backlight_set_percent(20U);
+			(void)est_backlight_set_percent(20U);
 			backlight_test_phase = 1U;
 		} else if (backlight_test_phase == 1U &&
 			   now_ms >= BACKLIGHT_OFF_AT_MS) {
-			board_backlight_set_percent(0U);
+			(void)est_backlight_set_percent(0U);
 			backlight_test_phase = 2U;
 		} else if (backlight_test_phase == 2U &&
 			   now_ms >= BACKLIGHT_RESTORE_AT_MS) {
-			board_backlight_set_percent(100U);
+			(void)est_backlight_set_percent(100U);
 			backlight_test_phase = 3U;
 		}
 		if (!audio_test_attempted && now_ms >= AUDIO_TEST_START_AT_MS) {
 			audio_test_succeeded = board_audio_start_test(now_ms);
 			audio_test_attempted = true;
 		}
-		board_keys_tick(now_ms);
-		key_mask = board_keys_pressed_mask();
+		est_buttons_tick(now_ms);
+		key_mask = est_buttons_pressed_mask();
 		if (key_mask != 0U && last_key_mask == 0U) {
 			uint8_t mode_count = active_sensor_kinds == SENSOR_KIND_SOUND ? 1U :
 				active_sensor_kinds ==
@@ -556,7 +559,8 @@ int main(void)
 		if ((now_ms - last_diag_ms) >= 500U) {
 			last_diag_ms = now_ms;
 			diag_phase++;
-			board_led_diag_set(diag_phase);
+			(void)est_led_set((diag_phase & 1U) != 0U ?
+				EST_LED_BLUE : EST_LED_OFF);
 		}
 		update_protocol_tick(now_ms);
 		if (usb_hid_power_off_requested() ||
@@ -564,7 +568,7 @@ int main(void)
 			board_motor_stop();
 			board_sensor_stop();
 			platform_disable_interrupts();
-			board_led_all_off();
+			(void)est_led_set(EST_LED_OFF);
 			board_power_off();
 		}
 	}

@@ -184,6 +184,71 @@ class EstServiceApiTests(unittest.TestCase):
         self.assertNotIn("board_sensor_set_mode", protocol)
         self.assertNotIn("board_sensor_restart", protocol)
 
+    def test_user_interface_contract_wraps_verified_board_drivers(self) -> None:
+        buttons_header = (ROOT / "include" / "est_buttons.h").read_text(
+            encoding="utf-8"
+        )
+        buttons_source = (SOURCE_DIR / "est_buttons.c").read_text(
+            encoding="utf-8"
+        )
+        led_header = (ROOT / "include" / "est_led.h").read_text(encoding="utf-8")
+        led_source = (SOURCE_DIR / "est_led.c").read_text(encoding="utf-8")
+        backlight_header = (ROOT / "include" / "est_backlight.h").read_text(
+            encoding="utf-8"
+        )
+        backlight_source = (SOURCE_DIR / "est_backlight.c").read_text(
+            encoding="utf-8"
+        )
+        display_header = (ROOT / "include" / "est_display.h").read_text(
+            encoding="utf-8"
+        )
+        display_source = (SOURCE_DIR / "est_display.c").read_text(
+            encoding="utf-8"
+        )
+        protocol = (SOURCE_DIR / "update_protocol.c").read_text(encoding="utf-8")
+        main = (SOURCE_DIR / "main.c").read_text(encoding="utf-8")
+
+        for function in (
+            "est_buttons_pressed_mask",
+            "est_button_is_pressed",
+            "est_buttons_take_pressed_events",
+            "est_buttons_take_released_events",
+            "est_buttons_take_long_press_events",
+        ):
+            self.assertIn(function, buttons_header)
+            self.assertIn(function, buttons_source)
+        self.assertIn("board_keys_pressed_mask", buttons_source)
+
+        for function in ("est_led_set", "est_led_get"):
+            self.assertIn(function, led_header)
+            self.assertIn(function, led_source)
+        self.assertIn("board_led_checkpoint", led_source)
+
+        for function in (
+            "est_backlight_set_percent",
+            "est_backlight_get_percent",
+        ):
+            self.assertIn(function, backlight_header)
+            self.assertIn(function, backlight_source)
+        self.assertIn("board_backlight_set_percent", backlight_source)
+
+        for function in (
+            "est_display_clear",
+            "est_display_pixel",
+            "est_display_line",
+            "est_display_rectangle",
+            "est_display_text",
+            "est_display_bitmap",
+            "est_display_refresh",
+        ):
+            self.assertIn(function, display_header)
+            self.assertIn(function, display_source)
+        self.assertIn("board_lcd_draw_bitmap", display_source)
+        self.assertIn('#include "est_buttons.h"', protocol)
+        self.assertIn("est_buttons_pressed_mask()", protocol)
+        self.assertNotIn("board_keys_pressed_mask()", protocol)
+        self.assertIn("est_display_text(36U, 54U, app_version_text, 3U)", main)
+
     def test_drive_contract_is_frozen_before_sync_implementation(self) -> None:
         drive = (ROOT / "include" / "est_drive.h").read_text(encoding="utf-8")
         for function in (
@@ -241,7 +306,7 @@ class BoardModuleLayoutTests(unittest.TestCase):
     def test_main_initializes_power_before_other_board_services(self) -> None:
         main = (SOURCE_DIR / "main.c").read_text(encoding="utf-8")
         power = main.index("board_power_init();")
-        led = main.index("board_led_init();")
+        led = main.index("est_led_init();")
         clock = main.index("system_time_init();")
         usb = main.index("usb_hid_init();")
         self.assertLess(power, led)
@@ -281,8 +346,8 @@ class BoardModuleLayoutTests(unittest.TestCase):
     def test_lcd_starts_only_after_interrupts_are_enabled(self) -> None:
         main = (SOURCE_DIR / "main.c").read_text(encoding="utf-8")
         interrupts = main.index("platform_enable_interrupts();")
-        lcd_init = main.index("board_lcd_init();")
-        lcd_version = main.index("board_lcd_show_version(app_version_text);")
+        lcd_init = main.index("est_display_init();")
+        lcd_version = main.index("est_display_text(36U, 54U, app_version_text, 3U)")
         self.assertLess(interrupts, lcd_init)
         self.assertLess(lcd_init, lcd_version)
 
@@ -926,7 +991,7 @@ class BoardModuleLayoutTests(unittest.TestCase):
         self.assertIn("DEVICE_PROTOCOL_MAJOR           1U", config)
         self.assertIn("DEVICE_STATUS_PAYLOAD_LENGTH 72U", protocol)
         self.assertIn("board_battery_snapshot()", protocol)
-        self.assertIn("board_keys_pressed_mask()", protocol)
+        self.assertIn("est_buttons_pressed_mask()", protocol)
         self.assertIn("board_motor_control_snapshot", protocol)
         self.assertIn("est_sensor_get_status", protocol)
         self.assertIn("queue_device_status(now_ms);", protocol)
@@ -970,9 +1035,9 @@ class BoardModuleLayoutTests(unittest.TestCase):
         main = (SOURCE_DIR / "main.c").read_text(encoding="utf-8")
         backlight = (SOURCE_DIR / "board_backlight.c").read_text(encoding="utf-8")
         audio = (SOURCE_DIR / "board_audio.c").read_text(encoding="utf-8")
-        self.assertIn("board_backlight_set_percent(20U);", main)
-        self.assertIn("board_backlight_set_percent(0U);", main)
-        self.assertIn("board_backlight_set_percent(100U);", main)
+        self.assertIn("est_backlight_set_percent(20U);", main)
+        self.assertIn("est_backlight_set_percent(0U);", main)
+        self.assertIn("est_backlight_set_percent(100U);", main)
         self.assertIn("board_audio_start_test(now_ms)", main)
         self.assertIn("board_audio_tick(now_ms);", main)
         self.assertIn("BACKLIGHT_PORT GPIOA", backlight)
