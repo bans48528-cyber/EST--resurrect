@@ -132,6 +132,14 @@ python tools/est_hid_sender/est_hid_sender.py motor-pair-position --left-port A 
 
 `M0.76A` 起双电机同步任务不再设置自动时间上限，电脑端也会持续等待到两路完成或用户中断。受阻电机松开后继续追赶目标；永久受阻时必须由用户用 `Ctrl+C` 或上层显式停止命令结束。升级和关机路径仍会强制关闭全部马达。
 
+双电机同步状态行中的 `speed=A,C` 是两路编码器实测速度百分比，`power=A,C` 是当时实际 PWM 百分比。它们用于区分目标速度、真实转速和闭环为抵抗负载施加的功率。
+
+`M0.83A` 起可让一组双电机持续维持闭环转速，直到收到明确的停止命令。首版要求两路速度绝对值相同，正负号可分别设置；允许用户明确选择大型/中型混合配对。`--duration` 仅决定电脑端观察多久，结束后工具会发送 `--stop coast` 或 `--stop brake`，固件自身没有超时：
+
+```powershell
+python tools/est_hid_sender/est_hid_sender.py motor-pair-speed --left-port A --right-port C --left-speed 20 --right-speed 20 --duration 10 --stop coast
+```
+
 `M0.44A` 起可读取 EST/EV3 兼容颜色/灰度传感器；`M0.46A` 起支持 1-4 号输入口：
 
 ```powershell

@@ -400,6 +400,7 @@ class CliTests(unittest.TestCase):
         self.assertIn("motor_ports=C,D", text)
         self.assertIn("target_degrees=360,-360", text)
         self.assertIn("max_sync_error=8", text)
+        self.assertIn("speed=0,0 power=0,0", text)
         self.assertIn("motor_pair_position=complete", text)
         self.assertIn("safe_final_state=coast", text)
         self.assertEqual(transport.motor_pair_state, 0)
@@ -411,6 +412,40 @@ class CliTests(unittest.TestCase):
         pair_command = source[start:end]
         self.assertIn("while True:", pair_command)
         self.assertNotIn("deadline", pair_command)
+
+    def test_motor_pair_speed_reports_runtime_and_explicitly_stops(self) -> None:
+        source = Path(cli.__file__).read_text(encoding="utf-8")
+        start = source.index("def run_motor_pair_speed")
+        end = source.index("def run_motor_pair_control", start)
+        pair_command = source[start:end]
+        output = io.StringIO()
+        transport = FakeTransport()
+        with mock.patch.object(cli.HidTransport, "open", return_value=transport), \
+             mock.patch.object(cli.time, "sleep"):
+            with contextlib.redirect_stdout(output):
+                self.assertEqual(
+                    cli.main(
+                        [
+                            "motor-pair-speed",
+                            "--left-port", "A",
+                            "--right-port", "C",
+                            "--left-speed", "20",
+                            "--right-speed", "-20",
+                            "--duration", "0.5",
+                            "--stop", "brake",
+                        ]
+                    ),
+                    0,
+                )
+        text = output.getvalue()
+        self.assertIn("requested_speed=20,-20", text)
+        self.assertIn("firmware_timeout=none", text)
+        self.assertIn("pair_speed_state=running", text)
+        self.assertIn("speed=20,-20 power=23,24", text)
+        self.assertIn("stop_state=brake", text)
+        self.assertIn("motor_pair_speed=complete", text)
+        self.assertIn("safe_final_state=coast", text)
+        self.assertEqual(transport.motor_pair_speed_state, 0)
         self.assertNotIn("未按时完成", pair_command)
 
     def test_motor_pair_control_runs_two_ports_independently(self) -> None:

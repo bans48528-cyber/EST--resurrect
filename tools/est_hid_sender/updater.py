@@ -32,6 +32,10 @@ from .constants import (
     MOTOR_PAIR_POSITION_ACTION_START,
     MOTOR_PAIR_POSITION_ACTION_STATUS,
     MOTOR_PAIR_POSITION_ACTION_STOP,
+    MOTOR_PAIR_SPEED_ACTION_BRAKE,
+    MOTOR_PAIR_SPEED_ACTION_COAST,
+    MOTOR_PAIR_SPEED_ACTION_START,
+    MOTOR_PAIR_SPEED_ACTION_STATUS,
     MOTOR_SPEED_ACTION_BRAKE,
     MOTOR_SPEED_ACTION_COAST,
     MOTOR_SPEED_ACTION_START,
@@ -63,6 +67,7 @@ from .protocol import (
     build_motor_dual_test_frame,
     build_motor_position_frame,
     build_motor_pair_position_frame,
+    build_motor_pair_speed_frame,
     build_motor_speed_frame,
     build_motor_stop_test_frame,
     build_motor_tacho_test_frame,
@@ -82,6 +87,7 @@ from .protocol import (
     parse_motor_dual_test_response,
     parse_motor_position_response,
     parse_motor_pair_position_response,
+    parse_motor_pair_speed_response,
     parse_motor_speed_response,
     parse_motor_stop_test_response,
     parse_motor_tacho_test_response,
@@ -99,6 +105,7 @@ from .protocol import (
     MotorDualTestResult,
     MotorPositionResult,
     MotorPairPositionResult,
+    MotorPairSpeedResult,
     MotorSpeedResult,
     MotorControlResult,
     MotorTypeResult,
@@ -562,6 +569,62 @@ class FirmwareUpdater:
                 return result
         raise DiagnosticTimeoutError(
             "设备没有返回双马达同步状态；请确认固件支持 motor-pair-position 命令"
+        )
+
+    def start_motor_pair_speed(
+        self,
+        left_port: int,
+        left_speed_percent: int,
+        right_port: int,
+        right_speed_percent: int,
+    ) -> MotorPairSpeedResult:
+        return self._motor_pair_speed_action(
+            MOTOR_PAIR_SPEED_ACTION_START,
+            left_port=left_port,
+            right_port=right_port,
+            left_speed_percent=left_speed_percent,
+            right_speed_percent=right_speed_percent,
+        )
+
+    def read_motor_pair_speed_status(self) -> MotorPairSpeedResult:
+        return self._motor_pair_speed_action(MOTOR_PAIR_SPEED_ACTION_STATUS)
+
+    def stop_motor_pair_speed(
+        self, stop_mode: Literal["coast", "brake"] = "coast"
+    ) -> MotorPairSpeedResult:
+        action = (
+            MOTOR_PAIR_SPEED_ACTION_BRAKE
+            if stop_mode == "brake"
+            else MOTOR_PAIR_SPEED_ACTION_COAST
+        )
+        return self._motor_pair_speed_action(action)
+
+    def _motor_pair_speed_action(
+        self,
+        action: int,
+        left_port: int | None = None,
+        right_port: int | None = None,
+        left_speed_percent: int | None = None,
+        right_speed_percent: int | None = None,
+    ) -> MotorPairSpeedResult:
+        report = build_motor_pair_speed_frame(
+            action,
+            left_port=left_port,
+            right_port=right_port,
+            left_speed_percent=left_speed_percent,
+            right_speed_percent=right_speed_percent,
+        ).ljust(LEGACY_REPORT_SIZE, b"\x00")
+        self.transport.write_report(report)
+        deadline = time.monotonic() + MOTOR_TEST_TIMEOUT_SECONDS
+        while time.monotonic() < deadline:
+            response = self.transport.read_report()
+            if not response:
+                continue
+            result = parse_motor_pair_speed_response(response)
+            if result is not None:
+                return result
+        raise DiagnosticTimeoutError(
+            "设备没有返回双马达持续定速状态；请确认固件支持 motor-pair-speed 命令"
         )
 
     def start_motor_speed(

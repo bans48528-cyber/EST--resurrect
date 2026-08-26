@@ -36,6 +36,7 @@ from est_hid_sender.protocol import (  # noqa: E402
     build_motor_dual_test_frame,
     build_motor_position_frame,
     build_motor_pair_position_frame,
+    build_motor_pair_speed_frame,
     build_motor_speed_frame,
     build_motor_stop_test_frame,
     build_motor_tacho_test_frame,
@@ -56,6 +57,7 @@ from est_hid_sender.protocol import (  # noqa: E402
     parse_motor_dual_test_response,
     parse_motor_position_response,
     parse_motor_pair_position_response,
+    parse_motor_pair_speed_response,
     parse_motor_speed_response,
     parse_motor_stop_test_response,
     parse_motor_tacho_test_response,
@@ -270,6 +272,40 @@ def build_motor_pair_position_result(
         sync_error,
         max_sync_error,
     ):
+        frame += value.to_bytes(4, "little", signed=True)
+    frame += error.to_bytes(1, "little", signed=True)
+    frame.append(checksum(frame))
+    frame.append(0x16)
+    return bytes(frame).ljust(LEGACY_REPORT_SIZE, b"\x00")
+
+
+def build_motor_pair_speed_result(
+    result: int = 1,
+    state: int = 1,
+    left_port: int = 0,
+    right_port: int = 2,
+    left_requested: int = 20,
+    right_requested: int = 20,
+    left_measured: int = 19,
+    right_measured: int = 18,
+    left_power: int = 23,
+    right_power: int = 24,
+    left_actual: int = 180,
+    right_actual: int = 178,
+    sync_error: int = 2,
+    max_sync_error: int = 6,
+    error: int = 0,
+) -> bytes:
+    frame = bytearray(
+        (
+            0x68, 0x21, 0x1E, 0x1B, 0x00, result, state,
+            left_port, right_port,
+            left_requested & 0xFF, right_requested & 0xFF,
+            left_measured & 0xFF, right_measured & 0xFF,
+            left_power & 0xFF, right_power & 0xFF,
+        )
+    )
+    for value in (left_actual, right_actual, sync_error, max_sync_error):
         frame += value.to_bytes(4, "little", signed=True)
     frame += error.to_bytes(1, "little", signed=True)
     frame.append(checksum(frame))
@@ -583,6 +619,31 @@ class ProtocolTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "equal absolute degrees"):
             build_motor_pair_position_frame(1, 2, 3, 20, 360, -180)
 
+    def test_motor_pair_speed_requires_equal_magnitude_and_parses_runtime(self) -> None:
+        self.assertEqual(
+            build_motor_pair_speed_frame(1, 0, 2, 20, -20),
+            build_frame(0x1E, bytes((1, 0, 2, 20, 0xEC))),
+        )
+        result = parse_motor_pair_speed_response(
+            build_motor_pair_speed_result(
+                left_requested=20,
+                right_requested=-20,
+                left_measured=19,
+                right_measured=-18,
+                left_actual=180,
+                right_actual=-178,
+            )
+        )
+        self.assertIsNotNone(result)
+        self.assertEqual((result.left_port, result.right_port), (0, 2))
+        self.assertEqual((result.left_measured_speed_percent,
+                          result.right_measured_speed_percent), (19, -18))
+        self.assertEqual((result.left_actual_degrees,
+                          result.right_actual_degrees), (180, -178))
+        self.assertEqual(result.maximum_synchronization_error_degrees, 6)
+        with self.assertRaisesRegex(ValueError, "equal absolute values"):
+            build_motor_pair_speed_frame(1, 0, 2, 20, 30)
+
     def test_input_sensor_command_builds_modes_and_parses_diagnostics(self) -> None:
         self.assertEqual(
             build_input_sensor_frame(0, 0),
@@ -712,6 +773,14 @@ class FakeTransport:
         self.motor_pair_right_port = 3
         self.motor_pair_left_target = 360
         self.motor_pair_right_target = 360
+        self.motor_pair_speed_state = 0
+        self.motor_pair_speed_left_port = 0
+        self.motor_pair_speed_right_port = 2
+        self.motor_pair_speed_left_target = 20
+        self.motor_pair_speed_right_target = 20
+        self.motor_pair_speed_left_actual = 0
+        self.motor_pair_speed_right_actual = 0
+        self.motor_pair_speed_max_error = 0
         self.sensor_state = 2
         self.sensor_type = sensor_type
         self.sensor_mode = 0
@@ -1024,6 +1093,48 @@ class FakeTransport:
                 )
             )
             return
+        if report[0:3] == b"\x68\x11\x1e":
+            action = report[5]
+            if action == 1:
+                self.motor_pair_speed_state = 1
+                self.motor_pair_speed_left_port = report[6]
+                self.motor_pair_speed_right_port = report[7]
+                self.motor_pair_speed_left_target = int.from_bytes(
+                    report[8:9], "little", signed=True
+                )
+                self.motor_pair_speed_right_target = int.from_bytes(
+                    report[9:10], "little", signed=True
+                )
+                self.motor_pair_speed_left_actual = 0
+                self.motor_pair_speed_right_actual = 0
+                self.motor_pair_speed_max_error = 0
+            elif action == 0 and self.motor_pair_speed_state == 1:
+                left_direction = 1 if self.motor_pair_speed_left_target > 0 else -1
+                right_direction = 1 if self.motor_pair_speed_right_target > 0 else -1
+                self.motor_pair_speed_left_actual += left_direction * 40
+                self.motor_pair_speed_right_actual += right_direction * 38
+                self.motor_pair_speed_max_error = 6
+            elif action in (2, 3):
+                self.motor_pair_speed_state = 0
+            running = self.motor_pair_speed_state == 1
+            self.acks.append(
+                build_motor_pair_speed_result(
+                    state=self.motor_pair_speed_state,
+                    left_port=self.motor_pair_speed_left_port,
+                    right_port=self.motor_pair_speed_right_port,
+                    left_requested=(self.motor_pair_speed_left_target if running else 0),
+                    right_requested=(self.motor_pair_speed_right_target if running else 0),
+                    left_measured=(self.motor_pair_speed_left_target if running else 0),
+                    right_measured=(self.motor_pair_speed_right_target if running else 0),
+                    left_power=(23 if running else 0),
+                    right_power=(24 if running else 0),
+                    left_actual=self.motor_pair_speed_left_actual,
+                    right_actual=self.motor_pair_speed_right_actual,
+                    sync_error=(2 if running else 0),
+                    max_sync_error=self.motor_pair_speed_max_error,
+                )
+            )
+            return
         if report[0:3] == b"\x68\x11\x18":
             action = report[5]
             port = report[6]
@@ -1223,6 +1334,21 @@ class UpdaterTests(unittest.TestCase):
         self.assertEqual(complete.left_actual_degrees, 360)
         self.assertEqual(complete.right_actual_degrees, -360)
         self.assertEqual(updater.stop_motor_pair_position().state, 0)
+
+    def test_starts_reads_and_explicitly_stops_continuous_motor_pair(self) -> None:
+        transport = FakeTransport()
+        updater = FirmwareUpdater(transport)
+
+        started = updater.start_motor_pair_speed(0, 20, 2, -20)
+        self.assertEqual(started.state, 1)
+        self.assertEqual((started.left_port, started.right_port), (0, 2))
+        running = updater.read_motor_pair_speed_status()
+        self.assertEqual(running.state, 1)
+        self.assertEqual((running.left_actual_degrees,
+                          running.right_actual_degrees), (40, -38))
+        stopped = updater.stop_motor_pair_speed("brake")
+        self.assertEqual(stopped.state, 0)
+        self.assertEqual(transport.motor_pair_speed_state, 0)
 
     def test_flash_sends_high_speed_payloads_and_waits_for_matching_ack(self) -> None:
         transport = FakeTransport(output_len=1025)

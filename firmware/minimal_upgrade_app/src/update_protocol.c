@@ -131,6 +131,9 @@ static bool report_starts_logical_frame(const uint8_t *report, size_t length)
 	if (report[2] == MOTOR_PAIR_POSITION_COMMAND) {
 		return data_length == 1U || data_length == 12U;
 	}
+	if (report[2] == MOTOR_PAIR_SPEED_COMMAND) {
+		return data_length == 1U || data_length == 5U;
+	}
 	if (report[2] == INPUT_SENSOR_COMMAND) {
 		return data_length == 2U || data_length == 3U;
 	}
@@ -549,6 +552,38 @@ static void queue_motor_pair_position_result(uint8_t result)
 	(void)usb_hid_queue_report(report, false);
 }
 
+static void queue_motor_pair_speed_result(uint8_t result)
+{
+	est_motor_pair_speed_status_t status = {0};
+	uint8_t report[USB_HID_REPORT_SIZE] = {0};
+
+	(void)est_motor_pair_get_speed_status(&status);
+	report[0] = FRAME_START_BYTE;
+	report[1] = DEVICE_FRAME_DIRECTION;
+	report[2] = MOTOR_PAIR_SPEED_COMMAND;
+	report[3] = 27U;
+	report[4] = 0U;
+	report[5] = result;
+	report[6] = (uint8_t)status.state;
+	report[7] = (uint8_t)status.left_port;
+	report[8] = (uint8_t)status.right_port;
+	report[9] = (uint8_t)status.left_requested_speed_percent;
+	report[10] = (uint8_t)status.right_requested_speed_percent;
+	report[11] = (uint8_t)status.left_measured_speed_percent;
+	report[12] = (uint8_t)status.right_measured_speed_percent;
+	report[13] = (uint8_t)status.left_power_percent;
+	report[14] = (uint8_t)status.right_power_percent;
+	write_i32_le(&report[15], status.left_actual_degrees);
+	write_i32_le(&report[19], status.right_actual_degrees);
+	write_i32_le(&report[23], status.synchronization_error_degrees);
+	write_i32_le(&report[27],
+		status.maximum_synchronization_error_degrees);
+	report[31] = (uint8_t)(int8_t)status.error;
+	report[32] = checksum(report, 32U);
+	report[33] = FRAME_END_BYTE;
+	(void)usb_hid_queue_report(report, false);
+}
+
 static void queue_device_status(uint32_t now_ms)
 {
 	struct board_battery_snapshot battery = board_battery_snapshot();
@@ -560,7 +595,8 @@ static void queue_device_status(uint32_t now_ms)
 		DEVICE_CAPABILITY_INPUT_SENSOR | DEVICE_CAPABILITY_BATTERY |
 		DEVICE_CAPABILITY_KEYS | DEVICE_CAPABILITY_MOTOR_TYPE |
 		DEVICE_CAPABILITY_MOTOR_POSITION |
-		DEVICE_CAPABILITY_MOTOR_PAIR_POSITION;
+		DEVICE_CAPABILITY_MOTOR_PAIR_POSITION |
+		DEVICE_CAPABILITY_MOTOR_PAIR_SPEED;
 
 	report[0] = FRAME_START_BYTE;
 	report[1] = DEVICE_FRAME_DIRECTION;
@@ -844,6 +880,37 @@ static void handle_motor_pair_position(const uint8_t *data,
 	queue_motor_pair_position_result(result);
 }
 
+static void handle_motor_pair_speed(const uint8_t *data,
+	uint16_t data_length)
+{
+	uint8_t action = data[0];
+	uint8_t result = 1U;
+	est_result_t operation_result = EST_OK;
+
+	if (action == MOTOR_PAIR_SPEED_ACTION_STATUS && data_length == 1U) {
+		/* Status remains readable after the explicit stop. */
+	} else if (action == MOTOR_PAIR_SPEED_ACTION_START &&
+		   data_length == 5U) {
+		operation_result = est_motor_pair_run_speeds(
+			(est_motor_port_t)data[1], (int8_t)data[3],
+			(est_motor_port_t)data[2], (int8_t)data[4]);
+	} else if (action == MOTOR_PAIR_SPEED_ACTION_COAST &&
+		   data_length == 1U) {
+		operation_result = est_motor_pair_stop(EST_STOP_COAST);
+	} else if (action == MOTOR_PAIR_SPEED_ACTION_BRAKE &&
+		   data_length == 1U) {
+		operation_result = est_motor_pair_stop(EST_STOP_BRAKE);
+	} else {
+		result = 0U;
+	}
+	if (operation_result != EST_OK) {
+		result = operation_result == EST_ERR_INVALID_ARGUMENT ||
+			operation_result == EST_ERR_INVALID_PORT ||
+			operation_result == EST_ERR_NOT_SUPPORTED ? 0U : 2U;
+	}
+	queue_motor_pair_speed_result(result);
+}
+
 static void handle_input_sensor(const uint8_t *data, uint16_t data_length,
 	uint32_t now_ms)
 {
@@ -1022,6 +1089,9 @@ static void handle_logical_frame(uint32_t now_ms)
 	} else if (logical_frame[2] == MOTOR_PAIR_POSITION_COMMAND &&
 		   (data_length == 1U || data_length == 12U)) {
 		handle_motor_pair_position(&logical_frame[5], data_length);
+	} else if (logical_frame[2] == MOTOR_PAIR_SPEED_COMMAND &&
+		   (data_length == 1U || data_length == 5U)) {
+		handle_motor_pair_speed(&logical_frame[5], data_length);
 	} else if (logical_frame[2] == UPDATE_COMMAND) {
 		handle_update_frame(logical_frame, data_length, now_ms);
 	}

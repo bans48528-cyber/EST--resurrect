@@ -11,6 +11,7 @@ from .constants import (
     DEVICE_CAPABILITY_KEYS,
     DEVICE_CAPABILITY_MOTOR_CONTROL,
     DEVICE_CAPABILITY_MOTOR_PAIR_POSITION,
+    DEVICE_CAPABILITY_MOTOR_PAIR_SPEED,
     DEVICE_CAPABILITY_MOTOR_POSITION,
     DEVICE_CAPABILITY_MOTOR_TACHO,
     DEVICE_CAPABILITY_MOTOR_TYPE,
@@ -190,6 +191,35 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     motor_pair_position.add_argument(
         "--speed", type=int, default=20,
         help="最大目标速度，范围 10-100，默认 20",
+    )
+
+    motor_pair_speed = commands.add_parser(
+        "motor-pair-speed", help="持续同步维持两路闭环转速，直到显式停止"
+    )
+    add_device_options(motor_pair_speed)
+    motor_pair_speed.add_argument(
+        "--left-port", choices=("A", "B", "C", "D"), default="A",
+        help="左侧输出端口，默认 A",
+    )
+    motor_pair_speed.add_argument(
+        "--right-port", choices=("A", "B", "C", "D"), default="C",
+        help="右侧输出端口，默认 C",
+    )
+    motor_pair_speed.add_argument(
+        "--left-speed", type=int, default=20,
+        help="左侧有方向目标速度，默认 20",
+    )
+    motor_pair_speed.add_argument(
+        "--right-speed", type=int, default=20,
+        help="右侧有方向目标速度，默认 20；绝对值须与左侧相同",
+    )
+    motor_pair_speed.add_argument(
+        "--duration", type=float, default=5.0,
+        help="电脑端观察秒数，范围 0.5-60，默认 5；固件没有运行时限",
+    )
+    motor_pair_speed.add_argument(
+        "--stop", choices=("coast", "brake"), default="coast",
+        help="观察结束时显式自由滑行或刹车，默认 coast",
     )
 
     motor_pair_control = commands.add_parser(
@@ -412,6 +442,7 @@ DEVICE_CAPABILITY_NAMES = (
     (DEVICE_CAPABILITY_MOTOR_TYPE, "motor-type"),
     (DEVICE_CAPABILITY_MOTOR_POSITION, "motor-position"),
     (DEVICE_CAPABILITY_MOTOR_PAIR_POSITION, "motor-pair-position"),
+    (DEVICE_CAPABILITY_MOTOR_PAIR_SPEED, "motor-pair-speed"),
 )
 
 
@@ -1376,11 +1407,22 @@ def run_motor_pair_position(args: argparse.Namespace) -> int:
                 raise EstUpdaterError("设备拒绝了双马达同步参数")
             started = True
             while True:
+                telemetry = ""
+                if result.state == 1:
+                    left_status = updater.read_motor_speed_status(left_port)
+                    right_status = updater.read_motor_speed_status(right_port)
+                    telemetry = (
+                        f" speed={left_status.measured_speed_percent},"
+                        f"{right_status.measured_speed_percent}"
+                        f" power={left_status.power_percent},"
+                        f"{right_status.power_percent}"
+                    )
                 print(
                     f"pair_state={DRIVE_STATES.get(result.state, 'unknown')} "
                     f"actual={result.left_actual_degrees},{result.right_actual_degrees} "
                     f"sync_error={result.synchronization_error_degrees} "
-                    f"max_sync_error={result.maximum_synchronization_error_degrees}",
+                    f"max_sync_error={result.maximum_synchronization_error_degrees}"
+                    f"{telemetry}",
                     flush=True,
                 )
                 if result.state == 2:
@@ -1398,6 +1440,84 @@ def run_motor_pair_position(args: argparse.Namespace) -> int:
                     stopped = updater.stop_motor_pair_position()
                     if stopped.result != 1:
                         raise EstUpdaterError("最终联动自由滑行命令被拒绝")
+                    print("safe_final_state=coast", flush=True)
+                except (EstUpdaterError, OSError):
+                    print("safe_final_state=unconfirmed", flush=True)
+
+
+def run_motor_pair_speed(args: argparse.Namespace) -> int:
+    speeds = (args.left_speed, args.right_speed)
+    if args.left_port == args.right_port:
+        raise ValueError("两个端口不能相同")
+    if any(speed == 0 or not -100 <= speed <= 100 or abs(speed) < 10 for speed in speeds):
+        raise ValueError("两个速度的绝对值都必须在 10 到 100 之间")
+    if abs(args.left_speed) != abs(args.right_speed):
+        raise ValueError("首版持续同步要求两个速度的绝对值相同")
+    if not 0.5 <= args.duration <= 60.0:
+        raise ValueError("--duration 必须在 0.5 到 60 秒之间")
+
+    port_numbers = {"A": 0, "B": 1, "C": 2, "D": 3}
+    left_port = port_numbers[args.left_port]
+    right_port = port_numbers[args.right_port]
+    sample_count = max(1, int(args.duration / 0.2))
+    with open_transport(args) as transport:
+        print(f"device={transport.path}", flush=True)
+        updater = FirmwareUpdater(transport)
+        print(f"current_version={updater.ping()}", flush=True)
+        print(f"motor_ports={args.left_port},{args.right_port}", flush=True)
+        print(f"requested_speed={args.left_speed},{args.right_speed}", flush=True)
+        print(f"observation_seconds={args.duration:g}", flush=True)
+        print("firmware_timeout=none", flush=True)
+        started = False
+        try:
+            result = updater.start_motor_pair_speed(
+                left_port,
+                args.left_speed,
+                right_port,
+                args.right_speed,
+            )
+            if result.result == 2:
+                raise EstUpdaterError(
+                    "设备未启动双马达持续定速；请确认两端口已有马达且没有其他任务"
+                )
+            if result.result != 1:
+                raise EstUpdaterError("设备拒绝了双马达持续定速参数")
+            started = True
+            for _ in range(sample_count):
+                time.sleep(0.2)
+                result = updater.read_motor_pair_speed_status()
+                if result.result != 1 or result.state != 1:
+                    raise EstUpdaterError("双马达持续定速意外停止")
+                print(
+                    "pair_speed_state=running "
+                    f"actual={result.left_actual_degrees},{result.right_actual_degrees} "
+                    f"sync_error={result.synchronization_error_degrees} "
+                    f"max_sync_error={result.maximum_synchronization_error_degrees} "
+                    f"speed={result.left_measured_speed_percent},"
+                    f"{result.right_measured_speed_percent} "
+                    f"power={result.left_power_percent},{result.right_power_percent}",
+                    flush=True,
+                )
+            stopped = updater.stop_motor_pair_speed(args.stop)
+            if stopped.result != 1 or stopped.state != 0:
+                raise EstUpdaterError(f"设备未能按 {args.stop} 停止双马达定速")
+            print(f"stop_state={args.stop}", flush=True)
+            if args.stop == "brake":
+                time.sleep(0.3)
+                left_safe = updater.stop_motor_speed(left_port, "coast")
+                right_safe = updater.stop_motor_speed(right_port, "coast")
+                if left_safe.result != 1 or right_safe.result != 1:
+                    raise EstUpdaterError("刹车后未能恢复双路自由滑行")
+            started = False
+            print("motor_pair_speed=complete", flush=True)
+            print("safe_final_state=coast", flush=True)
+            return 0
+        finally:
+            if started:
+                try:
+                    safe = updater.stop_motor_pair_speed("coast")
+                    if safe.result != 1:
+                        raise EstUpdaterError("最终双路自由滑行命令被拒绝")
                     print("safe_final_state=coast", flush=True)
                 except (EstUpdaterError, OSError):
                     print("safe_final_state=unconfirmed", flush=True)
@@ -1611,6 +1731,8 @@ def main(argv: list[str] | None = None) -> int:
             return run_motor_speed(args)
         if args.mode == "motor-pair-position":
             return run_motor_pair_position(args)
+        if args.mode == "motor-pair-speed":
+            return run_motor_pair_speed(args)
         if args.mode == "motor-pair-control":
             return run_motor_pair_control(args)
         if args.mode == "sensor-read":

@@ -102,6 +102,10 @@
 #define MOTOR_POSITION_BRAKE_MS 300U
 #define MOTOR_PAIR_SYNC_COUNTS_PER_PERCENT 4
 #define MOTOR_PAIR_SYNC_MAX_CORRECTION_PERCENT 10
+#define MOTOR_PAIR_LEADER_DEADBAND_COUNTS 4
+#define MOTOR_PAIR_SPEED_FOLLOW_TOLERANCE_PERCENT 1
+#define MOTOR_PAIR_OVERSPEED_TOLERANCE_PERCENT 10
+#define MOTOR_PAIR_OVERSPEED_CONTROL_GAIN 32
 
 struct motor_port_config {
 	uint32_t pwm_port;
@@ -205,6 +209,7 @@ static int32_t identification_refresh_tacho_count;
 static int8_t measured_speed_percent[BOARD_MOTOR_PORT_COUNT];
 static int32_t speed_sample_count[BOARD_MOTOR_PORT_COUNT];
 static uint32_t speed_sample_ms[BOARD_MOTOR_PORT_COUNT];
+static bool speed_measurement_valid[BOARD_MOTOR_PORT_COUNT];
 
 struct motor_position_control {
 	enum board_motor_position_state state;
@@ -234,12 +239,26 @@ struct motor_pair_position_control {
 	int32_t synchronization_error;
 	int32_t maximum_synchronization_error;
 	int8_t correction_percent;
+	enum board_motor_port leader_port;
+};
+
+struct motor_pair_speed_control {
+	enum board_motor_pair_speed_state state;
+	enum board_motor_port left_port;
+	enum board_motor_port right_port;
+	int32_t left_start_count;
+	int32_t right_start_count;
+	int32_t synchronization_error;
+	int32_t maximum_synchronization_error;
+	int8_t correction_percent;
+	enum board_motor_port leader_port;
 };
 
 static struct motor_position_control
 	position_controls[BOARD_MOTOR_PORT_COUNT];
 static struct motor_speed_control speed_controls[BOARD_MOTOR_PORT_COUNT];
 static struct motor_pair_position_control pair_position_control;
+static struct motor_pair_speed_control pair_speed_control;
 static enum board_motor_port last_position_port;
 static enum board_motor_port last_speed_port;
 
@@ -255,6 +274,7 @@ static bool any_speed_control_active(void);
 static bool any_position_control_active(void);
 static bool legacy_diagnostic_active(void);
 static bool pair_position_owns_port(enum board_motor_port port);
+static bool pair_speed_owns_port(enum board_motor_port port);
 
 static void motor_tacho_direction_drive_low(enum board_motor_port port)
 {
@@ -446,6 +466,7 @@ static void update_motor_speed(uint32_t now_ms)
 		}
 		speed_sample_count[port_index] = count;
 		speed_sample_ms[port_index] = now_ms;
+		speed_measurement_valid[port_index] = true;
 	}
 }
 
@@ -519,6 +540,7 @@ static void reset_motor_measurements(enum board_motor_port port, uint32_t now_ms
 	measured_speed_percent[port_index] = 0;
 	speed_sample_count[port_index] = 0;
 	speed_sample_ms[port_index] = now_ms;
+	speed_measurement_valid[port_index] = false;
 }
 
 static void apply_identified_motor_type(enum board_motor_port port,
@@ -547,6 +569,7 @@ static void cancel_identification_refresh(void)
 	measured_speed_percent[(uint8_t)identification_refresh_port] = 0;
 	speed_sample_count[(uint8_t)identification_refresh_port] =
 		identification_refresh_tacho_count;
+	speed_measurement_valid[(uint8_t)identification_refresh_port] = false;
 	identification_refresh_state = MOTOR_IDENTIFICATION_REFRESH_IDLE;
 	identification_refresh_automatic = false;
 }
@@ -662,6 +685,7 @@ static void update_motor_identification(uint32_t now_ms)
 		speed_sample_count[(uint8_t)identification_refresh_port] =
 			identification_refresh_tacho_count;
 		speed_sample_ms[(uint8_t)identification_refresh_port] = now_ms;
+		speed_measurement_valid[(uint8_t)identification_refresh_port] = false;
 		probe_type = motor_type_from_probe(identification_refresh_float_mv,
 			motor_id_pin6_low_mv[(uint8_t)identification_refresh_port],
 			pullup_mv);
@@ -879,6 +903,13 @@ static bool pair_position_owns_port(enum board_motor_port port)
 		 port == pair_position_control.right_port);
 }
 
+static bool pair_speed_owns_port(enum board_motor_port port)
+{
+	return pair_speed_control.state == BOARD_MOTOR_PAIR_SPEED_RUNNING &&
+		(port == pair_speed_control.left_port ||
+		 port == pair_speed_control.right_port);
+}
+
 static bool port_control_active(enum board_motor_port port)
 {
 	return speed_control_active(port) || position_control_active(port) ||
@@ -894,22 +925,58 @@ static int32_t position_control_progress(enum board_motor_port port)
 	return control->requested_speed < 0 ? -movement : movement;
 }
 
+static int16_t pair_progress_speed(enum board_motor_port port)
+{
+	int16_t speed = measured_speed_percent[(uint8_t)port];
+	int8_t requested_speed = pair_position_owns_port(port) ?
+		position_controls[(uint8_t)port].requested_speed :
+		speed_controls[(uint8_t)port].requested_speed;
+
+	if (requested_speed < 0) {
+		speed = -speed;
+	}
+	return speed < 0 ? 0 : speed;
+}
+
 static int8_t pair_adjust_position_speed(enum board_motor_port port,
 	int8_t target_speed)
 {
+	enum board_motor_port peer_port;
 	int16_t magnitude;
+	int16_t speed_limit;
 	int8_t correction = pair_position_control.correction_percent;
+	bool correction_applies;
 
-	if (!pair_position_owns_port(port) || correction == 0) {
+	if (!pair_position_owns_port(port)) {
 		return target_speed;
 	}
 	magnitude = target_speed < 0 ? -(int16_t)target_speed : target_speed;
-	if ((port == pair_position_control.left_port && correction > 0) ||
-	    (port == pair_position_control.right_port && correction < 0)) {
+	correction_applies =
+		(port == pair_position_control.left_port &&
+		 correction > 0) ||
+		(port == pair_position_control.right_port &&
+		 correction < 0);
+	if (port == pair_position_control.leader_port && correction_applies) {
 		magnitude -= correction > 0 ? correction : -correction;
 		if (magnitude < (int16_t)MOTOR_POSITION_MIN_SPEED_PERCENT) {
 			magnitude = (int16_t)MOTOR_POSITION_MIN_SPEED_PERCENT;
 		}
+	}
+	if (pair_position_control.leader_port == BOARD_MOTOR_PORT_COUNT) {
+		return target_speed;
+	}
+	peer_port = port == pair_position_control.left_port ?
+		pair_position_control.right_port : pair_position_control.left_port;
+	if (port != pair_position_control.leader_port ||
+	    !speed_measurement_valid[(uint8_t)peer_port]) {
+		return target_speed < 0 ? -(int8_t)magnitude : (int8_t)magnitude;
+	}
+	speed_limit = pair_progress_speed(peer_port);
+	if (speed_limit > 0) {
+		speed_limit += MOTOR_PAIR_SPEED_FOLLOW_TOLERANCE_PERCENT;
+	}
+	if (magnitude > speed_limit) {
+		magnitude = speed_limit;
 	}
 	return target_speed < 0 ? -(int8_t)magnitude : (int8_t)magnitude;
 }
@@ -943,7 +1010,17 @@ static void update_pair_position_correction(void)
 	if (!position_control_active(pair_position_control.left_port) ||
 	    !position_control_active(pair_position_control.right_port)) {
 		pair_position_control.correction_percent = 0;
+		pair_position_control.leader_port = BOARD_MOTOR_PORT_COUNT;
 		return;
+	}
+	if (pair_position_control.synchronization_error >=
+	    MOTOR_PAIR_LEADER_DEADBAND_COUNTS) {
+		pair_position_control.leader_port =
+			pair_position_control.left_port;
+	} else if (pair_position_control.synchronization_error <=
+		   -MOTOR_PAIR_LEADER_DEADBAND_COUNTS) {
+		pair_position_control.leader_port =
+			pair_position_control.right_port;
 	}
 	correction = pair_position_control.synchronization_error /
 		MOTOR_PAIR_SYNC_COUNTS_PER_PERCENT;
@@ -955,14 +1032,130 @@ static void update_pair_position_correction(void)
 	pair_position_control.correction_percent = (int8_t)correction;
 }
 
+static int32_t pair_speed_progress(enum board_motor_port port)
+{
+	int32_t start_count = port == pair_speed_control.left_port ?
+		pair_speed_control.left_start_count :
+		pair_speed_control.right_start_count;
+	int32_t movement = tacho_count[(uint8_t)port] - start_count;
+
+	return speed_controls[(uint8_t)port].requested_speed < 0 ?
+		-movement : movement;
+}
+
+static void record_pair_speed_error(void)
+{
+	int32_t absolute_error;
+
+	pair_speed_control.synchronization_error =
+		pair_speed_progress(pair_speed_control.left_port) -
+		pair_speed_progress(pair_speed_control.right_port);
+	absolute_error = pair_speed_control.synchronization_error < 0 ?
+		-pair_speed_control.synchronization_error :
+		pair_speed_control.synchronization_error;
+	if (absolute_error > pair_speed_control.maximum_synchronization_error) {
+		pair_speed_control.maximum_synchronization_error = absolute_error;
+	}
+}
+
+static void update_pair_speed_correction(void)
+{
+	int32_t correction;
+
+	if (pair_speed_control.state != BOARD_MOTOR_PAIR_SPEED_RUNNING) {
+		pair_speed_control.correction_percent = 0;
+		return;
+	}
+	if (!speed_control_active(pair_speed_control.left_port) ||
+	    !speed_control_active(pair_speed_control.right_port)) {
+		(void)board_motor_stop_pair_speed(
+			BOARD_MOTOR_STOP_LOW_OPEN_DRAIN);
+		return;
+	}
+	record_pair_speed_error();
+	if (pair_speed_control.synchronization_error >=
+	    MOTOR_PAIR_LEADER_DEADBAND_COUNTS) {
+		pair_speed_control.leader_port = pair_speed_control.left_port;
+	} else if (pair_speed_control.synchronization_error <=
+		   -MOTOR_PAIR_LEADER_DEADBAND_COUNTS) {
+		pair_speed_control.leader_port = pair_speed_control.right_port;
+	}
+	correction = pair_speed_control.synchronization_error /
+		MOTOR_PAIR_SYNC_COUNTS_PER_PERCENT;
+	if (correction > MOTOR_PAIR_SYNC_MAX_CORRECTION_PERCENT) {
+		correction = MOTOR_PAIR_SYNC_MAX_CORRECTION_PERCENT;
+	} else if (correction < -MOTOR_PAIR_SYNC_MAX_CORRECTION_PERCENT) {
+		correction = -MOTOR_PAIR_SYNC_MAX_CORRECTION_PERCENT;
+	}
+	pair_speed_control.correction_percent = (int8_t)correction;
+}
+
+static int8_t pair_adjust_continuous_speed(enum board_motor_port port,
+	int8_t target_speed)
+{
+	enum board_motor_port peer_port;
+	int16_t magnitude;
+	int16_t speed_limit;
+	int8_t correction = pair_speed_control.correction_percent;
+	bool correction_applies;
+
+	if (!pair_speed_owns_port(port)) {
+		return target_speed;
+	}
+	magnitude = target_speed < 0 ? -(int16_t)target_speed : target_speed;
+	correction_applies =
+		(port == pair_speed_control.left_port && correction > 0) ||
+		(port == pair_speed_control.right_port && correction < 0);
+	if (port == pair_speed_control.leader_port && correction_applies) {
+		magnitude -= correction > 0 ? correction : -correction;
+		if (magnitude < MOTOR_SPEED_MIN_PERCENT) {
+			magnitude = MOTOR_SPEED_MIN_PERCENT;
+		}
+	}
+	if (pair_speed_control.leader_port == BOARD_MOTOR_PORT_COUNT) {
+		return target_speed < 0 ? -(int8_t)magnitude : (int8_t)magnitude;
+	}
+	peer_port = port == pair_speed_control.left_port ?
+		pair_speed_control.right_port : pair_speed_control.left_port;
+	if (port != pair_speed_control.leader_port ||
+	    !speed_measurement_valid[(uint8_t)peer_port]) {
+		return target_speed < 0 ? -(int8_t)magnitude : (int8_t)magnitude;
+	}
+	speed_limit = pair_progress_speed(peer_port);
+	if (speed_limit > 0) {
+		speed_limit += MOTOR_PAIR_SPEED_FOLLOW_TOLERANCE_PERCENT;
+	}
+	if (magnitude > speed_limit) {
+		magnitude = speed_limit;
+	}
+	return target_speed < 0 ? -(int8_t)magnitude : (int8_t)magnitude;
+}
+
 static void apply_closed_loop_speed(enum board_motor_port port,
 	int8_t target_speed, int32_t *pwm_x100)
 {
 	int32_t speed_error = (int32_t)target_speed -
 		measured_speed_percent[(uint8_t)port];
+	int16_t target_magnitude;
 	int32_t pwm_percent;
 
-	/* Original EST control runs this incremental P=0.08 step every 10 ms. */
+	if (target_speed == 0) {
+		*pwm_x100 = 0;
+		if (output_power[(uint8_t)port] != 0) {
+			motor_output_off(port);
+		}
+		return;
+	}
+	target_magnitude = target_speed < 0 ?
+		-(int16_t)target_speed : target_speed;
+	if ((pair_position_owns_port(port) || pair_speed_owns_port(port)) &&
+	    speed_measurement_valid[(uint8_t)port] &&
+	    pair_progress_speed(port) > target_magnitude +
+		MOTOR_PAIR_OVERSPEED_TOLERANCE_PERCENT) {
+		*pwm_x100 += speed_error *
+			(MOTOR_PAIR_OVERSPEED_CONTROL_GAIN - 8);
+	}
+	/* Normal control keeps the original incremental P=0.08 step every 10 ms. */
 	*pwm_x100 += speed_error * 8;
 	if (*pwm_x100 > 10000) {
 		*pwm_x100 = 10000;
@@ -1003,7 +1196,8 @@ static void update_speed_control(uint32_t now_ms)
 			continue;
 		}
 		control->last_control_ms = now_ms;
-		apply_closed_loop_speed(port, control->requested_speed,
+		apply_closed_loop_speed(port,
+			pair_adjust_continuous_speed(port, control->requested_speed),
 			&control->pwm_x100);
 	}
 }
@@ -1100,6 +1294,7 @@ static void update_pair_position_state(void)
 	if (left->state == BOARD_MOTOR_POSITION_COMPLETE &&
 		   right->state == BOARD_MOTOR_POSITION_COMPLETE) {
 		pair_position_control.correction_percent = 0;
+		pair_position_control.leader_port = BOARD_MOTOR_PORT_COUNT;
 		pair_position_control.state =
 			BOARD_MOTOR_PAIR_POSITION_COMPLETE;
 	}
@@ -1212,6 +1407,7 @@ void board_motor_init(void)
 		measured_speed_percent[port_index] = 0;
 		speed_sample_count[port_index] = 0;
 		speed_sample_ms[port_index] = 0U;
+		speed_measurement_valid[port_index] = false;
 		position_controls[port_index].state = BOARD_MOTOR_POSITION_IDLE;
 		position_controls[port_index].type = BOARD_MOTOR_TYPE_UNKNOWN;
 		position_controls[port_index].requested_speed = 0;
@@ -1261,6 +1457,16 @@ void board_motor_init(void)
 	pair_position_control.synchronization_error = 0;
 	pair_position_control.maximum_synchronization_error = 0;
 	pair_position_control.correction_percent = 0;
+	pair_position_control.leader_port = BOARD_MOTOR_PORT_COUNT;
+	pair_speed_control.state = BOARD_MOTOR_PAIR_SPEED_IDLE;
+	pair_speed_control.left_port = BOARD_MOTOR_PORT_A;
+	pair_speed_control.right_port = BOARD_MOTOR_PORT_B;
+	pair_speed_control.left_start_count = 0;
+	pair_speed_control.right_start_count = 0;
+	pair_speed_control.synchronization_error = 0;
+	pair_speed_control.maximum_synchronization_error = 0;
+	pair_speed_control.correction_percent = 0;
+	pair_speed_control.leader_port = BOARD_MOTOR_PORT_COUNT;
 	last_position_port = BOARD_MOTOR_PORT_A;
 	last_speed_port = BOARD_MOTOR_PORT_A;
 }
@@ -1305,6 +1511,10 @@ bool board_motor_coast(enum board_motor_port port)
 		return board_motor_stop_pair_position(
 			BOARD_MOTOR_STOP_LOW_OPEN_DRAIN);
 	}
+	if (motor_port_valid(port) && pair_speed_owns_port(port)) {
+		return board_motor_stop_pair_speed(
+			BOARD_MOTOR_STOP_LOW_OPEN_DRAIN);
+	}
 	if (!motor_port_valid(port) || legacy_diagnostic_active() ||
 	    port_control_active(port)) {
 		return false;
@@ -1318,6 +1528,10 @@ bool board_motor_brake(enum board_motor_port port)
 	cancel_automatic_identification_refresh();
 	if (motor_port_valid(port) && pair_position_owns_port(port)) {
 		return board_motor_stop_pair_position(
+			BOARD_MOTOR_STOP_HIGH_PUSH_PULL);
+	}
+	if (motor_port_valid(port) && pair_speed_owns_port(port)) {
+		return board_motor_stop_pair_speed(
 			BOARD_MOTOR_STOP_HIGH_PUSH_PULL);
 	}
 	if (!motor_port_valid(port) || legacy_diagnostic_active() ||
@@ -1433,6 +1647,7 @@ bool board_motor_start_position(uint32_t now_ms, enum board_motor_port port,
 	speed_sample_count[(uint8_t)port] = control->start_count;
 	speed_sample_ms[(uint8_t)port] = now_ms;
 	measured_speed_percent[(uint8_t)port] = 0;
+	speed_measurement_valid[(uint8_t)port] = false;
 	expected_ms = ((uint64_t)absolute_degrees *
 		motor_counts_per_speed(type) * 1000ULL) /
 		((uint64_t)speed_percent * MOTOR_SPEED_TIMER_HZ);
@@ -1520,6 +1735,7 @@ bool board_motor_start_pair_position(uint32_t now_ms,
 	    maximum_speed_percent > 100U || legacy_diagnostic_active() ||
 	    pair_position_control.state ==
 		BOARD_MOTOR_PAIR_POSITION_RUNNING ||
+	    pair_speed_control.state == BOARD_MOTOR_PAIR_SPEED_RUNNING ||
 	    port_control_active(left_port) || port_control_active(right_port)) {
 		return false;
 	}
@@ -1554,6 +1770,7 @@ bool board_motor_start_pair_position(uint32_t now_ms,
 	pair_position_control.synchronization_error = 0;
 	pair_position_control.maximum_synchronization_error = 0;
 	pair_position_control.correction_percent = 0;
+	pair_position_control.leader_port = BOARD_MOTOR_PORT_COUNT;
 	pair_position_control.state = BOARD_MOTOR_PAIR_POSITION_RUNNING;
 	return true;
 }
@@ -1581,6 +1798,7 @@ bool board_motor_stop_pair_position(enum board_motor_stop_mode stop_mode)
 	motor_apply_stop_mode(pair_position_control.left_port, stop_mode);
 	motor_apply_stop_mode(pair_position_control.right_port, stop_mode);
 	pair_position_control.correction_percent = 0;
+	pair_position_control.leader_port = BOARD_MOTOR_PORT_COUNT;
 	pair_position_control.state = BOARD_MOTOR_PAIR_POSITION_IDLE;
 	return true;
 }
@@ -1645,6 +1863,7 @@ bool board_motor_start_speed(uint32_t now_ms, enum board_motor_port port,
 	speed_sample_count[(uint8_t)port] = tacho_count[(uint8_t)port];
 	speed_sample_ms[(uint8_t)port] = now_ms;
 	measured_speed_percent[(uint8_t)port] = 0;
+	speed_measurement_valid[(uint8_t)port] = false;
 	last_speed_port = port;
 	return true;
 }
@@ -1655,6 +1874,9 @@ bool board_motor_stop_speed(enum board_motor_port port,
 	struct motor_speed_control *control;
 
 	cancel_automatic_identification_refresh();
+	if (motor_port_valid(port) && pair_speed_owns_port(port)) {
+		return board_motor_stop_pair_speed(stop_mode);
+	}
 	if (!motor_port_valid(port) || legacy_diagnostic_active() ||
 	    position_control_active(port) ||
 	    (stop_mode != BOARD_MOTOR_STOP_LOW_OPEN_DRAIN &&
@@ -1696,6 +1918,111 @@ struct board_motor_speed_snapshot board_motor_speed_snapshot(void)
 	struct board_motor_speed_snapshot snapshot = {0};
 
 	(void)board_motor_speed_snapshot_for_port(last_speed_port, &snapshot);
+	return snapshot;
+}
+
+bool board_motor_start_pair_speed(uint32_t now_ms,
+	enum board_motor_port left_port, int8_t left_speed_percent,
+	enum board_motor_port right_port, int8_t right_speed_percent)
+{
+	uint8_t left_magnitude;
+	uint8_t right_magnitude;
+
+	cancel_automatic_identification_refresh();
+	if (!motor_port_valid(left_port) || !motor_port_valid(right_port) ||
+	    left_port == right_port || left_speed_percent == 0 ||
+	    right_speed_percent == 0 || left_speed_percent < -100 ||
+	    left_speed_percent > 100 || right_speed_percent < -100 ||
+	    right_speed_percent > 100 || legacy_diagnostic_active() ||
+	    pair_position_control.state == BOARD_MOTOR_PAIR_POSITION_RUNNING ||
+	    pair_speed_control.state == BOARD_MOTOR_PAIR_SPEED_RUNNING ||
+	    port_control_active(left_port) || port_control_active(right_port)) {
+		return false;
+	}
+	left_magnitude = left_speed_percent < 0 ?
+		(uint8_t)(-(int16_t)left_speed_percent) :
+		(uint8_t)left_speed_percent;
+	right_magnitude = right_speed_percent < 0 ?
+		(uint8_t)(-(int16_t)right_speed_percent) :
+		(uint8_t)right_speed_percent;
+	if (left_magnitude < MOTOR_SPEED_MIN_PERCENT ||
+	    right_magnitude < MOTOR_SPEED_MIN_PERCENT ||
+	    left_magnitude != right_magnitude) {
+		return false;
+	}
+	if (!board_motor_start_speed(now_ms, left_port, left_speed_percent)) {
+		return false;
+	}
+	if (!board_motor_start_speed(now_ms, right_port, right_speed_percent)) {
+		(void)board_motor_stop_speed(left_port,
+			BOARD_MOTOR_STOP_LOW_OPEN_DRAIN);
+		return false;
+	}
+	pair_speed_control.left_port = left_port;
+	pair_speed_control.right_port = right_port;
+	pair_speed_control.left_start_count = tacho_count[(uint8_t)left_port];
+	pair_speed_control.right_start_count = tacho_count[(uint8_t)right_port];
+	pair_speed_control.synchronization_error = 0;
+	pair_speed_control.maximum_synchronization_error = 0;
+	pair_speed_control.correction_percent = 0;
+	pair_speed_control.leader_port = BOARD_MOTOR_PORT_COUNT;
+	pair_speed_control.state = BOARD_MOTOR_PAIR_SPEED_RUNNING;
+	return true;
+}
+
+bool board_motor_stop_pair_speed(enum board_motor_stop_mode stop_mode)
+{
+	struct motor_speed_control *left;
+	struct motor_speed_control *right;
+
+	cancel_automatic_identification_refresh();
+	if (legacy_diagnostic_active() ||
+	    pair_speed_control.state != BOARD_MOTOR_PAIR_SPEED_RUNNING ||
+	    (stop_mode != BOARD_MOTOR_STOP_LOW_OPEN_DRAIN &&
+	     stop_mode != BOARD_MOTOR_STOP_HIGH_PUSH_PULL)) {
+		return false;
+	}
+	left = &speed_controls[(uint8_t)pair_speed_control.left_port];
+	right = &speed_controls[(uint8_t)pair_speed_control.right_port];
+	left->state = BOARD_MOTOR_SPEED_IDLE;
+	left->requested_speed = 0;
+	left->pwm_x100 = 0;
+	right->state = BOARD_MOTOR_SPEED_IDLE;
+	right->requested_speed = 0;
+	right->pwm_x100 = 0;
+	motor_apply_stop_mode(pair_speed_control.left_port, stop_mode);
+	motor_apply_stop_mode(pair_speed_control.right_port, stop_mode);
+	pair_speed_control.correction_percent = 0;
+	pair_speed_control.leader_port = BOARD_MOTOR_PORT_COUNT;
+	pair_speed_control.state = BOARD_MOTOR_PAIR_SPEED_IDLE;
+	return true;
+}
+
+struct board_motor_pair_speed_snapshot board_motor_pair_speed_snapshot(void)
+{
+	struct board_motor_pair_speed_snapshot snapshot = {0};
+	uint8_t left_index = (uint8_t)pair_speed_control.left_port;
+	uint8_t right_index = (uint8_t)pair_speed_control.right_port;
+
+	snapshot.state = pair_speed_control.state;
+	snapshot.left_port = pair_speed_control.left_port;
+	snapshot.right_port = pair_speed_control.right_port;
+	snapshot.left_requested_speed_percent =
+		speed_controls[left_index].requested_speed;
+	snapshot.right_requested_speed_percent =
+		speed_controls[right_index].requested_speed;
+	snapshot.left_measured_speed_percent = measured_speed_percent[left_index];
+	snapshot.right_measured_speed_percent = measured_speed_percent[right_index];
+	snapshot.left_power_percent = output_power[left_index];
+	snapshot.right_power_percent = output_power[right_index];
+	snapshot.left_start_count = pair_speed_control.left_start_count;
+	snapshot.left_current_count = tacho_count[left_index];
+	snapshot.right_start_count = pair_speed_control.right_start_count;
+	snapshot.right_current_count = tacho_count[right_index];
+	snapshot.synchronization_error_count =
+		pair_speed_control.synchronization_error;
+	snapshot.maximum_synchronization_error_count =
+		pair_speed_control.maximum_synchronization_error;
 	return snapshot;
 }
 
@@ -1823,6 +2150,10 @@ void board_motor_stop(void)
 	dual_test_state = BOARD_MOTOR_DUAL_TEST_IDLE;
 	pair_position_control.state = BOARD_MOTOR_PAIR_POSITION_IDLE;
 	pair_position_control.correction_percent = 0;
+	pair_position_control.leader_port = BOARD_MOTOR_PORT_COUNT;
+	pair_speed_control.state = BOARD_MOTOR_PAIR_SPEED_IDLE;
+	pair_speed_control.correction_percent = 0;
+	pair_speed_control.leader_port = BOARD_MOTOR_PORT_COUNT;
 	for (port_index = 0U; port_index < BOARD_MOTOR_PORT_COUNT; port_index++) {
 		position_controls[port_index].state = BOARD_MOTOR_POSITION_IDLE;
 		position_controls[port_index].requested_speed = 0;
@@ -1839,6 +2170,7 @@ void board_motor_tick(uint32_t now_ms)
 
 	update_motor_identification(now_ms);
 	update_motor_speed(now_ms);
+	update_pair_speed_correction();
 	update_speed_control(now_ms);
 	update_pair_position_correction();
 	update_position_control(now_ms);
