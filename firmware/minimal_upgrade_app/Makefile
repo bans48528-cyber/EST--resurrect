@@ -9,7 +9,7 @@ OBJCOPY := $(PREFIX)-objcopy
 OBJDUMP := $(PREFIX)-objdump
 SIZE := $(PREFIX)-size
 PYTHON ?= python
-MKDIR_P ?= mkdir -p
+MKDIR_P ?= $(PYTHON) tools/ensure_directory.py
 
 ARCH_FLAGS := -mcpu=cortex-m4 -mthumb -mfloat-abi=hard -mfpu=fpv4-sp-d16
 CPPFLAGS := -DSTM32F4 -Iinclude -I$(OPENCM3_DIR)/include \

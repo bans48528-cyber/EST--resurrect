@@ -18,6 +18,9 @@ from .constants import (
     DRIVE_STEER_ACTION_COAST,
     DRIVE_STEER_ACTION_START,
     DRIVE_STEER_ACTION_STATUS,
+    DRIVE_STEER_FOR_ACTION_START,
+    DRIVE_STEER_FOR_ACTION_STATUS,
+    DRIVE_STEER_FOR_ACTION_STOP,
     FIRST_PACKET_ACK_TIMEOUT_SECONDS,
     FLASH_DIAGNOSTIC_TIMEOUT_SECONDS,
     FLASH_ID_TIMEOUT_SECONDS,
@@ -67,6 +70,7 @@ from .protocol import (
     build_drive_straight_frame,
     build_drive_run_frame,
     build_drive_steer_frame,
+    build_drive_steer_for_frame,
     build_device_status_frame,
     build_heartbeat_frame,
     build_input_sensor_frame,
@@ -91,6 +95,7 @@ from .protocol import (
     parse_drive_straight_response,
     parse_drive_run_response,
     parse_drive_steer_response,
+    parse_drive_steer_for_response,
     parse_device_status_response,
     parse_input_sensor_response,
     parse_flash_id_response,
@@ -129,6 +134,7 @@ from .protocol import (
     DeviceStatus,
     DriveStraightResult,
     DriveRunResult,
+    DriveSteerForResult,
 )
 
 
@@ -699,6 +705,67 @@ class FirmwareUpdater:
                 return result
         raise DiagnosticTimeoutError(
             "设备没有返回持续转向状态；请确认固件支持 drive-steer 命令"
+        )
+
+    def start_drive_steer_for(
+        self,
+        left_port: int,
+        right_port: int,
+        mode: int,
+        steering: int,
+        speed_percent: int,
+        target_value: int,
+        stop_mode: Literal["coast", "brake"] = "coast",
+    ) -> DriveSteerForResult:
+        return self._drive_steer_for_action(
+            DRIVE_STEER_FOR_ACTION_START,
+            left_port=left_port,
+            right_port=right_port,
+            mode=mode,
+            steering=steering,
+            speed_percent=speed_percent,
+            target_value=target_value,
+            stop_mode=1 if stop_mode == "brake" else 0,
+        )
+
+    def read_drive_steer_for_status(self) -> DriveSteerForResult:
+        return self._drive_steer_for_action(DRIVE_STEER_FOR_ACTION_STATUS)
+
+    def stop_drive_steer_for(self) -> DriveSteerForResult:
+        return self._drive_steer_for_action(DRIVE_STEER_FOR_ACTION_STOP)
+
+    def _drive_steer_for_action(
+        self,
+        action: int,
+        left_port: int | None = None,
+        right_port: int | None = None,
+        mode: int | None = None,
+        steering: int | None = None,
+        speed_percent: int | None = None,
+        target_value: int | None = None,
+        stop_mode: int | None = None,
+    ) -> DriveSteerForResult:
+        report = build_drive_steer_for_frame(
+            action,
+            left_port=left_port,
+            right_port=right_port,
+            mode=mode,
+            steering=steering,
+            speed_percent=speed_percent,
+            target_value=target_value,
+            stop_mode=stop_mode,
+        ).ljust(LEGACY_REPORT_SIZE, b"\x00")
+        self.transport.write_report(report)
+        deadline = time.monotonic() + MOTOR_TEST_TIMEOUT_SECONDS
+        while time.monotonic() < deadline:
+            response = self.transport.read_report()
+            if not response:
+                continue
+            result = parse_drive_steer_for_response(response)
+            if result is not None:
+                return result
+        raise DiagnosticTimeoutError(
+            "设备没有返回定量转向状态；请确认固件支持 drive-steer-for 命令"
         )
 
     def start_drive_straight(

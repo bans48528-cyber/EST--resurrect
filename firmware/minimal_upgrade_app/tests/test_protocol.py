@@ -521,7 +521,7 @@ class BoardModuleLayoutTests(unittest.TestCase):
         header = (ROOT / "include" / "board_motor.h").read_text(encoding="utf-8")
         config = (ROOT / "include" / "app_config.h").read_text(encoding="utf-8")
         self.assertIn("MOTOR_POSITION_COMMAND          0x1BU", config)
-        self.assertIn("DEVICE_PROTOCOL_MINOR           12U", config)
+        self.assertIn("DEVICE_PROTOCOL_MINOR           13U", config)
         self.assertIn("MOTOR_LARGE_COUNTS_PER_SPEED 12800U", motor)
         self.assertIn("MOTOR_MEDIUM_COUNTS_PER_SPEED 8100U", motor)
         self.assertIn("medium_samples[4] = {2U, 4U, 8U, 16U}", motor)
@@ -718,6 +718,26 @@ class BoardModuleLayoutTests(unittest.TestCase):
         self.assertIn("handle_drive_steer", protocol)
         self.assertIn("queue_motor_pair_speed_result(DRIVE_STEER_COMMAND", protocol)
         self.assertIn("data_length == 5U", protocol)
+
+    def test_drive_steer_for_reuses_mix_for_degrees_and_firmware_time(self) -> None:
+        drive = (SOURCE_DIR / "est_drive.c").read_text(encoding="utf-8")
+        drive_header = (ROOT / "include" / "est_drive.h").read_text(
+            encoding="utf-8"
+        )
+        protocol = (SOURCE_DIR / "update_protocol.c").read_text(encoding="utf-8")
+        config = (ROOT / "include" / "app_config.h").read_text(encoding="utf-8")
+
+        self.assertIn("DRIVE_STEER_FOR_COMMAND         0x22U", config)
+        self.assertIn("DEVICE_CAPABILITY_DRIVE_STEER_FOR", config)
+        self.assertIn("est_drive_steer_for", drive_header)
+        self.assertIn("est_drive_get_steer_for_status", drive_header)
+        self.assertIn("est_drive_mix_steering(steering, speed_percent", drive)
+        self.assertIn("scale_steering_degrees", drive)
+        self.assertIn("est_motor_pair_run_angles(left_port, left_degrees", drive)
+        self.assertIn("board_motor_start_pair_speed_for_time", drive)
+        self.assertIn("handle_drive_steer_for", protocol)
+        self.assertIn("queue_drive_steer_for_result", protocol)
+        self.assertIn("data_length == 11U", protocol)
 
     def test_input_port_one_uses_verified_v5_sensor_pins(self) -> None:
         sensor = (SOURCE_DIR / "board_sensor.c").read_text(encoding="utf-8")

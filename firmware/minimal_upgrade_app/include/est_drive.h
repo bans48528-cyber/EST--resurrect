@@ -71,6 +71,26 @@ typedef struct {
 	est_result_t error;
 } est_drive_motion_status_t;
 
+typedef struct {
+	est_drive_state_t state;
+	est_drive_target_mode_t mode;
+	est_motor_port_t left_port;
+	est_motor_port_t right_port;
+	int8_t steering;
+	int8_t requested_speed_percent;
+	int8_t left_requested_speed_percent;
+	int8_t right_requested_speed_percent;
+	int32_t target_value;
+	int32_t actual_value;
+	int32_t left_target_degrees;
+	int32_t right_target_degrees;
+	int32_t left_actual_degrees;
+	int32_t right_actual_degrees;
+	int32_t synchronization_error_degrees;
+	int32_t maximum_synchronization_error_degrees;
+	est_result_t error;
+} est_drive_steer_for_status_t;
+
 est_result_t est_drive_config(const est_drive_config_t *config);
 est_result_t est_motor_pair_run_angles(est_motor_port_t left_port,
 	int32_t left_degrees, est_motor_port_t right_port,
@@ -94,6 +114,12 @@ est_result_t est_drive_mix_steering(int8_t steering,
 	int8_t *right_speed_percent);
 est_result_t est_drive_start_steer(est_motor_port_t left_port,
 	est_motor_port_t right_port, int8_t steering, int8_t speed_percent);
+est_result_t est_drive_steer_for(est_motor_port_t left_port,
+	est_motor_port_t right_port, est_drive_target_mode_t mode,
+	int8_t steering, int8_t speed_percent, int32_t target_value,
+	est_stop_mode_t stop_mode);
+est_result_t est_drive_get_steer_for_status(
+	est_drive_steer_for_status_t *status);
 est_result_t est_drive_straight(int32_t distance_mm,
 	uint8_t speed_percent, est_stop_mode_t stop_mode);
 est_result_t est_drive_turn(int32_t angle_degrees,

@@ -17,7 +17,9 @@ enum est_drive_operation {
 	EST_DRIVE_OPERATION_NONE = 0,
 	EST_DRIVE_OPERATION_DISTANCE = 1,
 	EST_DRIVE_OPERATION_DEGREES = 2,
-	EST_DRIVE_OPERATION_TIME = 3
+	EST_DRIVE_OPERATION_TIME = 3,
+	EST_DRIVE_OPERATION_STEER_DEGREES = 4,
+	EST_DRIVE_OPERATION_STEER_TIME = 5
 };
 
 static est_drive_config_t drive_config;
@@ -26,6 +28,12 @@ static enum est_drive_operation drive_operation;
 static int32_t drive_target_distance_mm;
 static int32_t drive_target_value;
 static uint8_t drive_requested_speed_percent;
+static int8_t drive_steering;
+static int8_t drive_signed_speed_percent;
+static int8_t drive_left_requested_speed_percent;
+static int8_t drive_right_requested_speed_percent;
+static int32_t drive_left_target_degrees;
+static int32_t drive_right_target_degrees;
 
 static bool motor_port_valid(est_motor_port_t port)
 {
@@ -71,6 +79,24 @@ static bool closed_loop_speed_supported(int8_t speed_percent)
 		-(int16_t)speed_percent : (int16_t)speed_percent;
 
 	return magnitude >= 10 && magnitude <= 100;
+}
+
+static int32_t magnitude_i32(int32_t value)
+{
+	return value < 0 ? -value : value;
+}
+
+static int32_t scale_steering_degrees(int32_t target_degrees,
+	int8_t wheel_speed_percent, int16_t maximum_speed_percent)
+{
+	int32_t degrees = round_signed_ratio(
+		(int64_t)target_degrees * wheel_speed_percent,
+		(int64_t)maximum_speed_percent);
+
+	if (degrees == 0) {
+		degrees = wheel_speed_percent < 0 ? -1 : 1;
+	}
+	return degrees;
 }
 
 static bool distance_to_wheel_degrees(int32_t distance_mm,
@@ -427,6 +453,154 @@ est_result_t est_drive_start_steer(est_motor_port_t left_port,
 	}
 	return est_motor_pair_run_speeds(left_port, left_speed,
 		right_port, right_speed);
+}
+
+est_result_t est_drive_steer_for(est_motor_port_t left_port,
+	est_motor_port_t right_port, est_drive_target_mode_t mode,
+	int8_t steering, int8_t speed_percent, int32_t target_value,
+	est_stop_mode_t stop_mode)
+{
+	est_result_t result;
+	int8_t left_speed;
+	int8_t right_speed;
+	int16_t left_magnitude;
+	int16_t right_magnitude;
+	int16_t maximum_speed;
+	int32_t left_degrees = 0;
+	int32_t right_degrees = 0;
+
+	if (!motor_port_valid(left_port) || !motor_port_valid(right_port)) {
+		return EST_ERR_INVALID_PORT;
+	}
+	if (left_port == right_port ||
+	    (mode != EST_DRIVE_TARGET_DEGREES &&
+	     mode != EST_DRIVE_TARGET_TIME_MS) ||
+	    target_value <= 0 || !stop_mode_valid(stop_mode) ||
+	    stop_mode == EST_STOP_HOLD) {
+		return EST_ERR_INVALID_ARGUMENT;
+	}
+	if ((mode == EST_DRIVE_TARGET_DEGREES && target_value > 3600) ||
+	    (mode == EST_DRIVE_TARGET_TIME_MS &&
+	     target_value > EST_DRIVE_MAX_DURATION_MS)) {
+		return EST_ERR_INVALID_ARGUMENT;
+	}
+	if (mode == EST_DRIVE_TARGET_DEGREES && stop_mode != EST_STOP_COAST) {
+		return EST_ERR_NOT_SUPPORTED;
+	}
+	result = est_drive_mix_steering(steering, speed_percent,
+		&left_speed, &right_speed);
+	if (result != EST_OK) {
+		return result;
+	}
+	left_magnitude = left_speed < 0 ? -(int16_t)left_speed : left_speed;
+	right_magnitude = right_speed < 0 ?
+		-(int16_t)right_speed : right_speed;
+	maximum_speed = left_magnitude > right_magnitude ?
+		left_magnitude : right_magnitude;
+
+	if (mode == EST_DRIVE_TARGET_DEGREES) {
+		left_degrees = scale_steering_degrees(target_value, left_speed,
+			maximum_speed);
+		right_degrees = scale_steering_degrees(target_value, right_speed,
+			maximum_speed);
+		result = est_motor_pair_run_angles(left_port, left_degrees,
+			right_port, right_degrees, (uint8_t)maximum_speed,
+			stop_mode);
+		if (result != EST_OK) {
+			return result;
+		}
+		drive_operation = EST_DRIVE_OPERATION_STEER_DEGREES;
+	} else {
+		result = require_tacho_motor(left_port);
+		if (result != EST_OK) {
+			return result;
+		}
+		result = require_tacho_motor(right_port);
+		if (result != EST_OK) {
+			return result;
+		}
+		if (!board_motor_start_pair_speed_for_time(system_time_millis(),
+		    (enum board_motor_port)left_port, left_speed,
+		    (enum board_motor_port)right_port, right_speed,
+		    (uint32_t)target_value, board_stop_from_est(stop_mode))) {
+			return EST_ERR_BUSY;
+		}
+		drive_operation = EST_DRIVE_OPERATION_STEER_TIME;
+	}
+	drive_steering = steering;
+	drive_signed_speed_percent = speed_percent;
+	drive_left_requested_speed_percent = left_speed;
+	drive_right_requested_speed_percent = right_speed;
+	drive_target_value = target_value;
+	drive_left_target_degrees = left_degrees;
+	drive_right_target_degrees = right_degrees;
+	return EST_OK;
+}
+
+est_result_t est_drive_get_steer_for_status(
+	est_drive_steer_for_status_t *status)
+{
+	if (status == NULL) {
+		return EST_ERR_INVALID_ARGUMENT;
+	}
+	memset(status, 0, sizeof(*status));
+	status->steering = drive_steering;
+	status->requested_speed_percent = drive_signed_speed_percent;
+	status->left_requested_speed_percent =
+		drive_left_requested_speed_percent;
+	status->right_requested_speed_percent =
+		drive_right_requested_speed_percent;
+	status->target_value = drive_target_value;
+	status->left_target_degrees = drive_left_target_degrees;
+	status->right_target_degrees = drive_right_target_degrees;
+	status->error = EST_OK;
+
+	if (drive_operation == EST_DRIVE_OPERATION_STEER_DEGREES) {
+		est_drive_status_t drive_status;
+
+		(void)est_drive_get_status(&drive_status);
+		status->state = drive_status.state;
+		status->mode = EST_DRIVE_TARGET_DEGREES;
+		status->left_port = drive_status.left_port;
+		status->right_port = drive_status.right_port;
+		status->left_target_degrees = drive_status.left_target_degrees;
+		status->right_target_degrees = drive_status.right_target_degrees;
+		status->left_actual_degrees = drive_status.left_actual_degrees;
+		status->right_actual_degrees = drive_status.right_actual_degrees;
+		status->actual_value =
+			magnitude_i32(status->left_target_degrees) >=
+			magnitude_i32(status->right_target_degrees) ?
+			magnitude_i32(status->left_actual_degrees) :
+			magnitude_i32(status->right_actual_degrees);
+		status->synchronization_error_degrees =
+			drive_status.synchronization_error_degrees;
+		status->maximum_synchronization_error_degrees =
+			drive_status.maximum_synchronization_error_degrees;
+		status->error = drive_status.error;
+	} else if (drive_operation == EST_DRIVE_OPERATION_STEER_TIME) {
+		struct board_motor_pair_speed_snapshot snapshot =
+			board_motor_pair_speed_snapshot();
+
+		status->state = snapshot.state == BOARD_MOTOR_PAIR_SPEED_RUNNING ?
+			EST_DRIVE_RUNNING :
+			snapshot.state == BOARD_MOTOR_PAIR_SPEED_COMPLETE ?
+			EST_DRIVE_COMPLETE : EST_DRIVE_IDLE;
+		status->mode = EST_DRIVE_TARGET_TIME_MS;
+		status->left_port = (est_motor_port_t)snapshot.left_port;
+		status->right_port = (est_motor_port_t)snapshot.right_port;
+		status->actual_value = (int32_t)snapshot.elapsed_ms;
+		status->left_actual_degrees = snapshot.left_current_count -
+			snapshot.left_start_count;
+		status->right_actual_degrees = snapshot.right_current_count -
+			snapshot.right_start_count;
+		status->synchronization_error_degrees =
+			snapshot.synchronization_error_count;
+		status->maximum_synchronization_error_degrees =
+			snapshot.maximum_synchronization_error_count;
+	} else {
+		return EST_ERR_STATE;
+	}
+	return EST_OK;
 }
 
 est_result_t est_drive_straight(int32_t distance_mm,

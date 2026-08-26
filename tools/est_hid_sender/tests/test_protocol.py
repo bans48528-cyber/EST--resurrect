@@ -24,6 +24,7 @@ from est_hid_sender.errors import (  # noqa: E402
 from est_hid_sender.protocol import (  # noqa: E402
     build_frame,
     build_drive_steer_frame,
+    build_drive_steer_for_frame,
     build_drive_straight_frame,
     build_drive_run_frame,
     build_device_status_frame,
@@ -49,6 +50,7 @@ from est_hid_sender.protocol import (  # noqa: E402
     checksum,
     parse_heartbeat_response,
     parse_drive_steer_response,
+    parse_drive_steer_for_response,
     parse_drive_straight_response,
     parse_drive_run_response,
     parse_device_status_response,
@@ -379,6 +381,50 @@ def build_drive_run_result(
     for value in (
         target_value,
         actual_value,
+        left_actual,
+        right_actual,
+        sync_error,
+        max_sync_error,
+    ):
+        frame += value.to_bytes(4, "little", signed=True)
+    frame += error.to_bytes(1, "little", signed=True)
+    frame.append(checksum(frame))
+    frame.append(0x16)
+    return bytes(frame).ljust(LEGACY_REPORT_SIZE, b"\x00")
+
+
+def build_drive_steer_for_result(
+    result: int = 1,
+    state: int = 2,
+    mode: int = 0,
+    left_port: int = 0,
+    right_port: int = 2,
+    steering: int = 50,
+    requested_speed: int = 80,
+    left_requested: int = 80,
+    right_requested: int = 40,
+    target_value: int = 720,
+    actual_value: int = 720,
+    left_target: int = 720,
+    right_target: int = 360,
+    left_actual: int = 722,
+    right_actual: int = 361,
+    sync_error: int = 2,
+    max_sync_error: int = 6,
+    error: int = 0,
+) -> bytes:
+    frame = bytearray(
+        (
+            0x68, 0x21, 0x22, 0x2A, 0x00, result, state, mode,
+            left_port, right_port, steering & 0xFF, requested_speed & 0xFF,
+            left_requested & 0xFF, right_requested & 0xFF,
+        )
+    )
+    for value in (
+        target_value,
+        actual_value,
+        left_target,
+        right_target,
         left_actual,
         right_actual,
         sync_error,
@@ -749,6 +795,45 @@ class ProtocolTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "between -100 and 100"):
             build_drive_steer_frame(1, 0, 2, 101, 80)
 
+    def test_drive_steer_for_sends_finite_target_and_parses_progress(self) -> None:
+        self.assertEqual(
+            build_drive_steer_for_frame(1, 0, 2, 0, 50, 80, 720, 0),
+            build_frame(
+                0x22,
+                bytes((1, 0, 2, 0, 50, 80))
+                + (720).to_bytes(4, "little", signed=True)
+                + bytes((0,)),
+            ),
+        )
+        result = parse_drive_steer_for_response(
+            build_drive_steer_for_result(
+                steering=-100,
+                requested_speed=-80,
+                left_requested=80,
+                right_requested=-80,
+                left_target=720,
+                right_target=-720,
+                left_actual=721,
+                right_actual=-719,
+            )
+        )
+        self.assertIsNotNone(result)
+        self.assertEqual(result.steering, -100)
+        self.assertEqual(result.requested_speed_percent, -80)
+        self.assertEqual(
+            (result.left_requested_speed_percent,
+             result.right_requested_speed_percent),
+            (80, -80),
+        )
+        self.assertEqual(
+            (result.left_target_degrees, result.right_target_degrees),
+            (720, -720),
+        )
+        with self.assertRaisesRegex(ValueError, "greater than zero"):
+            build_drive_steer_for_frame(1, 0, 2, 0, 50, 80, -720, 0)
+        with self.assertRaisesRegex(ValueError, "coast stop only"):
+            build_drive_steer_for_frame(1, 0, 2, 0, 50, 80, 720, 1)
+
     def test_drive_straight_sends_geometry_and_parses_distance(self) -> None:
         self.assertEqual(
             build_drive_straight_frame(1, 0, 2, 56, 120, -500, 40, 0),
@@ -967,6 +1052,18 @@ class FakeTransport:
         self.drive_run_right_port = 2
         self.drive_run_target = 720
         self.drive_run_speed = 40
+        self.drive_steer_for_state = 0
+        self.drive_steer_for_status_index = 0
+        self.drive_steer_for_mode = 0
+        self.drive_steer_for_left_port = 0
+        self.drive_steer_for_right_port = 2
+        self.drive_steer_for_steering = 50
+        self.drive_steer_for_speed = 80
+        self.drive_steer_for_target = 720
+        self.drive_steer_for_left_speed = 80
+        self.drive_steer_for_right_speed = 40
+        self.drive_steer_for_left_target = 720
+        self.drive_steer_for_right_target = 360
         self.sensor_state = 2
         self.sensor_type = sensor_type
         self.sensor_mode = 0
@@ -1454,6 +1551,115 @@ class FakeTransport:
                 )
             )
             return
+        if report[0:3] == b"\x68\x11\x22":
+            action = report[5]
+            if action == 1:
+                self.drive_steer_for_state = 1
+                self.drive_steer_for_status_index = 0
+                self.drive_steer_for_left_port = report[6]
+                self.drive_steer_for_right_port = report[7]
+                self.drive_steer_for_mode = report[8]
+                self.drive_steer_for_steering = int.from_bytes(
+                    report[9:10], "little", signed=True
+                )
+                self.drive_steer_for_speed = int.from_bytes(
+                    report[10:11], "little", signed=True
+                )
+                self.drive_steer_for_target = int.from_bytes(
+                    report[11:15], "little", signed=True
+                )
+                steering = self.drive_steer_for_steering
+                if abs(steering) == 100:
+                    left_raw, right_raw = steering, -steering
+                else:
+                    left_raw = max(-100, min(100, 100 + steering))
+                    right_raw = max(-100, min(100, 100 - steering))
+
+                def mix(raw: int) -> int:
+                    product = raw * self.drive_steer_for_speed
+                    if product >= 0:
+                        return (product + 50) // 100
+                    return -((-product + 50) // 100)
+
+                self.drive_steer_for_left_speed = mix(left_raw)
+                self.drive_steer_for_right_speed = mix(right_raw)
+                maximum_speed = max(
+                    abs(self.drive_steer_for_left_speed),
+                    abs(self.drive_steer_for_right_speed),
+                )
+
+                def scale(speed: int) -> int:
+                    product = self.drive_steer_for_target * speed
+                    if product >= 0:
+                        value = (product + maximum_speed // 2) // maximum_speed
+                    else:
+                        value = -((-product + maximum_speed // 2) // maximum_speed)
+                    return value or (-1 if speed < 0 else 1)
+
+                if self.drive_steer_for_mode == 0:
+                    self.drive_steer_for_left_target = scale(
+                        self.drive_steer_for_left_speed
+                    )
+                    self.drive_steer_for_right_target = scale(
+                        self.drive_steer_for_right_speed
+                    )
+                else:
+                    self.drive_steer_for_left_target = 0
+                    self.drive_steer_for_right_target = 0
+                fraction = 0
+            elif action == 0 and self.drive_steer_for_state == 1:
+                fractions = (2, 1)
+                fraction = fractions[
+                    min(self.drive_steer_for_status_index, len(fractions) - 1)
+                ]
+                self.drive_steer_for_status_index += 1
+                if fraction == 1:
+                    self.drive_steer_for_state = 2
+            elif action == 2:
+                self.drive_steer_for_state = 0
+                fraction = 1
+            else:
+                fraction = 0
+            actual_value = (
+                self.drive_steer_for_target // fraction if fraction else 0
+            )
+            if self.drive_steer_for_mode == 0:
+                left_actual = (
+                    self.drive_steer_for_left_target // fraction if fraction else 0
+                )
+                right_actual = (
+                    self.drive_steer_for_right_target // fraction if fraction else 0
+                )
+            else:
+                left_actual = (
+                    self.drive_steer_for_left_speed * 6 // fraction
+                    if fraction else 0
+                )
+                right_actual = (
+                    self.drive_steer_for_right_speed * 6 // fraction
+                    if fraction else 0
+                )
+            self.acks.append(
+                build_drive_steer_for_result(
+                    state=self.drive_steer_for_state,
+                    mode=self.drive_steer_for_mode,
+                    left_port=self.drive_steer_for_left_port,
+                    right_port=self.drive_steer_for_right_port,
+                    steering=self.drive_steer_for_steering,
+                    requested_speed=self.drive_steer_for_speed,
+                    left_requested=self.drive_steer_for_left_speed,
+                    right_requested=self.drive_steer_for_right_speed,
+                    target_value=self.drive_steer_for_target,
+                    actual_value=actual_value,
+                    left_target=self.drive_steer_for_left_target,
+                    right_target=self.drive_steer_for_right_target,
+                    left_actual=left_actual,
+                    right_actual=right_actual,
+                    sync_error=0,
+                    max_sync_error=5,
+                )
+            )
+            return
         if report[0:3] == b"\x68\x11\x18":
             action = report[5]
             port = report[6]
@@ -1723,6 +1929,33 @@ class UpdaterTests(unittest.TestCase):
         self.assertEqual(timed_complete.state, 2)
         self.assertEqual(timed_complete.requested_speed_percent, -60)
         self.assertEqual(updater.stop_drive_run().state, 0)
+
+    def test_runs_finite_steering_by_degrees_and_time(self) -> None:
+        transport = FakeTransport()
+        updater = FirmwareUpdater(transport)
+
+        started = updater.start_drive_steer_for(0, 2, 0, 50, 80, 720)
+        self.assertEqual(started.state, 1)
+        self.assertEqual(
+            (started.left_requested_speed_percent,
+             started.right_requested_speed_percent),
+            (80, 40),
+        )
+        self.assertEqual(
+            (started.left_target_degrees, started.right_target_degrees),
+            (720, 360),
+        )
+        self.assertEqual(updater.read_drive_steer_for_status().actual_value, 360)
+        self.assertEqual(updater.read_drive_steer_for_status().state, 2)
+        self.assertEqual(updater.stop_drive_steer_for().state, 0)
+
+        timed = updater.start_drive_steer_for(
+            0, 2, 1, -50, -60, 3000, "brake"
+        )
+        self.assertEqual(timed.state, 1)
+        self.assertEqual(updater.read_drive_steer_for_status().actual_value, 1500)
+        self.assertEqual(updater.read_drive_steer_for_status().state, 2)
+        self.assertEqual(updater.stop_drive_steer_for().state, 0)
 
     def test_flash_sends_high_speed_payloads_and_waits_for_matching_ack(self) -> None:
         transport = FakeTransport(output_len=1025)

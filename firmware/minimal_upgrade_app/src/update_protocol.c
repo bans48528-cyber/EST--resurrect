@@ -140,6 +140,9 @@ static bool report_starts_logical_frame(const uint8_t *report, size_t length)
 	if (report[2] == DRIVE_RUN_COMMAND) {
 		return data_length == 1U || data_length == 10U;
 	}
+	if (report[2] == DRIVE_STEER_FOR_COMMAND) {
+		return data_length == 1U || data_length == 11U;
+	}
 	if (report[2] == INPUT_SENSOR_COMMAND) {
 		return data_length == 2U || data_length == 3U;
 	}
@@ -650,6 +653,41 @@ static void queue_drive_run_result(uint8_t result)
 	(void)usb_hid_queue_report(report, false);
 }
 
+static void queue_drive_steer_for_result(uint8_t result)
+{
+	est_drive_steer_for_status_t status = {0};
+	uint8_t report[USB_HID_REPORT_SIZE] = {0};
+
+	(void)est_drive_get_steer_for_status(&status);
+	report[0] = FRAME_START_BYTE;
+	report[1] = DEVICE_FRAME_DIRECTION;
+	report[2] = DRIVE_STEER_FOR_COMMAND;
+	report[3] = 42U;
+	report[4] = 0U;
+	report[5] = result;
+	report[6] = (uint8_t)status.state;
+	report[7] = (uint8_t)status.mode;
+	report[8] = (uint8_t)status.left_port;
+	report[9] = (uint8_t)status.right_port;
+	report[10] = (uint8_t)status.steering;
+	report[11] = (uint8_t)status.requested_speed_percent;
+	report[12] = (uint8_t)status.left_requested_speed_percent;
+	report[13] = (uint8_t)status.right_requested_speed_percent;
+	write_i32_le(&report[14], status.target_value);
+	write_i32_le(&report[18], status.actual_value);
+	write_i32_le(&report[22], status.left_target_degrees);
+	write_i32_le(&report[26], status.right_target_degrees);
+	write_i32_le(&report[30], status.left_actual_degrees);
+	write_i32_le(&report[34], status.right_actual_degrees);
+	write_i32_le(&report[38], status.synchronization_error_degrees);
+	write_i32_le(&report[42],
+		status.maximum_synchronization_error_degrees);
+	report[46] = (uint8_t)(int8_t)status.error;
+	report[47] = checksum(report, 47U);
+	report[48] = FRAME_END_BYTE;
+	(void)usb_hid_queue_report(report, false);
+}
+
 static void queue_device_status(uint32_t now_ms)
 {
 	struct board_battery_snapshot battery = board_battery_snapshot();
@@ -665,7 +703,8 @@ static void queue_device_status(uint32_t now_ms)
 		DEVICE_CAPABILITY_MOTOR_PAIR_SPEED |
 		DEVICE_CAPABILITY_DRIVE_STRAIGHT |
 		DEVICE_CAPABILITY_DRIVE_RUN |
-		DEVICE_CAPABILITY_DRIVE_STEER;
+		DEVICE_CAPABILITY_DRIVE_STEER |
+		DEVICE_CAPABILITY_DRIVE_STEER_FOR;
 
 	report[0] = FRAME_START_BYTE;
 	report[1] = DEVICE_FRAME_DIRECTION;
@@ -1082,6 +1121,43 @@ static void handle_drive_run(const uint8_t *data, uint16_t data_length)
 	queue_drive_run_result(result);
 }
 
+static void handle_drive_steer_for(const uint8_t *data,
+	uint16_t data_length)
+{
+	uint8_t action = data[0];
+	uint8_t result = 1U;
+	est_result_t operation_result = EST_OK;
+
+	if (action == DRIVE_STEER_FOR_ACTION_STATUS && data_length == 1U) {
+		/* The latest finite steering progress remains readable. */
+	} else if (action == DRIVE_STEER_FOR_ACTION_START &&
+		   data_length == 11U) {
+		if (data[3] == DRIVE_STEER_FOR_MODE_DEGREES ||
+		    data[3] == DRIVE_STEER_FOR_MODE_TIME_MS) {
+			operation_result = est_drive_steer_for(
+				(est_motor_port_t)data[1],
+				(est_motor_port_t)data[2],
+				(est_drive_target_mode_t)data[3],
+				(int8_t)data[4], (int8_t)data[5],
+				read_i32_le(&data[6]),
+				(est_stop_mode_t)data[10]);
+		} else {
+			operation_result = EST_ERR_INVALID_ARGUMENT;
+		}
+	} else if (action == DRIVE_STEER_FOR_ACTION_STOP &&
+		   data_length == 1U) {
+		operation_result = est_drive_stop(EST_STOP_COAST);
+	} else {
+		result = 0U;
+	}
+	if (operation_result != EST_OK) {
+		result = operation_result == EST_ERR_INVALID_ARGUMENT ||
+			operation_result == EST_ERR_INVALID_PORT ||
+			operation_result == EST_ERR_NOT_SUPPORTED ? 0U : 2U;
+	}
+	queue_drive_steer_for_result(result);
+}
+
 static void handle_input_sensor(const uint8_t *data, uint16_t data_length,
 	uint32_t now_ms)
 {
@@ -1272,6 +1348,9 @@ static void handle_logical_frame(uint32_t now_ms)
 	} else if (logical_frame[2] == DRIVE_STEER_COMMAND &&
 		   (data_length == 1U || data_length == 5U)) {
 		handle_drive_steer(&logical_frame[5], data_length);
+	} else if (logical_frame[2] == DRIVE_STEER_FOR_COMMAND &&
+		   (data_length == 1U || data_length == 11U)) {
+		handle_drive_steer_for(&logical_frame[5], data_length);
 	} else if (logical_frame[2] == UPDATE_COMMAND) {
 		handle_update_frame(logical_frame, data_length, now_ms);
 	}

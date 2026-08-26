@@ -13,6 +13,10 @@ from .constants import (
     DRIVE_RUN_MODE_TIME_MS,
     DRIVE_STEER_ACTION_START,
     DRIVE_STEER_COMMAND,
+    DRIVE_STEER_FOR_ACTION_START,
+    DRIVE_STEER_FOR_COMMAND,
+    DRIVE_STEER_FOR_MODE_DEGREES,
+    DRIVE_STEER_FOR_MODE_TIME_MS,
     FLASH_ID_COMMAND,
     FLASH_SCAN_COMMAND,
     FLASH_TEST_COMMAND,
@@ -217,6 +221,28 @@ class DriveRunResult:
     requested_speed_percent: int
     target_value: int
     actual_value: int
+    left_actual_degrees: int
+    right_actual_degrees: int
+    synchronization_error_degrees: int
+    maximum_synchronization_error_degrees: int
+    error: int
+
+
+@dataclass(frozen=True)
+class DriveSteerForResult:
+    result: int
+    state: int
+    mode: int
+    left_port: int
+    right_port: int
+    steering: int
+    requested_speed_percent: int
+    left_requested_speed_percent: int
+    right_requested_speed_percent: int
+    target_value: int
+    actual_value: int
+    left_target_degrees: int
+    right_target_degrees: int
     left_actual_degrees: int
     right_actual_degrees: int
     synchronization_error_degrees: int
@@ -593,6 +619,72 @@ def build_drive_steer_frame(
     ):
         raise ValueError("drive steer parameters are valid only for the start action")
     return build_frame(DRIVE_STEER_COMMAND, payload)
+
+
+def build_drive_steer_for_frame(
+    action: int,
+    left_port: int | None = None,
+    right_port: int | None = None,
+    mode: int | None = None,
+    steering: int | None = None,
+    speed_percent: int | None = None,
+    target_value: int | None = None,
+    stop_mode: int | None = None,
+) -> bytes:
+    if not 0 <= action <= 0xFF:
+        raise ValueError("finite drive steer action must fit uint8")
+    payload = bytes((action,))
+    if action == DRIVE_STEER_FOR_ACTION_START:
+        if left_port not in (0, 1, 2, 3) or right_port not in (0, 1, 2, 3):
+            raise ValueError("drive motor ports must be 0, 1, 2, or 3")
+        if left_port == right_port:
+            raise ValueError("drive motor ports must differ")
+        if mode not in (
+            DRIVE_STEER_FOR_MODE_DEGREES,
+            DRIVE_STEER_FOR_MODE_TIME_MS,
+        ):
+            raise ValueError("finite drive steer mode must be degrees or time")
+        if steering is None or not -100 <= steering <= 100:
+            raise ValueError("drive steering must be between -100 and 100")
+        if speed_percent is None or speed_percent == 0 or not -100 <= speed_percent <= 100:
+            raise ValueError("drive speed must be between -100 and 100, excluding 0")
+        if target_value is None or target_value <= 0:
+            raise ValueError("finite drive target must be greater than zero")
+        if mode == DRIVE_STEER_FOR_MODE_DEGREES and target_value > 3600:
+            raise ValueError("finite drive degrees must be between 1 and 3600")
+        if mode == DRIVE_STEER_FOR_MODE_TIME_MS and target_value > 600000:
+            raise ValueError("finite drive time must be between 1 and 600000 ms")
+        if stop_mode not in (0, 1):
+            raise ValueError("drive stop mode must be coast or brake")
+        if mode == DRIVE_STEER_FOR_MODE_DEGREES and stop_mode != 0:
+            raise ValueError("finite steering by degrees supports coast stop only")
+        payload += bytes(
+            (
+                left_port,
+                right_port,
+                mode,
+                steering & 0xFF,
+                speed_percent & 0xFF,
+            )
+        )
+        payload += target_value.to_bytes(4, "little", signed=True)
+        payload += bytes((stop_mode,))
+    elif any(
+        value is not None
+        for value in (
+            left_port,
+            right_port,
+            mode,
+            steering,
+            speed_percent,
+            target_value,
+            stop_mode,
+        )
+    ):
+        raise ValueError(
+            "finite drive steer parameters are valid only for the start action"
+        )
+    return build_frame(DRIVE_STEER_FOR_COMMAND, payload)
 
 
 def build_drive_straight_frame(
@@ -1091,6 +1183,49 @@ def parse_drive_steer_response(report: bytes) -> MotorPairSpeedResult | None:
             report[27:31], "little", signed=True
         ),
         error=int.from_bytes(report[31:32], "little", signed=True),
+    )
+
+
+def parse_drive_steer_for_response(report: bytes) -> DriveSteerForResult | None:
+    if len(report) < 49:
+        return None
+    if report[0] != FRAME_START:
+        return None
+    if report[1] != DEVICE_DIRECTION or report[2] != DRIVE_STEER_FOR_COMMAND:
+        return None
+    if report[3:5] != b"\x2a\x00" or report[48] != FRAME_END:
+        return None
+    if checksum(report[:47]) != report[47]:
+        return None
+    return DriveSteerForResult(
+        result=report[5],
+        state=report[6],
+        mode=report[7],
+        left_port=report[8],
+        right_port=report[9],
+        steering=int.from_bytes(report[10:11], "little", signed=True),
+        requested_speed_percent=int.from_bytes(
+            report[11:12], "little", signed=True
+        ),
+        left_requested_speed_percent=int.from_bytes(
+            report[12:13], "little", signed=True
+        ),
+        right_requested_speed_percent=int.from_bytes(
+            report[13:14], "little", signed=True
+        ),
+        target_value=int.from_bytes(report[14:18], "little", signed=True),
+        actual_value=int.from_bytes(report[18:22], "little", signed=True),
+        left_target_degrees=int.from_bytes(report[22:26], "little", signed=True),
+        right_target_degrees=int.from_bytes(report[26:30], "little", signed=True),
+        left_actual_degrees=int.from_bytes(report[30:34], "little", signed=True),
+        right_actual_degrees=int.from_bytes(report[34:38], "little", signed=True),
+        synchronization_error_degrees=int.from_bytes(
+            report[38:42], "little", signed=True
+        ),
+        maximum_synchronization_error_degrees=int.from_bytes(
+            report[42:46], "little", signed=True
+        ),
+        error=int.from_bytes(report[46:47], "little", signed=True),
     )
 
 

@@ -148,6 +148,16 @@ python tools/est_hid_sender/est_hid_sender.py drive-steer --left-port A --right-
 
 持续转向复用双电机比例定速控制，固件没有自动超时，工具会在观察结束或异常退出时显式停止。当前闭环要求换算后的左右速度绝对值均不低于 10%；接近但未达到 `±100` 的转向值可能使内侧轮低于该下限并被拒绝，原地旋转应直接使用 `±100`。
 
+`M0.90A` 起可让同一转向动作按圈数、角度或秒数自动完成。方向由有符号 `--speed` 决定，`--rotations` 和 `--degrees` 表示较快一侧车轮的目标行程，秒数由固件内部计时：
+
+```powershell
+python tools/est_hid_sender/est_hid_sender.py drive-steer-for --left-port A --right-port B --steering 50 --speed 40 --rotations 2
+python tools/est_hid_sender/est_hid_sender.py drive-steer-for --left-port A --right-port B --steering -50 --speed -40 --degrees 720
+python tools/est_hid_sender/est_hid_sender.py drive-steer-for --left-port A --right-port B --steering 100 --speed 40 --seconds 3 --stop brake
+```
+
+角度/圈数模式当前完成后自由滑行；时间模式可选择自由滑行或主动刹车。工具会显示换算后的左右速度、左右目标角度和实时进度。换算后任一侧绝对速度低于 10% 时，固件仍会拒绝启动。
+
 `M0.84A` 起可在固件 C 层按轮径把毫米距离换算为两轮同步角度。正距离前进，负距离后退；首版完成后采用自由滑行。`--axle-track` 已进入底盘配置，但当前毫米直行和 M0.88A 的 EV3 转向都不使用它，只为以后确实需要几何换算的接口保留：
 
 ```powershell

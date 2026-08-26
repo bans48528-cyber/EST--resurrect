@@ -10,6 +10,7 @@ from .constants import (
     DEVICE_CAPABILITY_DRIVE_STRAIGHT,
     DEVICE_CAPABILITY_DRIVE_RUN,
     DEVICE_CAPABILITY_DRIVE_STEER,
+    DEVICE_CAPABILITY_DRIVE_STEER_FOR,
     DEVICE_CAPABILITY_INPUT_SENSOR,
     DEVICE_CAPABILITY_KEYS,
     DEVICE_CAPABILITY_MOTOR_CONTROL,
@@ -314,6 +315,41 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="观察结束时显式自由滑行或刹车，默认 coast",
     )
 
+    drive_steer_for = commands.add_parser(
+        "drive-steer-for", help="按转向值运行指定圈数、角度或秒数并自动停止"
+    )
+    add_device_options(drive_steer_for)
+    drive_steer_for.add_argument(
+        "--left-port", choices=("A", "B", "C", "D"), default="A",
+        help="左轮输出端口，默认 A",
+    )
+    drive_steer_for.add_argument(
+        "--right-port", choices=("A", "B", "C", "D"), default="C",
+        help="右轮输出端口，默认 C",
+    )
+    drive_steer_for.add_argument(
+        "--steering", type=int, default=50,
+        help="EV3 转向值，范围 -100 到 100；默认 50",
+    )
+    drive_steer_for.add_argument(
+        "--speed", type=int, default=40,
+        help="有方向移动速度，范围 -100 到 100 且不能为 0；默认 40",
+    )
+    steer_target = drive_steer_for.add_mutually_exclusive_group(required=True)
+    steer_target.add_argument(
+        "--rotations", type=float, help="外侧轮运行圈数，范围 0-10"
+    )
+    steer_target.add_argument(
+        "--degrees", type=int, help="外侧轮运行角度，范围 1-3600"
+    )
+    steer_target.add_argument(
+        "--seconds", type=float, help="运行秒数，范围 0-600"
+    )
+    drive_steer_for.add_argument(
+        "--stop", choices=("coast", "brake"), default="coast",
+        help="按秒模式到时自由滑行或主动刹车；角度/圈数当前仅支持 coast",
+    )
+
     motor_pair_control = commands.add_parser(
         "motor-pair-control", help="同时以不同方向和功率控制两个输出口"
     )
@@ -538,6 +574,7 @@ DEVICE_CAPABILITY_NAMES = (
     (DEVICE_CAPABILITY_DRIVE_STRAIGHT, "drive-straight"),
     (DEVICE_CAPABILITY_DRIVE_RUN, "drive-run"),
     (DEVICE_CAPABILITY_DRIVE_STEER, "drive-steer"),
+    (DEVICE_CAPABILITY_DRIVE_STEER_FOR, "drive-steer-for"),
 )
 
 
@@ -1697,6 +1734,122 @@ def run_drive_steer(args: argparse.Namespace) -> int:
                     print("safe_final_state=unconfirmed", flush=True)
 
 
+def run_drive_steer_for(args: argparse.Namespace) -> int:
+    if args.left_port == args.right_port:
+        raise ValueError("左右轮端口不能相同")
+    if not -100 <= args.steering <= 100:
+        raise ValueError("--steering 必须在 -100 到 100 之间")
+    if args.speed == 0 or not -100 <= args.speed <= 100:
+        raise ValueError("--speed 必须在 -100 到 100 之间且不能为 0")
+    if args.rotations is not None:
+        if not 0 < args.rotations <= 10:
+            raise ValueError("--rotations 必须大于 0 且不超过 10 圈")
+        target_value = int(round(args.rotations * 360.0))
+        if target_value == 0:
+            raise ValueError("圈数换算后的角度不能为 0")
+        mode = 0
+        target_unit = "rotations"
+        target_input = args.rotations
+    elif args.degrees is not None:
+        if not 1 <= args.degrees <= 3600:
+            raise ValueError("--degrees 必须在 1 到 3600 之间")
+        target_value = args.degrees
+        mode = 0
+        target_unit = "degrees"
+        target_input = args.degrees
+    else:
+        if not 0 < args.seconds <= 600.0:
+            raise ValueError("--seconds 必须大于 0 且不超过 600 秒")
+        target_value = int(round(args.seconds * 1000.0))
+        if target_value == 0:
+            raise ValueError("秒数换算后的毫秒数不能为 0")
+        mode = 1
+        target_unit = "seconds"
+        target_input = args.seconds
+    if mode == 0 and args.stop != "coast":
+        raise ValueError("角度和圈数模式当前只支持 --stop coast")
+
+    port_numbers = {"A": 0, "B": 1, "C": 2, "D": 3}
+    left_port = port_numbers[args.left_port]
+    right_port = port_numbers[args.right_port]
+    with open_transport(args) as transport:
+        print(f"device={transport.path}", flush=True)
+        updater = FirmwareUpdater(transport)
+        print(f"current_version={updater.ping()}", flush=True)
+        print(f"drive_ports={args.left_port},{args.right_port}", flush=True)
+        print(f"steering={args.steering}", flush=True)
+        print(f"movement_speed={args.speed}", flush=True)
+        print(f"target_unit={target_unit}", flush=True)
+        print(f"target_input={target_input:g}", flush=True)
+        print(f"firmware_target={target_value}", flush=True)
+        print(f"stop_mode={args.stop}", flush=True)
+        started = False
+        try:
+            result = updater.start_drive_steer_for(
+                left_port,
+                right_port,
+                mode,
+                args.steering,
+                args.speed,
+                target_value,
+                args.stop,
+            )
+            if result.result == 2:
+                raise EstUpdaterError(
+                    "设备未启动定量转向；请确认两端口已有马达且没有其他任务"
+                )
+            if result.result != 1:
+                raise EstUpdaterError(
+                    "设备拒绝了定量转向参数；换算后的左右速度绝对值必须都不低于 10%"
+                )
+            started = True
+            print(
+                "effective_speed="
+                f"{result.left_requested_speed_percent},"
+                f"{result.right_requested_speed_percent}",
+                flush=True,
+            )
+            if result.mode == 0:
+                print(
+                    "wheel_targets="
+                    f"{result.left_target_degrees},"
+                    f"{result.right_target_degrees}",
+                    flush=True,
+                )
+            while True:
+                value_suffix = "ms" if result.mode == 1 else "deg"
+                print(
+                    f"drive_steer_for_state={DRIVE_STATES.get(result.state, 'unknown')} "
+                    f"progress={result.actual_value}/"
+                    f"{result.target_value}{value_suffix} "
+                    f"actual={result.left_actual_degrees},"
+                    f"{result.right_actual_degrees} "
+                    f"sync_error={result.synchronization_error_degrees} "
+                    f"max_sync_error={result.maximum_synchronization_error_degrees}",
+                    flush=True,
+                )
+                if result.state == 2:
+                    print("drive_steer_for=complete", flush=True)
+                    return 0
+                if result.state == 3:
+                    raise EstUpdaterError(
+                        f"定量转向故障，错误码 {result.error}"
+                    )
+                if result.state == 0:
+                    raise EstUpdaterError("定量转向在完成前意外停止")
+                time.sleep(0.2)
+                result = updater.read_drive_steer_for_status()
+        finally:
+            if started:
+                try:
+                    stopped = updater.stop_drive_steer_for()
+                    if stopped.result != 1:
+                        raise EstUpdaterError("最终底盘自由滑行命令被拒绝")
+                    print("safe_final_state=coast", flush=True)
+                except (EstUpdaterError, OSError):
+                    print("safe_final_state=unconfirmed", flush=True)
+
+
 def run_drive_straight(args: argparse.Namespace) -> int:
     if args.left_port == args.right_port:
         raise ValueError("左右轮端口不能相同")
@@ -2092,6 +2245,8 @@ def main(argv: list[str] | None = None) -> int:
             return run_drive_run(args)
         if args.mode == "drive-steer":
             return run_drive_steer(args)
+        if args.mode == "drive-steer-for":
+            return run_drive_steer_for(args)
         if args.mode == "motor-pair-control":
             return run_motor_pair_control(args)
         if args.mode == "sensor-read":

@@ -477,6 +477,37 @@ class CliTests(unittest.TestCase):
         self.assertIn("safe_final_state=coast", text)
         self.assertEqual(transport.motor_pair_speed_state, 0)
 
+    def test_drive_steer_for_reports_targets_and_completes(self) -> None:
+        output = io.StringIO()
+        transport = FakeTransport()
+        with mock.patch.object(
+            cli.HidTransport, "open", return_value=transport
+        ), mock.patch.object(cli.time, "sleep"):
+            with contextlib.redirect_stdout(output):
+                self.assertEqual(
+                    cli.main(
+                        [
+                            "drive-steer-for",
+                            "--left-port", "A",
+                            "--right-port", "C",
+                            "--steering", "50",
+                            "--speed", "80",
+                            "--rotations", "2",
+                        ]
+                    ),
+                    0,
+                )
+        text = output.getvalue()
+        self.assertIn("steering=50", text)
+        self.assertIn("movement_speed=80", text)
+        self.assertIn("firmware_target=720", text)
+        self.assertIn("effective_speed=80,40", text)
+        self.assertIn("wheel_targets=720,360", text)
+        self.assertIn("progress=360/720deg", text)
+        self.assertIn("drive_steer_for=complete", text)
+        self.assertIn("safe_final_state=coast", text)
+        self.assertEqual(transport.drive_steer_for_state, 0)
+
     def test_drive_straight_reports_distance_and_finishes_safe(self) -> None:
         output = io.StringIO()
         transport = FakeTransport()
