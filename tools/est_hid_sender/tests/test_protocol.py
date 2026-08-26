@@ -23,6 +23,8 @@ from est_hid_sender.errors import (  # noqa: E402
 )
 from est_hid_sender.protocol import (  # noqa: E402
     build_frame,
+    build_drive_straight_frame,
+    build_drive_run_frame,
     build_device_status_frame,
     build_flash_id_frame,
     build_flash_scan_frame,
@@ -45,6 +47,8 @@ from est_hid_sender.protocol import (  # noqa: E402
     build_update_frame,
     checksum,
     parse_heartbeat_response,
+    parse_drive_straight_response,
+    parse_drive_run_response,
     parse_device_status_response,
     parse_input_sensor_response,
     parse_flash_id_response,
@@ -306,6 +310,77 @@ def build_motor_pair_speed_result(
         )
     )
     for value in (left_actual, right_actual, sync_error, max_sync_error):
+        frame += value.to_bytes(4, "little", signed=True)
+    frame += error.to_bytes(1, "little", signed=True)
+    frame.append(checksum(frame))
+    frame.append(0x16)
+    return bytes(frame).ljust(LEGACY_REPORT_SIZE, b"\x00")
+
+
+def build_drive_straight_result(
+    result: int = 1,
+    state: int = 2,
+    left_port: int = 0,
+    right_port: int = 2,
+    target_distance: int = 500,
+    actual_distance: int = 501,
+    left_target: int = 1023,
+    right_target: int = 1023,
+    left_actual: int = 1030,
+    right_actual: int = 1029,
+    sync_error: int = 1,
+    max_sync_error: int = 6,
+    error: int = 0,
+) -> bytes:
+    frame = bytearray(
+        (0x68, 0x21, 0x1F, 0x25, 0x00, result, state, left_port, right_port)
+    )
+    for value in (
+        target_distance,
+        actual_distance,
+        left_target,
+        right_target,
+        left_actual,
+        right_actual,
+        sync_error,
+        max_sync_error,
+    ):
+        frame += value.to_bytes(4, "little", signed=True)
+    frame += error.to_bytes(1, "little", signed=True)
+    frame.append(checksum(frame))
+    frame.append(0x16)
+    return bytes(frame).ljust(LEGACY_REPORT_SIZE, b"\x00")
+
+
+def build_drive_run_result(
+    result: int = 1,
+    state: int = 2,
+    mode: int = 0,
+    left_port: int = 0,
+    right_port: int = 2,
+    requested_speed: int = 40,
+    target_value: int = 720,
+    actual_value: int = 721,
+    left_actual: int = 722,
+    right_actual: int = 720,
+    sync_error: int = 2,
+    max_sync_error: int = 6,
+    error: int = 0,
+) -> bytes:
+    frame = bytearray(
+        (
+            0x68, 0x21, 0x20, 0x1F, 0x00, result, state, mode,
+            left_port, right_port, requested_speed & 0xFF,
+        )
+    )
+    for value in (
+        target_value,
+        actual_value,
+        left_actual,
+        right_actual,
+        sync_error,
+        max_sync_error,
+    ):
         frame += value.to_bytes(4, "little", signed=True)
     frame += error.to_bytes(1, "little", signed=True)
     frame.append(checksum(frame))
@@ -644,6 +719,74 @@ class ProtocolTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "equal absolute values"):
             build_motor_pair_speed_frame(1, 0, 2, 20, 30)
 
+    def test_drive_straight_sends_geometry_and_parses_distance(self) -> None:
+        self.assertEqual(
+            build_drive_straight_frame(1, 0, 2, 56, 120, -500, 40, 0),
+            build_frame(
+                0x1F,
+                bytes((1, 0, 2))
+                + (56).to_bytes(2, "little")
+                + (120).to_bytes(2, "little")
+                + (-500).to_bytes(4, "little", signed=True)
+                + bytes((40, 0)),
+            ),
+        )
+        result = parse_drive_straight_response(
+            build_drive_straight_result(
+                target_distance=-500,
+                actual_distance=-501,
+                left_target=-1023,
+                right_target=-1023,
+                left_actual=-1025,
+                right_actual=-1024,
+            )
+        )
+        self.assertIsNotNone(result)
+        self.assertEqual((result.left_port, result.right_port), (0, 2))
+        self.assertEqual(result.target_distance_mm, -500)
+        self.assertEqual(result.actual_distance_mm, -501)
+        self.assertEqual((result.left_target_degrees,
+                          result.right_target_degrees), (-1023, -1023))
+        self.assertEqual(result.maximum_synchronization_error_degrees, 6)
+        with self.assertRaisesRegex(ValueError, "coast stop only"):
+            build_drive_straight_frame(1, 0, 2, 56, 120, 500, 40, 1)
+
+    def test_drive_run_sends_degrees_or_time_and_parses_progress(self) -> None:
+        self.assertEqual(
+            build_drive_run_frame(1, 0, 2, 0, -720, 40, 0),
+            build_frame(
+                0x20,
+                bytes((1, 0, 2, 0))
+                + (-720).to_bytes(4, "little", signed=True)
+                + bytes((40, 0)),
+            ),
+        )
+        self.assertEqual(
+            build_drive_run_frame(1, 0, 2, 1, -3000, 60, 1)[5:15],
+            bytes((1, 0, 2, 1))
+            + (-3000).to_bytes(4, "little", signed=True)
+            + bytes((60, 1)),
+        )
+        result = parse_drive_run_response(
+            build_drive_run_result(
+                mode=1,
+                requested_speed=-60,
+                target_value=-3000,
+                actual_value=-3000,
+                left_actual=-540,
+                right_actual=-538,
+            )
+        )
+        self.assertIsNotNone(result)
+        self.assertEqual(result.mode, 1)
+        self.assertEqual(result.requested_speed_percent, -60)
+        self.assertEqual(result.target_value, -3000)
+        self.assertEqual(result.actual_value, -3000)
+        self.assertEqual((result.left_actual_degrees,
+                          result.right_actual_degrees), (-540, -538))
+        with self.assertRaisesRegex(ValueError, "coast stop only"):
+            build_drive_run_frame(1, 0, 2, 0, 720, 40, 1)
+
     def test_input_sensor_command_builds_modes_and_parses_diagnostics(self) -> None:
         self.assertEqual(
             build_input_sensor_frame(0, 0),
@@ -781,6 +924,19 @@ class FakeTransport:
         self.motor_pair_speed_left_actual = 0
         self.motor_pair_speed_right_actual = 0
         self.motor_pair_speed_max_error = 0
+        self.drive_straight_state = 0
+        self.drive_straight_status_index = 0
+        self.drive_straight_left_port = 0
+        self.drive_straight_right_port = 2
+        self.drive_straight_target_distance = 500
+        self.drive_straight_target_degrees = 1023
+        self.drive_run_state = 0
+        self.drive_run_status_index = 0
+        self.drive_run_mode = 0
+        self.drive_run_left_port = 0
+        self.drive_run_right_port = 2
+        self.drive_run_target = 720
+        self.drive_run_speed = 40
         self.sensor_state = 2
         self.sensor_type = sensor_type
         self.sensor_mode = 0
@@ -1135,6 +1291,113 @@ class FakeTransport:
                 )
             )
             return
+        if report[0:3] == b"\x68\x11\x1f":
+            action = report[5]
+            if action == 1:
+                self.drive_straight_state = 1
+                self.drive_straight_status_index = 0
+                self.drive_straight_left_port = report[6]
+                self.drive_straight_right_port = report[7]
+                wheel_diameter = int.from_bytes(report[8:10], "little")
+                self.drive_straight_target_distance = int.from_bytes(
+                    report[12:16], "little", signed=True
+                )
+                numerator = self.drive_straight_target_distance * 360 * 113
+                denominator = wheel_diameter * 355
+                self.drive_straight_target_degrees = (
+                    (numerator + denominator // 2) // denominator
+                    if numerator >= 0
+                    else -((-numerator + denominator // 2) // denominator)
+                )
+                fraction = 0
+            elif action == 0 and self.drive_straight_state == 1:
+                fractions = (2, 1)
+                fraction = fractions[
+                    min(self.drive_straight_status_index, len(fractions) - 1)
+                ]
+                self.drive_straight_status_index += 1
+                if fraction == 1:
+                    self.drive_straight_state = 2
+            elif action == 2:
+                self.drive_straight_state = 0
+                fraction = 1
+            else:
+                fraction = 0
+            actual_degrees = (
+                self.drive_straight_target_degrees // fraction if fraction else 0
+            )
+            actual_distance = (
+                self.drive_straight_target_distance // fraction if fraction else 0
+            )
+            self.acks.append(
+                build_drive_straight_result(
+                    state=self.drive_straight_state,
+                    left_port=self.drive_straight_left_port,
+                    right_port=self.drive_straight_right_port,
+                    target_distance=self.drive_straight_target_distance,
+                    actual_distance=actual_distance,
+                    left_target=self.drive_straight_target_degrees,
+                    right_target=self.drive_straight_target_degrees,
+                    left_actual=actual_degrees,
+                    right_actual=actual_degrees,
+                    sync_error=0,
+                    max_sync_error=5,
+                )
+            )
+            return
+        if report[0:3] == b"\x68\x11\x20":
+            action = report[5]
+            if action == 1:
+                self.drive_run_state = 1
+                self.drive_run_status_index = 0
+                self.drive_run_left_port = report[6]
+                self.drive_run_right_port = report[7]
+                self.drive_run_mode = report[8]
+                self.drive_run_target = int.from_bytes(
+                    report[9:13], "little", signed=True
+                )
+                self.drive_run_speed = report[13]
+                fraction = 0
+            elif action == 0 and self.drive_run_state == 1:
+                fractions = (2, 1)
+                fraction = fractions[
+                    min(self.drive_run_status_index, len(fractions) - 1)
+                ]
+                self.drive_run_status_index += 1
+                if fraction == 1:
+                    self.drive_run_state = 2
+            elif action == 2:
+                self.drive_run_state = 0
+                fraction = 1
+            else:
+                fraction = 0
+            actual_value = self.drive_run_target // fraction if fraction else 0
+            if self.drive_run_mode == 0:
+                actual_degrees = actual_value
+            else:
+                direction = -1 if self.drive_run_target < 0 else 1
+                actual_degrees = direction * (360 // fraction) if fraction else 0
+            requested_speed = (
+                (-self.drive_run_speed if self.drive_run_target < 0 else self.drive_run_speed)
+                if self.drive_run_mode == 1
+                else self.drive_run_speed
+            )
+            self.acks.append(
+                build_drive_run_result(
+                    state=self.drive_run_state,
+                    mode=self.drive_run_mode,
+                    left_port=self.drive_run_left_port,
+                    right_port=self.drive_run_right_port,
+                    requested_speed=requested_speed,
+                    target_value=self.drive_run_target,
+                    actual_value=actual_value,
+                    left_actual=actual_degrees,
+                    right_actual=actual_degrees,
+                    sync_error=0,
+                    max_sync_error=5,
+                )
+            )
+            return
         if report[0:3] == b"\x68\x11\x18":
             action = report[5]
             port = report[6]
@@ -1349,6 +1612,40 @@ class UpdaterTests(unittest.TestCase):
         stopped = updater.stop_motor_pair_speed("brake")
         self.assertEqual(stopped.state, 0)
         self.assertEqual(transport.motor_pair_speed_state, 0)
+
+    def test_starts_reads_and_stops_drive_straight(self) -> None:
+        transport = FakeTransport()
+        updater = FirmwareUpdater(transport)
+
+        started = updater.start_drive_straight(0, 2, 56, 120, 500, 40)
+        self.assertEqual(started.state, 1)
+        self.assertEqual(started.target_distance_mm, 500)
+        running = updater.read_drive_straight_status()
+        self.assertEqual(running.state, 1)
+        self.assertEqual(running.actual_distance_mm, 250)
+        complete = updater.read_drive_straight_status()
+        self.assertEqual(complete.state, 2)
+        self.assertEqual(complete.actual_distance_mm, 500)
+        self.assertEqual(updater.stop_drive_straight().state, 0)
+
+    def test_runs_drive_by_degrees_and_firmware_timed_seconds(self) -> None:
+        transport = FakeTransport()
+        updater = FirmwareUpdater(transport)
+
+        started = updater.start_drive_run(0, 2, 0, 720, 40)
+        self.assertEqual(started.state, 1)
+        self.assertEqual(updater.read_drive_run_status().actual_value, 360)
+        self.assertEqual(updater.read_drive_run_status().state, 2)
+        self.assertEqual(updater.stop_drive_run().state, 0)
+
+        timed = updater.start_drive_run(0, 2, 1, -3000, 60, "brake")
+        self.assertEqual(timed.state, 1)
+        timed_complete = updater.read_drive_run_status()
+        self.assertEqual(timed_complete.actual_value, -1500)
+        timed_complete = updater.read_drive_run_status()
+        self.assertEqual(timed_complete.state, 2)
+        self.assertEqual(timed_complete.requested_speed_percent, -60)
+        self.assertEqual(updater.stop_drive_run().state, 0)
 
     def test_flash_sends_high_speed_payloads_and_waits_for_matching_ack(self) -> None:
         transport = FakeTransport(output_len=1025)

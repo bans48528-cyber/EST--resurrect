@@ -507,7 +507,7 @@ class BoardModuleLayoutTests(unittest.TestCase):
         header = (ROOT / "include" / "board_motor.h").read_text(encoding="utf-8")
         config = (ROOT / "include" / "app_config.h").read_text(encoding="utf-8")
         self.assertIn("MOTOR_POSITION_COMMAND          0x1BU", config)
-        self.assertIn("DEVICE_PROTOCOL_MINOR           7U", config)
+        self.assertIn("DEVICE_PROTOCOL_MINOR           9U", config)
         self.assertIn("MOTOR_LARGE_COUNTS_PER_SPEED 12800U", motor)
         self.assertIn("MOTOR_MEDIUM_COUNTS_PER_SPEED 8100U", motor)
         self.assertIn("medium_samples[4] = {2U, 4U, 8U, 16U}", motor)
@@ -624,6 +624,52 @@ class BoardModuleLayoutTests(unittest.TestCase):
         pair_speed_start = motor[motor.index("bool board_motor_start_pair_speed") :
                                  motor.index("bool board_motor_stop_pair_speed")]
         self.assertNotIn("timeout", pair_speed_start)
+
+    def test_drive_straight_converts_millimeters_in_firmware(self) -> None:
+        drive = (SOURCE_DIR / "est_drive.c").read_text(encoding="utf-8")
+        header = (ROOT / "include" / "est_drive.h").read_text(encoding="utf-8")
+        protocol = (SOURCE_DIR / "update_protocol.c").read_text(encoding="utf-8")
+        config = (ROOT / "include" / "app_config.h").read_text(encoding="utf-8")
+
+        self.assertIn("DRIVE_STRAIGHT_COMMAND          0x1FU", config)
+        self.assertIn("DEVICE_CAPABILITY_DRIVE_STRAIGHT", config)
+        self.assertIn("EST_DRIVE_PI_NUMERATOR 355LL", drive)
+        self.assertIn("EST_DRIVE_PI_DENOMINATOR 113LL", drive)
+        self.assertIn("distance_to_wheel_degrees", drive)
+        self.assertIn("wheel_degrees_to_distance", drive)
+        self.assertIn("est_motor_pair_run_angles(drive_config.left_port", drive)
+        self.assertIn("target_distance_mm", header)
+        self.assertIn("actual_distance_mm", header)
+        self.assertIn("handle_drive_straight", protocol)
+        self.assertIn("queue_drive_straight_result", protocol)
+        self.assertIn("data_length == 13U", protocol)
+
+    def test_drive_run_supports_degrees_and_firmware_timed_seconds(self) -> None:
+        motor = (SOURCE_DIR / "board_motor.c").read_text(encoding="utf-8")
+        motor_header = (ROOT / "include" / "board_motor.h").read_text(
+            encoding="utf-8"
+        )
+        drive = (SOURCE_DIR / "est_drive.c").read_text(encoding="utf-8")
+        drive_header = (ROOT / "include" / "est_drive.h").read_text(
+            encoding="utf-8"
+        )
+        protocol = (SOURCE_DIR / "update_protocol.c").read_text(encoding="utf-8")
+        config = (ROOT / "include" / "app_config.h").read_text(encoding="utf-8")
+
+        self.assertIn("DRIVE_RUN_COMMAND               0x20U", config)
+        self.assertIn("DEVICE_CAPABILITY_DRIVE_RUN", config)
+        self.assertIn("est_drive_run_degrees", drive_header)
+        self.assertIn("est_drive_run_time", drive_header)
+        self.assertIn("est_drive_get_motion_status", drive_header)
+        self.assertIn("board_motor_start_pair_speed_for_time", motor_header)
+        self.assertIn("MOTOR_PAIR_TIMED_MAX_DURATION_MS 600000U", motor)
+        self.assertIn("update_pair_speed_state(now_ms)", motor)
+        self.assertIn("BOARD_MOTOR_PAIR_SPEED_COMPLETE", motor)
+        self.assertIn("est_motor_pair_run_angles(left_port, degrees", drive)
+        self.assertIn("board_motor_start_pair_speed_for_time", drive)
+        self.assertIn("handle_drive_run", protocol)
+        self.assertIn("DRIVE_RUN_MODE_DEGREES", protocol)
+        self.assertIn("DRIVE_RUN_MODE_TIME_MS", protocol)
 
     def test_input_port_one_uses_verified_v5_sensor_pins(self) -> None:
         sensor = (SOURCE_DIR / "board_sensor.c").read_text(encoding="utf-8")

@@ -134,6 +134,12 @@ static bool report_starts_logical_frame(const uint8_t *report, size_t length)
 	if (report[2] == MOTOR_PAIR_SPEED_COMMAND) {
 		return data_length == 1U || data_length == 5U;
 	}
+	if (report[2] == DRIVE_STRAIGHT_COMMAND) {
+		return data_length == 1U || data_length == 13U;
+	}
+	if (report[2] == DRIVE_RUN_COMMAND) {
+		return data_length == 1U || data_length == 10U;
+	}
 	if (report[2] == INPUT_SENSOR_COMMAND) {
 		return data_length == 2U || data_length == 3U;
 	}
@@ -584,6 +590,66 @@ static void queue_motor_pair_speed_result(uint8_t result)
 	(void)usb_hid_queue_report(report, false);
 }
 
+static void queue_drive_straight_result(uint8_t result)
+{
+	est_drive_status_t status = {0};
+	uint8_t report[USB_HID_REPORT_SIZE] = {0};
+
+	(void)est_drive_get_status(&status);
+	report[0] = FRAME_START_BYTE;
+	report[1] = DEVICE_FRAME_DIRECTION;
+	report[2] = DRIVE_STRAIGHT_COMMAND;
+	report[3] = 37U;
+	report[4] = 0U;
+	report[5] = result;
+	report[6] = (uint8_t)status.state;
+	report[7] = (uint8_t)status.left_port;
+	report[8] = (uint8_t)status.right_port;
+	write_i32_le(&report[9], status.target_distance_mm);
+	write_i32_le(&report[13], status.actual_distance_mm);
+	write_i32_le(&report[17], status.left_target_degrees);
+	write_i32_le(&report[21], status.right_target_degrees);
+	write_i32_le(&report[25], status.left_actual_degrees);
+	write_i32_le(&report[29], status.right_actual_degrees);
+	write_i32_le(&report[33], status.synchronization_error_degrees);
+	write_i32_le(&report[37],
+		status.maximum_synchronization_error_degrees);
+	report[41] = (uint8_t)(int8_t)status.error;
+	report[42] = checksum(report, 42U);
+	report[43] = FRAME_END_BYTE;
+	(void)usb_hid_queue_report(report, false);
+}
+
+static void queue_drive_run_result(uint8_t result)
+{
+	est_drive_motion_status_t status = {0};
+	uint8_t report[USB_HID_REPORT_SIZE] = {0};
+
+	(void)est_drive_get_motion_status(&status);
+	report[0] = FRAME_START_BYTE;
+	report[1] = DEVICE_FRAME_DIRECTION;
+	report[2] = DRIVE_RUN_COMMAND;
+	report[3] = 31U;
+	report[4] = 0U;
+	report[5] = result;
+	report[6] = (uint8_t)status.state;
+	report[7] = (uint8_t)status.mode;
+	report[8] = (uint8_t)status.left_port;
+	report[9] = (uint8_t)status.right_port;
+	report[10] = (uint8_t)status.requested_speed_percent;
+	write_i32_le(&report[11], status.target_value);
+	write_i32_le(&report[15], status.actual_value);
+	write_i32_le(&report[19], status.left_actual_degrees);
+	write_i32_le(&report[23], status.right_actual_degrees);
+	write_i32_le(&report[27], status.synchronization_error_degrees);
+	write_i32_le(&report[31],
+		status.maximum_synchronization_error_degrees);
+	report[35] = (uint8_t)(int8_t)status.error;
+	report[36] = checksum(report, 36U);
+	report[37] = FRAME_END_BYTE;
+	(void)usb_hid_queue_report(report, false);
+}
+
 static void queue_device_status(uint32_t now_ms)
 {
 	struct board_battery_snapshot battery = board_battery_snapshot();
@@ -596,7 +662,9 @@ static void queue_device_status(uint32_t now_ms)
 		DEVICE_CAPABILITY_KEYS | DEVICE_CAPABILITY_MOTOR_TYPE |
 		DEVICE_CAPABILITY_MOTOR_POSITION |
 		DEVICE_CAPABILITY_MOTOR_PAIR_POSITION |
-		DEVICE_CAPABILITY_MOTOR_PAIR_SPEED;
+		DEVICE_CAPABILITY_MOTOR_PAIR_SPEED |
+		DEVICE_CAPABILITY_DRIVE_STRAIGHT |
+		DEVICE_CAPABILITY_DRIVE_RUN;
 
 	report[0] = FRAME_START_BYTE;
 	report[1] = DEVICE_FRAME_DIRECTION;
@@ -911,6 +979,79 @@ static void handle_motor_pair_speed(const uint8_t *data,
 	queue_motor_pair_speed_result(result);
 }
 
+static void handle_drive_straight(const uint8_t *data,
+	uint16_t data_length)
+{
+	uint8_t action = data[0];
+	uint8_t result = 1U;
+	est_result_t operation_result = EST_OK;
+
+	if (action == DRIVE_STRAIGHT_ACTION_STATUS && data_length == 1U) {
+		/* The latest distance and wheel progress remain readable. */
+	} else if (action == DRIVE_STRAIGHT_ACTION_START &&
+		   data_length == 13U) {
+		est_drive_config_t config = {
+			.left_port = (est_motor_port_t)data[1],
+			.right_port = (est_motor_port_t)data[2],
+			.wheel_diameter_mm = read_u16_le(&data[3]),
+			.axle_track_mm = read_u16_le(&data[5])
+		};
+
+		operation_result = est_drive_config(&config);
+		if (operation_result == EST_OK) {
+			operation_result = est_drive_straight(
+				read_i32_le(&data[7]), data[11],
+				(est_stop_mode_t)data[12]);
+		}
+	} else if (action == DRIVE_STRAIGHT_ACTION_STOP &&
+		   data_length == 1U) {
+		operation_result = est_drive_stop(EST_STOP_COAST);
+	} else {
+		result = 0U;
+	}
+	if (operation_result != EST_OK) {
+		result = operation_result == EST_ERR_INVALID_ARGUMENT ||
+			operation_result == EST_ERR_INVALID_PORT ||
+			operation_result == EST_ERR_NOT_SUPPORTED ? 0U : 2U;
+	}
+	queue_drive_straight_result(result);
+}
+
+static void handle_drive_run(const uint8_t *data, uint16_t data_length)
+{
+	uint8_t action = data[0];
+	uint8_t result = 1U;
+	est_result_t operation_result = EST_OK;
+
+	if (action == DRIVE_RUN_ACTION_STATUS && data_length == 1U) {
+		/* The latest angle or timed-run state remains readable. */
+	} else if (action == DRIVE_RUN_ACTION_START && data_length == 10U) {
+		if (data[3] == DRIVE_RUN_MODE_DEGREES) {
+			operation_result = est_drive_run_degrees(
+				(est_motor_port_t)data[1],
+				(est_motor_port_t)data[2], read_i32_le(&data[4]),
+				data[8], (est_stop_mode_t)data[9]);
+		} else if (data[3] == DRIVE_RUN_MODE_TIME_MS) {
+			operation_result = est_drive_run_time(
+				(est_motor_port_t)data[1],
+				(est_motor_port_t)data[2], read_i32_le(&data[4]),
+				data[8], (est_stop_mode_t)data[9]);
+		} else {
+			operation_result = EST_ERR_INVALID_ARGUMENT;
+		}
+	} else if (action == DRIVE_RUN_ACTION_STOP && data_length == 1U) {
+		operation_result = est_drive_stop(EST_STOP_COAST);
+	} else {
+		result = 0U;
+	}
+	if (operation_result != EST_OK) {
+		result = operation_result == EST_ERR_INVALID_ARGUMENT ||
+			operation_result == EST_ERR_INVALID_PORT ||
+			operation_result == EST_ERR_NOT_SUPPORTED ? 0U : 2U;
+	}
+	queue_drive_run_result(result);
+}
+
 static void handle_input_sensor(const uint8_t *data, uint16_t data_length,
 	uint32_t now_ms)
 {
@@ -1092,6 +1233,12 @@ static void handle_logical_frame(uint32_t now_ms)
 	} else if (logical_frame[2] == MOTOR_PAIR_SPEED_COMMAND &&
 		   (data_length == 1U || data_length == 5U)) {
 		handle_motor_pair_speed(&logical_frame[5], data_length);
+	} else if (logical_frame[2] == DRIVE_STRAIGHT_COMMAND &&
+		   (data_length == 1U || data_length == 13U)) {
+		handle_drive_straight(&logical_frame[5], data_length);
+	} else if (logical_frame[2] == DRIVE_RUN_COMMAND &&
+		   (data_length == 1U || data_length == 10U)) {
+		handle_drive_run(&logical_frame[5], data_length);
 	} else if (logical_frame[2] == UPDATE_COMMAND) {
 		handle_update_frame(logical_frame, data_length, now_ms);
 	}

@@ -140,6 +140,20 @@ python tools/est_hid_sender/est_hid_sender.py motor-pair-position --left-port A 
 python tools/est_hid_sender/est_hid_sender.py motor-pair-speed --left-port A --right-port C --left-speed 20 --right-speed 20 --duration 10 --stop coast
 ```
 
+`M0.84A` 起可在固件 C 层按轮径把毫米距离换算为两轮同步角度。正距离前进，负距离后退；首版完成后采用自由滑行。`--axle-track` 已进入底盘配置，但要到转向和圆弧功能才参与换算：
+
+```powershell
+python tools/est_hid_sender/est_hid_sender.py drive-straight --left-port A --right-port C --wheel-diameter 56 --axle-track 120 --distance 500 --speed 40
+```
+
+毫米直行链路已在 M0.84A 实机通过，但最终软件界面按产品要求使用圈、度、秒，不显示毫米。`M0.85A` 起统一使用 `drive-run`，三个目标参数必须三选一。正数前进、负数后退；按秒模式由固件内部计时，到时自动停止：
+
+```powershell
+python tools/est_hid_sender/est_hid_sender.py drive-run --left-port A --right-port C --rotations 2.5 --speed 40
+python tools/est_hid_sender/est_hid_sender.py drive-run --left-port A --right-port C --degrees -720 --speed 40
+python tools/est_hid_sender/est_hid_sender.py drive-run --left-port A --right-port C --seconds 3 --speed 60 --stop brake
+```
+
 `M0.44A` 起可读取 EST/EV3 兼容颜色/灰度传感器；`M0.46A` 起支持 1-4 号输入口：
 
 ```powershell

@@ -1,0 +1,12 @@
+{
+  "version": "M0.84A",
+  "input": "est_minimal_upgrade_app.bin",
+  "raw_app_size": 40444,
+  "unpadded_package_size": 40448,
+  "upgrade_package_size": 262144,
+  "bootloader_stored_length": 262143,
+  "initial_msp": "0x2002D3B0",
+  "reset_handler": "0x080155B5",
+  "header_ascii": "APP=",
+  "sha256": "77144ad526b03395cd502d51d14de2c2759f465405c17c170c7c506086004be8"
+}

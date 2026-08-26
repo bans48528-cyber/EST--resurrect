@@ -29,6 +29,8 @@ typedef struct {
 	int32_t right_actual_degrees;
 	int32_t synchronization_error_degrees;
 	int32_t maximum_synchronization_error_degrees;
+	int32_t target_distance_mm;
+	int32_t actual_distance_mm;
 	est_result_t error;
 } est_drive_status_t;
 
@@ -49,6 +51,26 @@ typedef struct {
 	est_result_t error;
 } est_motor_pair_speed_status_t;
 
+typedef enum {
+	EST_DRIVE_TARGET_DEGREES = 0,
+	EST_DRIVE_TARGET_TIME_MS = 1
+} est_drive_target_mode_t;
+
+typedef struct {
+	est_drive_state_t state;
+	est_drive_target_mode_t mode;
+	est_motor_port_t left_port;
+	est_motor_port_t right_port;
+	int8_t requested_speed_percent;
+	int32_t target_value;
+	int32_t actual_value;
+	int32_t left_actual_degrees;
+	int32_t right_actual_degrees;
+	int32_t synchronization_error_degrees;
+	int32_t maximum_synchronization_error_degrees;
+	est_result_t error;
+} est_drive_motion_status_t;
+
 est_result_t est_drive_config(const est_drive_config_t *config);
 est_result_t est_motor_pair_run_angles(est_motor_port_t left_port,
 	int32_t left_degrees, est_motor_port_t right_port,
@@ -60,6 +82,13 @@ est_result_t est_motor_pair_run_speeds(est_motor_port_t left_port,
 est_result_t est_motor_pair_stop(est_stop_mode_t stop_mode);
 est_result_t est_motor_pair_get_speed_status(
 	est_motor_pair_speed_status_t *status);
+est_result_t est_drive_run_degrees(est_motor_port_t left_port,
+	est_motor_port_t right_port, int32_t degrees,
+	uint8_t speed_percent, est_stop_mode_t stop_mode);
+est_result_t est_drive_run_time(est_motor_port_t left_port,
+	est_motor_port_t right_port, int32_t duration_ms,
+	uint8_t speed_percent, est_stop_mode_t stop_mode);
+est_result_t est_drive_get_motion_status(est_drive_motion_status_t *status);
 est_result_t est_drive_straight(int32_t distance_mm,
 	uint8_t speed_percent, est_stop_mode_t stop_mode);
 est_result_t est_drive_turn(int32_t angle_degrees,

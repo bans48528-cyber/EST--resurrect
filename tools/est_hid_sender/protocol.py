@@ -5,6 +5,12 @@ from dataclasses import dataclass
 from .constants import (
     DEVICE_DIRECTION,
     DEVICE_STATUS_COMMAND,
+    DRIVE_STRAIGHT_ACTION_START,
+    DRIVE_STRAIGHT_COMMAND,
+    DRIVE_RUN_ACTION_START,
+    DRIVE_RUN_COMMAND,
+    DRIVE_RUN_MODE_DEGREES,
+    DRIVE_RUN_MODE_TIME_MS,
     FLASH_ID_COMMAND,
     FLASH_SCAN_COMMAND,
     FLASH_TEST_COMMAND,
@@ -175,6 +181,40 @@ class MotorPairSpeedResult:
     right_measured_speed_percent: int
     left_power_percent: int
     right_power_percent: int
+    left_actual_degrees: int
+    right_actual_degrees: int
+    synchronization_error_degrees: int
+    maximum_synchronization_error_degrees: int
+    error: int
+
+
+@dataclass(frozen=True)
+class DriveStraightResult:
+    result: int
+    state: int
+    left_port: int
+    right_port: int
+    target_distance_mm: int
+    actual_distance_mm: int
+    left_target_degrees: int
+    right_target_degrees: int
+    left_actual_degrees: int
+    right_actual_degrees: int
+    synchronization_error_degrees: int
+    maximum_synchronization_error_degrees: int
+    error: int
+
+
+@dataclass(frozen=True)
+class DriveRunResult:
+    result: int
+    state: int
+    mode: int
+    left_port: int
+    right_port: int
+    requested_speed_percent: int
+    target_value: int
+    actual_value: int
     left_actual_degrees: int
     right_actual_degrees: int
     synchronization_error_degrees: int
@@ -525,6 +565,104 @@ def build_motor_pair_speed_frame(
     ):
         raise ValueError("pair speed parameters are valid only for the start action")
     return build_frame(MOTOR_PAIR_SPEED_COMMAND, payload)
+
+
+def build_drive_straight_frame(
+    action: int,
+    left_port: int | None = None,
+    right_port: int | None = None,
+    wheel_diameter_mm: int | None = None,
+    axle_track_mm: int | None = None,
+    distance_mm: int | None = None,
+    speed_percent: int | None = None,
+    stop_mode: int | None = None,
+) -> bytes:
+    if not 0 <= action <= 0xFF:
+        raise ValueError("drive straight action must fit uint8")
+    payload = bytes((action,))
+    if action == DRIVE_STRAIGHT_ACTION_START:
+        if left_port not in (0, 1, 2, 3) or right_port not in (0, 1, 2, 3):
+            raise ValueError("drive motor ports must be 0, 1, 2, or 3")
+        if left_port == right_port:
+            raise ValueError("drive motor ports must differ")
+        if wheel_diameter_mm is None or not 1 <= wheel_diameter_mm <= 0xFFFF:
+            raise ValueError("wheel diameter must be between 1 and 65535 mm")
+        if axle_track_mm is None or not 1 <= axle_track_mm <= 0xFFFF:
+            raise ValueError("axle track must be between 1 and 65535 mm")
+        if distance_mm is None or distance_mm == 0 or not -(1 << 31) <= distance_mm < (1 << 31):
+            raise ValueError("drive distance must be a nonzero signed 32-bit value")
+        if speed_percent is None or not 10 <= speed_percent <= 100:
+            raise ValueError("drive speed must be between 10 and 100 percent")
+        if stop_mode != 0:
+            raise ValueError("first drive straight mode supports coast stop only")
+        payload += bytes((left_port, right_port))
+        payload += wheel_diameter_mm.to_bytes(2, "little")
+        payload += axle_track_mm.to_bytes(2, "little")
+        payload += distance_mm.to_bytes(4, "little", signed=True)
+        payload += bytes((speed_percent, stop_mode))
+    elif any(
+        value is not None
+        for value in (
+            left_port,
+            right_port,
+            wheel_diameter_mm,
+            axle_track_mm,
+            distance_mm,
+            speed_percent,
+            stop_mode,
+        )
+    ):
+        raise ValueError("drive parameters are valid only for the start action")
+    return build_frame(DRIVE_STRAIGHT_COMMAND, payload)
+
+
+def build_drive_run_frame(
+    action: int,
+    left_port: int | None = None,
+    right_port: int | None = None,
+    mode: int | None = None,
+    target_value: int | None = None,
+    speed_percent: int | None = None,
+    stop_mode: int | None = None,
+) -> bytes:
+    if not 0 <= action <= 0xFF:
+        raise ValueError("drive run action must fit uint8")
+    payload = bytes((action,))
+    if action == DRIVE_RUN_ACTION_START:
+        if left_port not in (0, 1, 2, 3) or right_port not in (0, 1, 2, 3):
+            raise ValueError("drive motor ports must be 0, 1, 2, or 3")
+        if left_port == right_port:
+            raise ValueError("drive motor ports must differ")
+        if mode not in (DRIVE_RUN_MODE_DEGREES, DRIVE_RUN_MODE_TIME_MS):
+            raise ValueError("drive run mode must be degrees or time")
+        if target_value is None or target_value == 0:
+            raise ValueError("drive target must not be zero")
+        if mode == DRIVE_RUN_MODE_DEGREES and not -3600 <= target_value <= 3600:
+            raise ValueError("drive degrees must be between -3600 and 3600")
+        if mode == DRIVE_RUN_MODE_TIME_MS and not -600000 <= target_value <= 600000:
+            raise ValueError("drive time must be between -600000 and 600000 ms")
+        if speed_percent is None or not 10 <= speed_percent <= 100:
+            raise ValueError("drive speed must be between 10 and 100 percent")
+        if stop_mode not in (0, 1):
+            raise ValueError("drive stop mode must be coast or brake")
+        if mode == DRIVE_RUN_MODE_DEGREES and stop_mode != 0:
+            raise ValueError("drive degrees currently supports coast stop only")
+        payload += bytes((left_port, right_port, mode))
+        payload += target_value.to_bytes(4, "little", signed=True)
+        payload += bytes((speed_percent, stop_mode))
+    elif any(
+        value is not None
+        for value in (
+            left_port,
+            right_port,
+            mode,
+            target_value,
+            speed_percent,
+            stop_mode,
+        )
+    ):
+        raise ValueError("drive run parameters are valid only for the start action")
+    return build_frame(DRIVE_RUN_COMMAND, payload)
 
 
 def build_input_sensor_frame(
@@ -883,6 +1021,72 @@ def parse_motor_pair_speed_response(report: bytes) -> MotorPairSpeedResult | Non
             report[27:31], "little", signed=True
         ),
         error=int.from_bytes(report[31:32], "little", signed=True),
+    )
+
+
+def parse_drive_straight_response(report: bytes) -> DriveStraightResult | None:
+    if len(report) < 44:
+        return None
+    if report[0] != FRAME_START:
+        return None
+    if report[1] != DEVICE_DIRECTION or report[2] != DRIVE_STRAIGHT_COMMAND:
+        return None
+    if report[3:5] != b"\x25\x00" or report[43] != FRAME_END:
+        return None
+    if checksum(report[:42]) != report[42]:
+        return None
+    return DriveStraightResult(
+        result=report[5],
+        state=report[6],
+        left_port=report[7],
+        right_port=report[8],
+        target_distance_mm=int.from_bytes(report[9:13], "little", signed=True),
+        actual_distance_mm=int.from_bytes(report[13:17], "little", signed=True),
+        left_target_degrees=int.from_bytes(report[17:21], "little", signed=True),
+        right_target_degrees=int.from_bytes(report[21:25], "little", signed=True),
+        left_actual_degrees=int.from_bytes(report[25:29], "little", signed=True),
+        right_actual_degrees=int.from_bytes(report[29:33], "little", signed=True),
+        synchronization_error_degrees=int.from_bytes(
+            report[33:37], "little", signed=True
+        ),
+        maximum_synchronization_error_degrees=int.from_bytes(
+            report[37:41], "little", signed=True
+        ),
+        error=int.from_bytes(report[41:42], "little", signed=True),
+    )
+
+
+def parse_drive_run_response(report: bytes) -> DriveRunResult | None:
+    if len(report) < 38:
+        return None
+    if report[0] != FRAME_START:
+        return None
+    if report[1] != DEVICE_DIRECTION or report[2] != DRIVE_RUN_COMMAND:
+        return None
+    if report[3:5] != b"\x1f\x00" or report[37] != FRAME_END:
+        return None
+    if checksum(report[:36]) != report[36]:
+        return None
+    return DriveRunResult(
+        result=report[5],
+        state=report[6],
+        mode=report[7],
+        left_port=report[8],
+        right_port=report[9],
+        requested_speed_percent=int.from_bytes(
+            report[10:11], "little", signed=True
+        ),
+        target_value=int.from_bytes(report[11:15], "little", signed=True),
+        actual_value=int.from_bytes(report[15:19], "little", signed=True),
+        left_actual_degrees=int.from_bytes(report[19:23], "little", signed=True),
+        right_actual_degrees=int.from_bytes(report[23:27], "little", signed=True),
+        synchronization_error_degrees=int.from_bytes(
+            report[27:31], "little", signed=True
+        ),
+        maximum_synchronization_error_degrees=int.from_bytes(
+            report[31:35], "little", signed=True
+        ),
+        error=int.from_bytes(report[35:36], "little", signed=True),
     )
 
 

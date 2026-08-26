@@ -7,6 +7,8 @@ from pathlib import Path
 
 from .constants import (
     DEVICE_CAPABILITY_BATTERY,
+    DEVICE_CAPABILITY_DRIVE_STRAIGHT,
+    DEVICE_CAPABILITY_DRIVE_RUN,
     DEVICE_CAPABILITY_INPUT_SENSOR,
     DEVICE_CAPABILITY_KEYS,
     DEVICE_CAPABILITY_MOTOR_CONTROL,
@@ -220,6 +222,66 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     motor_pair_speed.add_argument(
         "--stop", choices=("coast", "brake"), default="coast",
         help="观察结束时显式自由滑行或刹车，默认 coast",
+    )
+
+    drive_straight = commands.add_parser(
+        "drive-straight", help="按轮径把毫米距离换算为双电机同步直行"
+    )
+    add_device_options(drive_straight)
+    drive_straight.add_argument(
+        "--left-port", choices=("A", "B", "C", "D"), default="A",
+        help="左轮输出端口，默认 A",
+    )
+    drive_straight.add_argument(
+        "--right-port", choices=("A", "B", "C", "D"), default="C",
+        help="右轮输出端口，默认 C",
+    )
+    drive_straight.add_argument(
+        "--wheel-diameter", type=int, default=56,
+        help="轮胎直径，单位毫米，默认 56",
+    )
+    drive_straight.add_argument(
+        "--axle-track", type=int, default=120,
+        help="左右轮中心距，单位毫米，默认 120；首版直行暂不参与换算",
+    )
+    drive_straight.add_argument(
+        "--distance", type=int, default=500,
+        help="直行距离，单位毫米，负数后退，默认 500",
+    )
+    drive_straight.add_argument(
+        "--speed", type=int, default=40,
+        help="最大目标速度，范围 10-100，默认 40",
+    )
+
+    drive_run = commands.add_parser(
+        "drive-run", help="按圈数、角度或秒数控制双电机直行"
+    )
+    add_device_options(drive_run)
+    drive_run.add_argument(
+        "--left-port", choices=("A", "B", "C", "D"), default="A",
+        help="左轮输出端口，默认 A",
+    )
+    drive_run.add_argument(
+        "--right-port", choices=("A", "B", "C", "D"), default="C",
+        help="右轮输出端口，默认 C",
+    )
+    drive_target = drive_run.add_mutually_exclusive_group(required=True)
+    drive_target.add_argument(
+        "--rotations", type=float, help="有方向的轮子圈数，负数后退"
+    )
+    drive_target.add_argument(
+        "--degrees", type=int, help="有方向的轮子角度，负数后退"
+    )
+    drive_target.add_argument(
+        "--seconds", type=float, help="有方向的运行秒数，负数后退"
+    )
+    drive_run.add_argument(
+        "--speed", type=int, default=40,
+        help="目标速度，范围 10-100，默认 40",
+    )
+    drive_run.add_argument(
+        "--stop", choices=("coast", "brake"), default="coast",
+        help="按秒模式到时自由滑行或主动刹车；角度/圈数当前仅支持 coast",
     )
 
     motor_pair_control = commands.add_parser(
@@ -443,6 +505,8 @@ DEVICE_CAPABILITY_NAMES = (
     (DEVICE_CAPABILITY_MOTOR_POSITION, "motor-position"),
     (DEVICE_CAPABILITY_MOTOR_PAIR_POSITION, "motor-pair-position"),
     (DEVICE_CAPABILITY_MOTOR_PAIR_SPEED, "motor-pair-speed"),
+    (DEVICE_CAPABILITY_DRIVE_STRAIGHT, "drive-straight"),
+    (DEVICE_CAPABILITY_DRIVE_RUN, "drive-run"),
 )
 
 
@@ -1523,6 +1587,185 @@ def run_motor_pair_speed(args: argparse.Namespace) -> int:
                     print("safe_final_state=unconfirmed", flush=True)
 
 
+def run_drive_straight(args: argparse.Namespace) -> int:
+    if args.left_port == args.right_port:
+        raise ValueError("左右轮端口不能相同")
+    if not 1 <= args.wheel_diameter <= 0xFFFF:
+        raise ValueError("--wheel-diameter 必须在 1 到 65535 毫米之间")
+    if not 1 <= args.axle_track <= 0xFFFF:
+        raise ValueError("--axle-track 必须在 1 到 65535 毫米之间")
+    if args.distance == 0:
+        raise ValueError("--distance 不能为 0")
+    if not 10 <= args.speed <= 100:
+        raise ValueError("--speed 必须在 10 到 100 之间")
+    numerator = args.distance * 360 * 113
+    denominator = args.wheel_diameter * 355
+    target_degrees = (
+        (numerator + denominator // 2) // denominator
+        if numerator >= 0
+        else -((-numerator + denominator // 2) // denominator)
+    )
+    if target_degrees == 0 or not -3600 <= target_degrees <= 3600:
+        raise ValueError("当前轮径和距离换算后的轮角度必须在 -3600 到 3600 之间且不能为 0")
+
+    port_numbers = {"A": 0, "B": 1, "C": 2, "D": 3}
+    left_port = port_numbers[args.left_port]
+    right_port = port_numbers[args.right_port]
+    with open_transport(args) as transport:
+        print(f"device={transport.path}", flush=True)
+        updater = FirmwareUpdater(transport)
+        print(f"current_version={updater.ping()}", flush=True)
+        print(f"drive_ports={args.left_port},{args.right_port}", flush=True)
+        print(f"wheel_diameter_mm={args.wheel_diameter}", flush=True)
+        print(f"axle_track_mm={args.axle_track}", flush=True)
+        print(f"target_distance_mm={args.distance}", flush=True)
+        print(f"expected_wheel_degrees={target_degrees}", flush=True)
+        print(f"maximum_speed={args.speed}%", flush=True)
+        started = False
+        try:
+            result = updater.start_drive_straight(
+                left_port,
+                right_port,
+                args.wheel_diameter,
+                args.axle_track,
+                args.distance,
+                args.speed,
+            )
+            if result.result == 2:
+                raise EstUpdaterError(
+                    "设备未启动直行；请确认两端口已有马达且没有其他任务"
+                )
+            if result.result != 1:
+                raise EstUpdaterError("设备拒绝了底盘直行参数")
+            started = True
+            while True:
+                print(
+                    f"drive_state={DRIVE_STATES.get(result.state, 'unknown')} "
+                    f"distance={result.actual_distance_mm}/"
+                    f"{result.target_distance_mm}mm "
+                    f"actual={result.left_actual_degrees},"
+                    f"{result.right_actual_degrees} "
+                    f"sync_error={result.synchronization_error_degrees} "
+                    f"max_sync_error={result.maximum_synchronization_error_degrees}",
+                    flush=True,
+                )
+                if result.state == 2:
+                    print("drive_straight=complete", flush=True)
+                    return 0
+                if result.state == 3:
+                    raise EstUpdaterError(
+                        f"底盘直行故障，错误码 {result.error}"
+                    )
+                time.sleep(0.2)
+                result = updater.read_drive_straight_status()
+        finally:
+            if started:
+                try:
+                    stopped = updater.stop_drive_straight()
+                    if stopped.result != 1:
+                        raise EstUpdaterError("最终底盘自由滑行命令被拒绝")
+                    print("safe_final_state=coast", flush=True)
+                except (EstUpdaterError, OSError):
+                    print("safe_final_state=unconfirmed", flush=True)
+
+
+def run_drive_run(args: argparse.Namespace) -> int:
+    if args.left_port == args.right_port:
+        raise ValueError("左右轮端口不能相同")
+    if not 10 <= args.speed <= 100:
+        raise ValueError("--speed 必须在 10 到 100 之间")
+    if args.rotations is not None:
+        if args.rotations == 0 or not -10 <= args.rotations <= 10:
+            raise ValueError("--rotations 必须在 -10 到 10 圈之间且不能为 0")
+        target_value = int(round(args.rotations * 360.0))
+        if target_value == 0:
+            raise ValueError("圈数换算后的角度不能为 0")
+        mode = 0
+        target_unit = "rotations"
+        target_input = args.rotations
+    elif args.degrees is not None:
+        if args.degrees == 0 or not -3600 <= args.degrees <= 3600:
+            raise ValueError("--degrees 必须在 -3600 到 3600 之间且不能为 0")
+        target_value = args.degrees
+        mode = 0
+        target_unit = "degrees"
+        target_input = args.degrees
+    else:
+        if args.seconds == 0 or not -600.0 <= args.seconds <= 600.0:
+            raise ValueError("--seconds 必须在 -600 到 600 秒之间且不能为 0")
+        target_value = int(round(args.seconds * 1000.0))
+        if target_value == 0:
+            raise ValueError("秒数换算后的毫秒数不能为 0")
+        mode = 1
+        target_unit = "seconds"
+        target_input = args.seconds
+    if mode == 0 and args.stop != "coast":
+        raise ValueError("角度和圈数模式当前只支持 --stop coast")
+
+    port_numbers = {"A": 0, "B": 1, "C": 2, "D": 3}
+    left_port = port_numbers[args.left_port]
+    right_port = port_numbers[args.right_port]
+    with open_transport(args) as transport:
+        print(f"device={transport.path}", flush=True)
+        updater = FirmwareUpdater(transport)
+        print(f"current_version={updater.ping()}", flush=True)
+        print(f"drive_ports={args.left_port},{args.right_port}", flush=True)
+        print(f"target_unit={target_unit}", flush=True)
+        print(f"target_input={target_input:g}", flush=True)
+        print(f"firmware_target={target_value}", flush=True)
+        print(f"speed={args.speed}%", flush=True)
+        print(f"stop_mode={args.stop}", flush=True)
+        started = False
+        try:
+            result = updater.start_drive_run(
+                left_port,
+                right_port,
+                mode,
+                target_value,
+                args.speed,
+                args.stop,
+            )
+            if result.result == 2:
+                raise EstUpdaterError(
+                    "设备未启动直行；请确认两端口已有马达且没有其他任务"
+                )
+            if result.result != 1:
+                raise EstUpdaterError("设备拒绝了圈/度/秒直行参数")
+            started = True
+            while True:
+                value_suffix = "ms" if result.mode == 1 else "deg"
+                print(
+                    f"drive_state={DRIVE_STATES.get(result.state, 'unknown')} "
+                    f"progress={result.actual_value}/"
+                    f"{result.target_value}{value_suffix} "
+                    f"actual={result.left_actual_degrees},"
+                    f"{result.right_actual_degrees} "
+                    f"sync_error={result.synchronization_error_degrees} "
+                    f"max_sync_error={result.maximum_synchronization_error_degrees}",
+                    flush=True,
+                )
+                if result.state == 2:
+                    print("drive_run=complete", flush=True)
+                    return 0
+                if result.state == 3:
+                    raise EstUpdaterError(
+                        f"圈/度/秒直行故障，错误码 {result.error}"
+                    )
+                if result.state == 0:
+                    raise EstUpdaterError("圈/度/秒直行在完成前意外停止")
+                time.sleep(0.2)
+                result = updater.read_drive_run_status()
+        finally:
+            if started:
+                try:
+                    stopped = updater.stop_drive_run()
+                    if stopped.result != 1:
+                        raise EstUpdaterError("最终底盘自由滑行命令被拒绝")
+                    print("safe_final_state=coast", flush=True)
+                except (EstUpdaterError, OSError):
+                    print("safe_final_state=unconfirmed", flush=True)
+
+
 def run_motor_pair_control(args: argparse.Namespace) -> int:
     powers = (args.first_power, args.second_power)
     if any(power == 0 or not -100 <= power <= 100 for power in powers):
@@ -1733,6 +1976,10 @@ def main(argv: list[str] | None = None) -> int:
             return run_motor_pair_position(args)
         if args.mode == "motor-pair-speed":
             return run_motor_pair_speed(args)
+        if args.mode == "drive-straight":
+            return run_drive_straight(args)
+        if args.mode == "drive-run":
+            return run_drive_run(args)
         if args.mode == "motor-pair-control":
             return run_motor_pair_control(args)
         if args.mode == "sensor-read":

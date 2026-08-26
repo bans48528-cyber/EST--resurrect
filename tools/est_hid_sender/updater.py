@@ -8,6 +8,12 @@ from typing import Literal, Protocol
 
 from .constants import (
     DEVICE_STATUS_TIMEOUT_SECONDS,
+    DRIVE_STRAIGHT_ACTION_START,
+    DRIVE_STRAIGHT_ACTION_STATUS,
+    DRIVE_STRAIGHT_ACTION_STOP,
+    DRIVE_RUN_ACTION_START,
+    DRIVE_RUN_ACTION_STATUS,
+    DRIVE_RUN_ACTION_STOP,
     FIRST_PACKET_ACK_TIMEOUT_SECONDS,
     FLASH_DIAGNOSTIC_TIMEOUT_SECONDS,
     FLASH_ID_TIMEOUT_SECONDS,
@@ -54,6 +60,8 @@ from .errors import (
     HeartbeatTimeoutError,
 )
 from .protocol import (
+    build_drive_straight_frame,
+    build_drive_run_frame,
     build_device_status_frame,
     build_heartbeat_frame,
     build_input_sensor_frame,
@@ -75,6 +83,8 @@ from .protocol import (
     build_motor_type_frame,
     build_update_frame,
     parse_heartbeat_response,
+    parse_drive_straight_response,
+    parse_drive_run_response,
     parse_device_status_response,
     parse_input_sensor_response,
     parse_flash_id_response,
@@ -111,6 +121,8 @@ from .protocol import (
     MotorTypeResult,
     InputSensorResult,
     DeviceStatus,
+    DriveStraightResult,
+    DriveRunResult,
 )
 
 
@@ -625,6 +637,123 @@ class FirmwareUpdater:
                 return result
         raise DiagnosticTimeoutError(
             "设备没有返回双马达持续定速状态；请确认固件支持 motor-pair-speed 命令"
+        )
+
+    def start_drive_straight(
+        self,
+        left_port: int,
+        right_port: int,
+        wheel_diameter_mm: int,
+        axle_track_mm: int,
+        distance_mm: int,
+        speed_percent: int,
+    ) -> DriveStraightResult:
+        return self._drive_straight_action(
+            DRIVE_STRAIGHT_ACTION_START,
+            left_port=left_port,
+            right_port=right_port,
+            wheel_diameter_mm=wheel_diameter_mm,
+            axle_track_mm=axle_track_mm,
+            distance_mm=distance_mm,
+            speed_percent=speed_percent,
+            stop_mode=0,
+        )
+
+    def read_drive_straight_status(self) -> DriveStraightResult:
+        return self._drive_straight_action(DRIVE_STRAIGHT_ACTION_STATUS)
+
+    def stop_drive_straight(self) -> DriveStraightResult:
+        return self._drive_straight_action(DRIVE_STRAIGHT_ACTION_STOP)
+
+    def _drive_straight_action(
+        self,
+        action: int,
+        left_port: int | None = None,
+        right_port: int | None = None,
+        wheel_diameter_mm: int | None = None,
+        axle_track_mm: int | None = None,
+        distance_mm: int | None = None,
+        speed_percent: int | None = None,
+        stop_mode: int | None = None,
+    ) -> DriveStraightResult:
+        report = build_drive_straight_frame(
+            action,
+            left_port=left_port,
+            right_port=right_port,
+            wheel_diameter_mm=wheel_diameter_mm,
+            axle_track_mm=axle_track_mm,
+            distance_mm=distance_mm,
+            speed_percent=speed_percent,
+            stop_mode=stop_mode,
+        ).ljust(LEGACY_REPORT_SIZE, b"\x00")
+        self.transport.write_report(report)
+        deadline = time.monotonic() + MOTOR_TEST_TIMEOUT_SECONDS
+        while time.monotonic() < deadline:
+            response = self.transport.read_report()
+            if not response:
+                continue
+            result = parse_drive_straight_response(response)
+            if result is not None:
+                return result
+        raise DiagnosticTimeoutError(
+            "设备没有返回底盘直行状态；请确认固件支持 drive-straight 命令"
+        )
+
+    def start_drive_run(
+        self,
+        left_port: int,
+        right_port: int,
+        mode: int,
+        target_value: int,
+        speed_percent: int,
+        stop_mode: Literal["coast", "brake"] = "coast",
+    ) -> DriveRunResult:
+        return self._drive_run_action(
+            DRIVE_RUN_ACTION_START,
+            left_port=left_port,
+            right_port=right_port,
+            mode=mode,
+            target_value=target_value,
+            speed_percent=speed_percent,
+            stop_mode=1 if stop_mode == "brake" else 0,
+        )
+
+    def read_drive_run_status(self) -> DriveRunResult:
+        return self._drive_run_action(DRIVE_RUN_ACTION_STATUS)
+
+    def stop_drive_run(self) -> DriveRunResult:
+        return self._drive_run_action(DRIVE_RUN_ACTION_STOP)
+
+    def _drive_run_action(
+        self,
+        action: int,
+        left_port: int | None = None,
+        right_port: int | None = None,
+        mode: int | None = None,
+        target_value: int | None = None,
+        speed_percent: int | None = None,
+        stop_mode: int | None = None,
+    ) -> DriveRunResult:
+        report = build_drive_run_frame(
+            action,
+            left_port=left_port,
+            right_port=right_port,
+            mode=mode,
+            target_value=target_value,
+            speed_percent=speed_percent,
+            stop_mode=stop_mode,
+        ).ljust(LEGACY_REPORT_SIZE, b"\x00")
+        self.transport.write_report(report)
+        deadline = time.monotonic() + MOTOR_TEST_TIMEOUT_SECONDS
+        while time.monotonic() < deadline:
+            response = self.transport.read_report()
+            if not response:
+                continue
+            result = parse_drive_run_response(response)
+            if result is not None:
+                return result
+        raise DiagnosticTimeoutError(
+            "设备没有返回圈/度/秒直行状态；请确认固件支持 drive-run 命令"
         )
 
     def start_motor_speed(

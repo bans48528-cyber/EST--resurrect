@@ -448,6 +448,81 @@ class CliTests(unittest.TestCase):
         self.assertEqual(transport.motor_pair_speed_state, 0)
         self.assertNotIn("未按时完成", pair_command)
 
+    def test_drive_straight_reports_distance_and_finishes_safe(self) -> None:
+        output = io.StringIO()
+        transport = FakeTransport()
+        with mock.patch.object(cli.HidTransport, "open", return_value=transport), \
+             mock.patch.object(cli.time, "sleep"):
+            with contextlib.redirect_stdout(output):
+                self.assertEqual(
+                    cli.main(
+                        [
+                            "drive-straight",
+                            "--left-port", "A",
+                            "--right-port", "C",
+                            "--wheel-diameter", "56",
+                            "--axle-track", "120",
+                            "--distance", "500",
+                            "--speed", "40",
+                        ]
+                    ),
+                    0,
+                )
+        text = output.getvalue()
+        self.assertIn("drive_ports=A,C", text)
+        self.assertIn("target_distance_mm=500", text)
+        self.assertIn("expected_wheel_degrees=1023", text)
+        self.assertIn("distance=250/500mm", text)
+        self.assertIn("drive_straight=complete", text)
+        self.assertIn("safe_final_state=coast", text)
+        self.assertEqual(transport.drive_straight_state, 0)
+
+    def test_drive_run_accepts_rotations_and_firmware_timed_seconds(self) -> None:
+        rotations_output = io.StringIO()
+        rotations_transport = FakeTransport()
+        with mock.patch.object(
+            cli.HidTransport, "open", return_value=rotations_transport
+        ), mock.patch.object(cli.time, "sleep"):
+            with contextlib.redirect_stdout(rotations_output):
+                self.assertEqual(
+                    cli.main(
+                        [
+                            "drive-run", "--left-port", "A", "--right-port", "C",
+                            "--rotations", "2.5", "--speed", "40",
+                        ]
+                    ),
+                    0,
+                )
+        rotations_text = rotations_output.getvalue()
+        self.assertIn("target_unit=rotations", rotations_text)
+        self.assertIn("firmware_target=900", rotations_text)
+        self.assertIn("progress=450/900deg", rotations_text)
+        self.assertIn("drive_run=complete", rotations_text)
+        self.assertIn("safe_final_state=coast", rotations_text)
+
+        seconds_output = io.StringIO()
+        seconds_transport = FakeTransport()
+        with mock.patch.object(
+            cli.HidTransport, "open", return_value=seconds_transport
+        ), mock.patch.object(cli.time, "sleep"):
+            with contextlib.redirect_stdout(seconds_output):
+                self.assertEqual(
+                    cli.main(
+                        [
+                            "drive-run", "--left-port", "A", "--right-port", "C",
+                            "--seconds", "-3", "--speed", "60", "--stop", "brake",
+                        ]
+                    ),
+                    0,
+                )
+        seconds_text = seconds_output.getvalue()
+        self.assertIn("target_unit=seconds", seconds_text)
+        self.assertIn("firmware_target=-3000", seconds_text)
+        self.assertIn("progress=-1500/-3000ms", seconds_text)
+        self.assertIn("drive_run=complete", seconds_text)
+        self.assertIn("safe_final_state=coast", seconds_text)
+        self.assertEqual(seconds_transport.drive_run_state, 0)
+
     def test_motor_pair_control_runs_two_ports_independently(self) -> None:
         output = io.StringIO()
         transport = FakeTransport()

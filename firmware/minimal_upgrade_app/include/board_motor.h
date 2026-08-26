@@ -97,7 +97,8 @@ struct board_motor_speed_snapshot {
 
 enum board_motor_pair_speed_state {
 	BOARD_MOTOR_PAIR_SPEED_IDLE = 0,
-	BOARD_MOTOR_PAIR_SPEED_RUNNING = 1
+	BOARD_MOTOR_PAIR_SPEED_RUNNING = 1,
+	BOARD_MOTOR_PAIR_SPEED_COMPLETE = 2
 };
 
 struct board_motor_pair_speed_snapshot {
@@ -116,6 +117,8 @@ struct board_motor_pair_speed_snapshot {
 	int32_t right_current_count;
 	int32_t synchronization_error_count;
 	int32_t maximum_synchronization_error_count;
+	uint32_t duration_ms;
+	uint32_t elapsed_ms;
 };
 
 enum board_motor_test_state {
@@ -205,6 +208,10 @@ struct board_motor_speed_snapshot board_motor_speed_snapshot(void);
 bool board_motor_start_pair_speed(uint32_t now_ms,
 	enum board_motor_port left_port, int8_t left_speed_percent,
 	enum board_motor_port right_port, int8_t right_speed_percent);
+bool board_motor_start_pair_speed_for_time(uint32_t now_ms,
+	enum board_motor_port left_port, int8_t left_speed_percent,
+	enum board_motor_port right_port, int8_t right_speed_percent,
+	uint32_t duration_ms, enum board_motor_stop_mode stop_mode);
 bool board_motor_stop_pair_speed(enum board_motor_stop_mode stop_mode);
 struct board_motor_pair_speed_snapshot board_motor_pair_speed_snapshot(void);
 bool board_motor_start_test(uint32_t now_ms);
