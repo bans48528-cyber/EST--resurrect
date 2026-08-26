@@ -12,6 +12,7 @@
 #include "board_sensor.h"
 #include "est_drive.h"
 #include "est_motor.h"
+#include "est_sensor.h"
 #include "update_protocol.h"
 #include "update_storage.h"
 #include "usb_hid.h"
@@ -421,10 +422,10 @@ static void queue_motor_control_result(uint8_t result,
 
 static void queue_input_sensor_result(uint8_t result, uint8_t port)
 {
-	struct board_sensor_snapshot snapshot = {0};
+	est_sensor_status_t status = {0};
 	uint8_t report[USB_HID_REPORT_SIZE] = {0};
 
-	(void)board_sensor_get_snapshot((enum board_sensor_port)port, &snapshot);
+	(void)est_sensor_get_status((est_sensor_port_t)port, &status);
 	report[0] = FRAME_START_BYTE;
 	report[1] = DEVICE_FRAME_DIRECTION;
 	report[2] = INPUT_SENSOR_COMMAND;
@@ -432,16 +433,16 @@ static void queue_input_sensor_result(uint8_t result, uint8_t port)
 	report[4] = 0U;
 	report[5] = result;
 	report[6] = port;
-	report[7] = (uint8_t)snapshot.state;
-	report[8] = snapshot.sensor_type;
-	report[9] = snapshot.mode;
-	report[10] = snapshot.value_valid ? 1U : 0U;
-	write_u16_le(&report[11], snapshot.value);
-	write_u16_le(&report[13], snapshot.adc0_raw);
-	write_u16_le(&report[15], snapshot.adc1_raw);
-	report[17] = snapshot.digital_mask;
-	write_u32_le(&report[18], snapshot.rx_count);
-	write_u16_le(&report[22], snapshot.checksum_errors);
+	report[7] = (uint8_t)status.state;
+	report[8] = status.raw_type;
+	report[9] = (uint8_t)status.mode;
+	report[10] = status.value_valid ? 1U : 0U;
+	write_u16_le(&report[11], status.raw_value);
+	write_u16_le(&report[13], status.adc0_raw);
+	write_u16_le(&report[15], status.adc1_raw);
+	report[17] = status.digital_mask;
+	write_u32_le(&report[18], status.rx_count);
+	write_u16_le(&report[22], status.checksum_errors);
 	report[24] = checksum(report, 24U);
 	report[25] = FRAME_END_BYTE;
 	(void)usb_hid_queue_report(report, false);
@@ -734,18 +735,17 @@ static void queue_device_status(uint32_t now_ms)
 		entry[1] = (uint8_t)motor.power_percent;
 		write_i32_le(&entry[2], motor.tacho_count);
 	}
-	for (index = 0U; index < BOARD_SENSOR_PORT_COUNT; index++) {
-		struct board_sensor_snapshot sensor = {0};
+	for (index = 0U; index < EST_SENSOR_PORT_COUNT; index++) {
+		est_sensor_status_t sensor = {0};
 		uint8_t *entry = &payload[DEVICE_STATUS_SENSOR_OFFSET +
 			(index * DEVICE_STATUS_PORT_ENTRY_LENGTH)];
 
-		(void)board_sensor_get_snapshot((enum board_sensor_port)index,
-			&sensor);
+		(void)est_sensor_get_status((est_sensor_port_t)index, &sensor);
 		entry[0] = (uint8_t)sensor.state;
-		entry[1] = sensor.sensor_type;
-		entry[2] = sensor.mode;
+		entry[1] = sensor.raw_type;
+		entry[2] = (uint8_t)sensor.mode;
 		entry[3] = sensor.value_valid ? 1U : 0U;
-		write_u16_le(&entry[4], sensor.value);
+		write_u16_le(&entry[4], sensor.raw_value);
 	}
 	report[5U + DEVICE_STATUS_PAYLOAD_LENGTH] = checksum(report,
 		5U + DEVICE_STATUS_PAYLOAD_LENGTH);
@@ -1158,26 +1158,25 @@ static void handle_drive_steer_for(const uint8_t *data,
 	queue_drive_steer_for_result(result);
 }
 
-static void handle_input_sensor(const uint8_t *data, uint16_t data_length,
-	uint32_t now_ms)
+static void handle_input_sensor(const uint8_t *data, uint16_t data_length)
 {
 	uint8_t action = data[0];
 	uint8_t port = data[1];
 	uint8_t result = 1U;
 
-	if (port >= BOARD_SENSOR_PORT_COUNT) {
+	if (port >= EST_SENSOR_PORT_COUNT) {
 		result = 0U;
 	} else if (action == INPUT_SENSOR_ACTION_STATUS && data_length == 2U) {
 		/* Status is always available, including during synchronisation. */
 	} else if (action == INPUT_SENSOR_ACTION_SET_MODE && data_length == 3U) {
-		if (data[2] > BOARD_SENSOR_MODE_COLOR) {
+		if (data[2] > EST_SENSOR_MODE_COLOR) {
 			result = 0U;
-		} else if (!board_sensor_set_mode((enum board_sensor_port)port,
-			   (enum board_sensor_mode)data[2], now_ms)) {
+		} else if (est_sensor_set_mode((est_sensor_port_t)port,
+			   (est_sensor_mode_t)data[2]) != EST_OK) {
 			result = 2U;
 		}
 	} else if (action == INPUT_SENSOR_ACTION_RESTART && data_length == 2U) {
-		if (!board_sensor_restart((enum board_sensor_port)port, now_ms)) {
+		if (est_sensor_restart((est_sensor_port_t)port) != EST_OK) {
 			result = 0U;
 		}
 	} else {
@@ -1321,7 +1320,7 @@ static void handle_logical_frame(uint32_t now_ms)
 		handle_motor_control(&logical_frame[5], data_length);
 	} else if (logical_frame[2] == INPUT_SENSOR_COMMAND &&
 		   (data_length == 2U || data_length == 3U)) {
-		handle_input_sensor(&logical_frame[5], data_length, now_ms);
+		handle_input_sensor(&logical_frame[5], data_length);
 	} else if (logical_frame[2] == DEVICE_STATUS_COMMAND && data_length == 0U) {
 		queue_device_status(now_ms);
 	} else if (logical_frame[2] == MOTOR_TYPE_COMMAND &&

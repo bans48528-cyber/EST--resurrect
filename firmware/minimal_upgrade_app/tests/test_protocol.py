@@ -161,6 +161,29 @@ class EstServiceApiTests(unittest.TestCase):
         self.assertIn("board_motor_start_position(system_time_millis()", source)
         self.assertIn("return EST_ERR_NOT_SUPPORTED;", source)
 
+    def test_sensor_contract_wraps_the_verified_board_driver(self) -> None:
+        header = (ROOT / "include" / "est_sensor.h").read_text(encoding="utf-8")
+        source = (SOURCE_DIR / "est_sensor.c").read_text(encoding="utf-8")
+        protocol = (SOURCE_DIR / "update_protocol.c").read_text(encoding="utf-8")
+        for function in (
+            "est_sensor_get_type",
+            "est_sensor_set_mode",
+            "est_sensor_restart",
+            "est_sensor_get_status",
+        ):
+            self.assertIn(function, header)
+            self.assertIn(function, source)
+        self.assertIn("board_sensor_get_snapshot", source)
+        self.assertIn("board_sensor_set_mode", source)
+        self.assertIn("board_sensor_restart", source)
+        self.assertIn('#include "est_sensor.h"', protocol)
+        self.assertIn("est_sensor_set_mode", protocol)
+        self.assertIn("est_sensor_restart", protocol)
+        self.assertIn("est_sensor_get_status", protocol)
+        self.assertNotIn("board_sensor_get_snapshot", protocol)
+        self.assertNotIn("board_sensor_set_mode", protocol)
+        self.assertNotIn("board_sensor_restart", protocol)
+
     def test_drive_contract_is_frozen_before_sync_implementation(self) -> None:
         drive = (ROOT / "include" / "est_drive.h").read_text(encoding="utf-8")
         for function in (
@@ -892,6 +915,8 @@ class BoardModuleLayoutTests(unittest.TestCase):
         self.assertIn("INPUT_SENSOR_COMMAND            0x18U", config)
         self.assertIn("handle_input_sensor", protocol)
         self.assertIn("queue_input_sensor_result", protocol)
+        self.assertIn("est_sensor_set_mode", protocol)
+        self.assertIn("est_sensor_restart", protocol)
         self.assertIn("board_sensor_stop();", protocol)
 
     def test_device_status_is_additive_and_returns_all_runtime_subsystems(self) -> None:
@@ -903,7 +928,7 @@ class BoardModuleLayoutTests(unittest.TestCase):
         self.assertIn("board_battery_snapshot()", protocol)
         self.assertIn("board_keys_pressed_mask()", protocol)
         self.assertIn("board_motor_control_snapshot", protocol)
-        self.assertIn("board_sensor_get_snapshot", protocol)
+        self.assertIn("est_sensor_get_status", protocol)
         self.assertIn("queue_device_status(now_ms);", protocol)
         self.assertIn("UPDATE_COMMAND                  0x05U", config)
 
