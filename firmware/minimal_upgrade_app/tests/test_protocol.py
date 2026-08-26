@@ -263,6 +263,20 @@ class BoardModuleLayoutTests(unittest.TestCase):
         self.assertLess(interrupts, lcd_init)
         self.assertLess(lcd_init, lcd_version)
 
+    def test_lcd_uses_conservative_cold_start_reset_timing(self) -> None:
+        lcd = (SOURCE_DIR / "board_lcd.c").read_text(encoding="utf-8")
+        for timing in (
+            "LCD_RESET_IDLE_MS 50U",
+            "LCD_RESET_ASSERT_MS 30U",
+            "LCD_RESET_RELEASE_MS 250U",
+            "LCD_CONTROLLER_SETTLE_MS 100U",
+        ):
+            self.assertIn(timing, lcd)
+        self.assertIn("lcd_delay_ms(LCD_RESET_IDLE_MS);", lcd)
+        self.assertIn("lcd_delay_ms(LCD_RESET_ASSERT_MS);", lcd)
+        self.assertIn("lcd_delay_ms(LCD_RESET_RELEASE_MS);", lcd)
+        self.assertIn("lcd_delay_ms(LCD_CONTROLLER_SETTLE_MS);", lcd)
+
     def test_external_flash_write_test_is_guarded_and_recoverable(self) -> None:
         header = (ROOT / "include" / "board_flash.h").read_text(encoding="utf-8")
         source = (SOURCE_DIR / "board_flash.c").read_text(encoding="utf-8")

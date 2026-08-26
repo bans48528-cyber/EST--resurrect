@@ -28,6 +28,17 @@ _Static_assert(LCD_MOTOR_COLUMN_X +
 #define LCD_RESET_PORT GPIOD
 #define LCD_RESET_PIN GPIO15
 
+/*
+ * Some production LCD modules need substantially more time than the first
+ * development unit before accepting UC1638 commands.  Keep these delays near
+ * the conservative sequence used by the original EST firmware so a cold LCD
+ * is fully powered before its controller is configured.
+ */
+#define LCD_RESET_IDLE_MS 50U
+#define LCD_RESET_ASSERT_MS 30U
+#define LCD_RESET_RELEASE_MS 250U
+#define LCD_CONTROLLER_SETTLE_MS 100U
+
 static uint8_t framebuffer[LCD_WIDTH][LCD_PAGES];
 
 static const uint8_t glyph_blank[5] = {0x00U, 0x00U, 0x00U, 0x00U, 0x00U};
@@ -203,13 +214,12 @@ static void controller_init(void)
 		0x40U, 0x50U, 0x86U, 0x89U, 0xC4U, 0xA3U, 0x95U
 	};
 
-	lcd_delay_ms(10U);
 	gpio_set(LCD_RESET_PORT, LCD_RESET_PIN);
-	lcd_delay_ms(2U);
+	lcd_delay_ms(LCD_RESET_IDLE_MS);
 	gpio_clear(LCD_RESET_PORT, LCD_RESET_PIN);
-	lcd_delay_ms(20U);
+	lcd_delay_ms(LCD_RESET_ASSERT_MS);
 	gpio_set(LCD_RESET_PORT, LCD_RESET_PIN);
-	lcd_delay_ms(40U);
+	lcd_delay_ms(LCD_RESET_RELEASE_MS);
 
 	write_control_byte(0xE1U);
 	write_data(0xE2U);
@@ -232,6 +242,7 @@ static void controller_init(void)
 	write_control_byte(0x95U);
 	write_control_byte(0xC9U);
 	write_data(0xADU);
+	lcd_delay_ms(LCD_CONTROLLER_SETTLE_MS);
 }
 
 static void set_address(uint16_t page, uint8_t column)
