@@ -95,6 +95,11 @@ class ProtocolTests(unittest.TestCase):
 
 
 class BuildVerificationTests(unittest.TestCase):
+    def test_version_object_is_rebuilt_when_build_version_changes(self) -> None:
+        makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+        self.assertIn("$(BUILD_DIR)/obj/app_version.o: FORCE", makefile)
+        self.assertIn("verification-pair FORCE", makefile)
+
     def test_legacy_bootloader_overlap_reproduces_raw_app(self) -> None:
         image = PackageTests.valid_image()
         _, upgrade = build_packages(image, DEFAULT_PACKAGE_SIZE)
@@ -309,12 +314,12 @@ class BoardModuleLayoutTests(unittest.TestCase):
         self.assertIn("motor_tacho_direction_float(port)", motor)
         self.assertIn("motor_tacho_direction_drive_low(identification_refresh_port)", motor)
         self.assertIn("motor_tacho_phase_pullup(identification_refresh_port, true)", motor)
-        self.assertIn("MOTOR_ID_PULLUP_NONE_LOW_MV 200U", motor)
-        self.assertIn("MOTOR_ID_PULLUP_NONE_HIGH_MV 350U", motor)
+        self.assertIn("MOTOR_ID_PULLUP_LARGE_LOW_MV 250U", motor)
+        self.assertIn("MOTOR_ID_PULLUP_LARGE_HIGH_MV 360U", motor)
         self.assertIn("MOTOR_ID_PULLUP_MEDIUM_LOW_MV 380U", motor)
         self.assertIn("MOTOR_ID_PULLUP_MEDIUM_HIGH_MV 500U", motor)
-        self.assertIn("MOTOR_ID_PULLUP_LARGE_LOW_MV 520U", motor)
-        self.assertIn("MOTOR_ID_PULLUP_LARGE_HIGH_MV 650U", motor)
+        self.assertIn("MOTOR_ID_PULLUP_NONE_LOW_MV 520U", motor)
+        self.assertIn("MOTOR_ID_PULLUP_NONE_HIGH_MV 1000U", motor)
         self.assertIn("motor_type_from_probe(identification_refresh_float_mv", motor)
         self.assertIn("motor.id_pin5_pullup_mv", protocol)
         self.assertIn("motor.id_pin5_pullup_high", protocol)

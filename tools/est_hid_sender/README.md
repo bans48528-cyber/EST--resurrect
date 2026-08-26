@@ -111,7 +111,7 @@ python tools/est_hid_sender/est_hid_sender.py motor-position --port A --speed 30
 python tools/est_hid_sender/est_hid_sender.py motor-identify --port B
 ```
 
-刷新前必须确保 A-D 四路马达均已停止。`M0.68A` 起会在 H 桥关闭时依次采集 pin 6 浮空、pin 6 拉低和 pin 5 弱上拉三组 ADC 数据，随后恢复输入模式和原测速计数；电脑端打印 `id_mv`、`pin6_low_mv` 和 `pin5_pullup_mv`。`M0.71A` 起还打印 `pin5_pullup_high` 数字状态；电脑端兼容协议 1.1-1.5 的 21/53/57 字节回包。M0.70A 已证明只靠三组模拟电压仍会把部分空口误判为大型。
+刷新前必须确保 A-D 四路马达均已停止。`M0.68A` 起会在 H 桥关闭时依次采集 pin 6 浮空、pin 6 拉低和 pin 5 弱上拉三组 ADC 数据，随后恢复输入模式和原测速计数；电脑端打印 `id_mv`、`pin6_low_mv` 和 `pin5_pullup_mv`。`M0.71A` 起还打印 `pin5_pullup_high` 数字状态；电脑端兼容协议 1.1-1.5 的 21/53/57 字节回包。M0.72A 根据受控换口实测和 EST 3.0 官方类别顺序，把弱上拉低相位映射修正为大型、中型、空口依次升高。
 
 按已识别的大型或中型马达类型持续闭环定速：
 

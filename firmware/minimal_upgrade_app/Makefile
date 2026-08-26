@@ -37,13 +37,17 @@ APP_PACKAGE := $(BUILD_DIR)/$(PROJECT).app.bin
 MANIFEST := $(BUILD_DIR)/$(PROJECT).manifest.json
 LIBOPENCM3 := $(OPENCM3_DIR)/lib/libopencm3_stm32f4.a
 
-.PHONY: all clean lib test verify verification-pair
+.PHONY: all clean lib test verify verification-pair FORCE
 
 all: $(ELF) $(BIN) $(HEX) $(LST) $(PACKAGE) verify
 
 $(BUILD_DIR)/obj/%.o: src/%.c
 	@$(MKDIR_P) $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -MMD -MP -c $< -o $@
+
+$(BUILD_DIR)/obj/app_version.o: FORCE
+
+FORCE:
 
 $(ELF): $(OBJECTS) $(LIBOPENCM3) memory.ld
 	@$(MKDIR_P) $(dir $@)
