@@ -462,11 +462,13 @@ static void queue_motor_type_result(uint8_t result)
 	(void)usb_hid_queue_report(report, false);
 }
 
-static void queue_motor_position_result(uint8_t result)
+static void queue_motor_position_result(uint8_t result,
+	enum board_motor_port port)
 {
-	struct board_motor_position_snapshot snapshot =
-		board_motor_position_snapshot();
+	struct board_motor_position_snapshot snapshot = {0};
 	uint8_t report[USB_HID_REPORT_SIZE] = {0};
+
+	(void)board_motor_position_snapshot_for_port(port, &snapshot);
 
 	report[0] = FRAME_START_BYTE;
 	report[1] = DEVICE_FRAME_DIRECTION;
@@ -488,10 +490,13 @@ static void queue_motor_position_result(uint8_t result)
 	(void)usb_hid_queue_report(report, false);
 }
 
-static void queue_motor_speed_result(uint8_t result)
+static void queue_motor_speed_result(uint8_t result,
+	enum board_motor_port port)
 {
-	struct board_motor_speed_snapshot snapshot = board_motor_speed_snapshot();
+	struct board_motor_speed_snapshot snapshot = {0};
 	uint8_t report[USB_HID_REPORT_SIZE] = {0};
+
+	(void)board_motor_speed_snapshot_for_port(port, &snapshot);
 
 	report[0] = FRAME_START_BYTE;
 	report[1] = DEVICE_FRAME_DIRECTION;
@@ -669,8 +674,6 @@ static void handle_motor_control(const uint8_t *data, uint16_t data_length)
 		result = 0U;
 	} else if (action == MOTOR_CONTROL_ACTION_STATUS && data_length == 2U) {
 		/* Status remains readable while one of the older diagnostics runs. */
-	} else if (board_motor_diagnostic_active()) {
-		result = 2U;
 	} else if (action == MOTOR_CONTROL_ACTION_SET_POWER && data_length == 3U) {
 		int8_t power_percent = (int8_t)data[2];
 
@@ -724,7 +727,7 @@ static void handle_motor_position(const uint8_t *data, uint16_t data_length)
 	} else {
 		result = 0U;
 	}
-	queue_motor_position_result(result);
+	queue_motor_position_result(result, port);
 }
 
 static void handle_motor_type(const uint8_t *data, uint16_t data_length,
@@ -776,7 +779,7 @@ static void handle_motor_speed(const uint8_t *data, uint16_t data_length)
 	} else {
 		result = 0U;
 	}
-	queue_motor_speed_result(result);
+	queue_motor_speed_result(result, port);
 }
 
 static void handle_input_sensor(const uint8_t *data, uint16_t data_length,

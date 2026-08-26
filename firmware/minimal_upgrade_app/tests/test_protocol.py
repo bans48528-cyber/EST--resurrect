@@ -493,7 +493,8 @@ class BoardModuleLayoutTests(unittest.TestCase):
         self.assertIn("board_motor_brake", motor)
         self.assertIn("board_motor_reset_tacho", motor)
         self.assertIn("power_percent < -100", motor)
-        self.assertIn("board_motor_diagnostic_active()", protocol)
+        self.assertNotIn("board_motor_diagnostic_active()", protocol)
+        self.assertIn("port_control_active(port)", motor)
         self.assertIn("queue_motor_control_result", protocol)
         self.assertIn("write_i32_le(&report[9], snapshot.tacho_count)", protocol)
 
@@ -534,6 +535,29 @@ class BoardModuleLayoutTests(unittest.TestCase):
         self.assertIn("EST_STOP_COAST", protocol)
         self.assertIn("EST_STOP_BRAKE", protocol)
         self.assertIn("queue_motor_speed_result", protocol)
+
+    def test_motor_closed_loop_state_is_independent_for_all_four_ports(self) -> None:
+        motor = (SOURCE_DIR / "board_motor.c").read_text(encoding="utf-8")
+        protocol = (SOURCE_DIR / "update_protocol.c").read_text(encoding="utf-8")
+        header = (ROOT / "include" / "board_motor.h").read_text(encoding="utf-8")
+        start_position = motor.split("bool board_motor_start_position", 1)[1].split(
+            "bool board_motor_stop_position", 1
+        )[0]
+        start_speed = motor.split("bool board_motor_start_speed", 1)[1].split(
+            "bool board_motor_stop_speed", 1
+        )[0]
+
+        self.assertIn("position_controls[BOARD_MOTOR_PORT_COUNT]", motor)
+        self.assertIn("speed_controls[BOARD_MOTOR_PORT_COUNT]", motor)
+        self.assertIn("update_position_control_port(now_ms", motor)
+        self.assertIn("apply_closed_loop_speed(port, control->requested_speed", motor)
+        self.assertNotIn("motor_output_off_all()", start_position)
+        self.assertNotIn("motor_output_off_all()", start_speed)
+        self.assertIn("board_motor_stop_position", header)
+        self.assertIn("board_motor_position_snapshot_for_port", header)
+        self.assertIn("board_motor_speed_snapshot_for_port", header)
+        self.assertIn("queue_motor_position_result(result, port)", protocol)
+        self.assertIn("queue_motor_speed_result(result, port)", protocol)
 
     def test_input_port_one_uses_verified_v5_sensor_pins(self) -> None:
         sensor = (SOURCE_DIR / "board_sensor.c").read_text(encoding="utf-8")

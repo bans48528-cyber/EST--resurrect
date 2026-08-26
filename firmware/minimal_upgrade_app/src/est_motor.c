@@ -179,22 +179,16 @@ est_result_t est_motor_stop(est_motor_port_t port,
 		return EST_ERR_NOT_SUPPORTED;
 	}
 	board_port = board_port_from_est(port);
-	speed = board_motor_speed_snapshot();
+	(void)board_motor_speed_snapshot_for_port(board_port, &speed);
 	if (speed.state == BOARD_MOTOR_SPEED_RUNNING && speed.port == board_port) {
 		return board_motor_stop_speed(board_port,
 			board_stop_from_est(stop_mode)) ? EST_OK : EST_ERR_BUSY;
 	}
-	position = board_motor_position_snapshot();
+	(void)board_motor_position_snapshot_for_port(board_port, &position);
 	if (position.state == BOARD_MOTOR_POSITION_RUNNING &&
 	    position.port == board_port) {
-		board_motor_stop();
-		if (stop_mode == EST_STOP_BRAKE && !board_motor_brake(board_port)) {
-			return EST_ERR_STATE;
-		}
-		return EST_OK;
-	}
-	if (board_motor_diagnostic_active()) {
-		return EST_ERR_BUSY;
+		return board_motor_stop_position(board_port,
+			board_stop_from_est(stop_mode)) ? EST_OK : EST_ERR_BUSY;
 	}
 	if (stop_mode == EST_STOP_BRAKE) {
 		return board_motor_brake(board_port) ? EST_OK : EST_ERR_STATE;
@@ -266,18 +260,19 @@ est_result_t est_motor_get_status(est_motor_port_t port,
 		EST_MOTOR_POWER : EST_MOTOR_IDLE;
 	status->error = EST_OK;
 
-	speed = board_motor_speed_snapshot();
+	(void)board_motor_speed_snapshot_for_port(board_port, &speed);
 	if (speed.state == BOARD_MOTOR_SPEED_RUNNING && speed.port == board_port) {
 		status->state = EST_MOTOR_SPEED;
 		status->target_speed_percent = speed.requested_speed_percent;
 	}
-	position = board_motor_position_snapshot();
+	(void)board_motor_position_snapshot_for_port(board_port, &position);
 	if (position.port == board_port) {
 		if (position.state == BOARD_MOTOR_POSITION_RUNNING) {
 			status->state = EST_MOTOR_POSITION;
 			status->target_speed_percent =
 				position.requested_speed_percent;
-		} else if (position.state == BOARD_MOTOR_POSITION_TIMEOUT) {
+		} else if (position.state == BOARD_MOTOR_POSITION_TIMEOUT &&
+		    status->state == EST_MOTOR_IDLE) {
 			status->state = EST_MOTOR_FAULT;
 			status->error = EST_ERR_TIMEOUT;
 		}

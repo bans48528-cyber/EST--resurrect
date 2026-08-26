@@ -203,23 +203,33 @@ static int32_t identification_refresh_tacho_count;
 static int8_t measured_speed_percent[BOARD_MOTOR_PORT_COUNT];
 static int32_t speed_sample_count[BOARD_MOTOR_PORT_COUNT];
 static uint32_t speed_sample_ms[BOARD_MOTOR_PORT_COUNT];
-static enum board_motor_position_state position_state;
-static enum board_motor_port position_port;
-static enum board_motor_type position_type;
-static int8_t position_requested_speed;
-static int32_t position_start_count;
-static int32_t position_target_count;
-static uint32_t position_started_ms;
-static uint32_t position_timeout_ms;
-static uint32_t position_finished_ms;
-static uint32_t position_last_control_ms;
-static int32_t position_pwm_x100;
-static enum board_motor_speed_state speed_control_state;
-static enum board_motor_port speed_control_port;
-static enum board_motor_type speed_control_type;
-static int8_t speed_control_requested_speed;
-static uint32_t speed_control_last_control_ms;
-static int32_t speed_control_pwm_x100;
+
+struct motor_position_control {
+	enum board_motor_position_state state;
+	enum board_motor_type type;
+	int8_t requested_speed;
+	int32_t start_count;
+	int32_t target_count;
+	uint32_t started_ms;
+	uint32_t timeout_ms;
+	uint32_t finished_ms;
+	uint32_t last_control_ms;
+	int32_t pwm_x100;
+};
+
+struct motor_speed_control {
+	enum board_motor_speed_state state;
+	enum board_motor_type type;
+	int8_t requested_speed;
+	uint32_t last_control_ms;
+	int32_t pwm_x100;
+};
+
+static struct motor_position_control
+	position_controls[BOARD_MOTOR_PORT_COUNT];
+static struct motor_speed_control speed_controls[BOARD_MOTOR_PORT_COUNT];
+static enum board_motor_port last_position_port;
+static enum board_motor_port last_speed_port;
 
 static const struct motor_port_config *motor_config(enum board_motor_port port);
 static void motor_output_off(enum board_motor_port port);
@@ -227,8 +237,11 @@ static void motor_output_high_push_pull_stop(enum board_motor_port port);
 static bool normal_test_active(void);
 static bool stop_test_active(void);
 static bool dual_test_active(void);
-static bool speed_control_active(void);
-static bool position_control_active(void);
+static bool speed_control_active(enum board_motor_port port);
+static bool position_control_active(enum board_motor_port port);
+static bool any_speed_control_active(void);
+static bool any_position_control_active(void);
+static bool legacy_diagnostic_active(void);
 
 static void motor_tacho_direction_drive_low(enum board_motor_port port)
 {
@@ -550,7 +563,7 @@ static bool automatic_identification_allowed(void)
 	uint8_t port_index;
 
 	if (normal_test_active() || stop_test_active() || dual_test_active() ||
-	    position_control_active() || speed_control_active()) {
+	    any_position_control_active() || any_speed_control_active()) {
 		return false;
 	}
 	for (port_index = 0U; port_index < BOARD_MOTOR_PORT_COUNT; port_index++) {
@@ -803,9 +816,51 @@ static void configure_pwm_channel(enum tim_oc_id channel)
 	timer_enable_oc_output(TIM4, channel);
 }
 
-static bool speed_control_active(void)
+static bool speed_control_active(enum board_motor_port port)
 {
-	return speed_control_state == BOARD_MOTOR_SPEED_RUNNING;
+	return speed_controls[(uint8_t)port].state == BOARD_MOTOR_SPEED_RUNNING;
+}
+
+static bool position_control_active(enum board_motor_port port)
+{
+	return position_controls[(uint8_t)port].state ==
+		BOARD_MOTOR_POSITION_RUNNING;
+}
+
+static bool any_speed_control_active(void)
+{
+	uint8_t port_index;
+
+	for (port_index = 0U; port_index < BOARD_MOTOR_PORT_COUNT; port_index++) {
+		if (speed_control_active((enum board_motor_port)port_index)) {
+			return true;
+		}
+	}
+	return false;
+}
+
+static bool any_position_control_active(void)
+{
+	uint8_t port_index;
+
+	for (port_index = 0U; port_index < BOARD_MOTOR_PORT_COUNT; port_index++) {
+		if (position_control_active((enum board_motor_port)port_index)) {
+			return true;
+		}
+	}
+	return false;
+}
+
+static bool legacy_diagnostic_active(void)
+{
+	return normal_test_active() || stop_test_active() || dual_test_active() ||
+		(identification_refresh_state != MOTOR_IDENTIFICATION_REFRESH_IDLE &&
+		 !identification_refresh_automatic);
+}
+
+static bool port_control_active(enum board_motor_port port)
+{
+	return speed_control_active(port) || position_control_active(port);
 }
 
 static void apply_closed_loop_speed(enum board_motor_port port,
@@ -844,78 +899,96 @@ static void apply_closed_loop_speed(enum board_motor_port port,
 
 static void update_speed_control(uint32_t now_ms)
 {
-	if (!speed_control_active() ||
-	    (uint32_t)(now_ms - speed_control_last_control_ms) <
-	    MOTOR_SPEED_CONTROL_INTERVAL_MS) {
-		return;
+	uint8_t port_index;
+
+	for (port_index = 0U; port_index < BOARD_MOTOR_PORT_COUNT; port_index++) {
+		enum board_motor_port port = (enum board_motor_port)port_index;
+		struct motor_speed_control *control = &speed_controls[port_index];
+
+		if (!speed_control_active(port) ||
+		    (uint32_t)(now_ms - control->last_control_ms) <
+		    MOTOR_SPEED_CONTROL_INTERVAL_MS) {
+			continue;
+		}
+		control->last_control_ms = now_ms;
+		apply_closed_loop_speed(port, control->requested_speed,
+			&control->pwm_x100);
 	}
-	speed_control_last_control_ms = now_ms;
-	apply_closed_loop_speed(speed_control_port, speed_control_requested_speed,
-		&speed_control_pwm_x100);
 }
 
-static bool position_control_active(void)
-{
-	return position_state == BOARD_MOTOR_POSITION_RUNNING;
-}
-
-static void finish_position_control(uint32_t now_ms,
+static void finish_position_control(enum board_motor_port port, uint32_t now_ms,
 	enum board_motor_position_state state)
 {
+	struct motor_position_control *control =
+		&position_controls[(uint8_t)port];
+
 	if (state == BOARD_MOTOR_POSITION_COMPLETE) {
-		motor_output_high_push_pull_stop(position_port);
+		motor_output_high_push_pull_stop(port);
 	} else {
-		motor_output_off(position_port);
+		motor_output_off(port);
 	}
-	position_state = state;
-	position_finished_ms = now_ms;
-	position_pwm_x100 = 0;
+	control->state = state;
+	control->finished_ms = now_ms;
+	control->pwm_x100 = 0;
 }
 
-static void update_position_control(uint32_t now_ms)
+static void update_position_control_port(uint32_t now_ms,
+	enum board_motor_port port)
 {
+	struct motor_position_control *control =
+		&position_controls[(uint8_t)port];
 	int32_t current;
 	int32_t remaining;
 	int32_t absolute_remaining;
 	int8_t target_speed;
 	uint16_t slowdown_degrees;
 
-	if (!position_control_active()) {
-		if (position_state == BOARD_MOTOR_POSITION_COMPLETE &&
-		    output_state[(uint8_t)position_port] == BOARD_MOTOR_OUTPUT_BRAKE &&
-		    (uint32_t)(now_ms - position_finished_ms) >=
+	if (!position_control_active(port)) {
+		if (control->state == BOARD_MOTOR_POSITION_COMPLETE &&
+		    output_state[(uint8_t)port] == BOARD_MOTOR_OUTPUT_BRAKE &&
+		    (uint32_t)(now_ms - control->finished_ms) >=
 		    MOTOR_POSITION_BRAKE_MS) {
-			motor_output_off(position_port);
+			motor_output_off(port);
 		}
 		return;
 	}
-	current = tacho_count[(uint8_t)position_port];
-	remaining = position_target_count - current;
-	if ((position_requested_speed > 0 && remaining <= 0) ||
-	    (position_requested_speed < 0 && remaining >= 0)) {
-		finish_position_control(now_ms, BOARD_MOTOR_POSITION_COMPLETE);
+	current = tacho_count[(uint8_t)port];
+	remaining = control->target_count - current;
+	if ((control->requested_speed > 0 && remaining <= 0) ||
+	    (control->requested_speed < 0 && remaining >= 0)) {
+		finish_position_control(port, now_ms, BOARD_MOTOR_POSITION_COMPLETE);
 		return;
 	}
-	if ((uint32_t)(now_ms - position_started_ms) >= position_timeout_ms) {
-		finish_position_control(now_ms, BOARD_MOTOR_POSITION_TIMEOUT);
+	if ((uint32_t)(now_ms - control->started_ms) >= control->timeout_ms) {
+		finish_position_control(port, now_ms, BOARD_MOTOR_POSITION_TIMEOUT);
 		return;
 	}
-	if ((uint32_t)(now_ms - position_last_control_ms) <
+	if ((uint32_t)(now_ms - control->last_control_ms) <
 	    MOTOR_SPEED_CONTROL_INTERVAL_MS) {
 		return;
 	}
-	position_last_control_ms = now_ms;
+	control->last_control_ms = now_ms;
 	absolute_remaining = remaining < 0 ? -remaining : remaining;
-	slowdown_degrees = motor_position_slowdown_degrees(position_type,
-		(uint8_t)(position_requested_speed < 0 ?
-		-position_requested_speed : position_requested_speed));
-	target_speed = position_requested_speed;
+	slowdown_degrees = motor_position_slowdown_degrees(control->type,
+		(uint8_t)(control->requested_speed < 0 ?
+		-control->requested_speed : control->requested_speed));
+	target_speed = control->requested_speed;
 	if ((uint32_t)absolute_remaining < slowdown_degrees) {
-		target_speed = position_requested_speed < 0 ?
+		target_speed = control->requested_speed < 0 ?
 			-(int8_t)MOTOR_POSITION_MIN_SPEED_PERCENT :
 			(int8_t)MOTOR_POSITION_MIN_SPEED_PERCENT;
 	}
-	apply_closed_loop_speed(position_port, target_speed, &position_pwm_x100);
+	apply_closed_loop_speed(port, target_speed, &control->pwm_x100);
+}
+
+static void update_position_control(uint32_t now_ms)
+{
+	uint8_t port_index;
+
+	for (port_index = 0U; port_index < BOARD_MOTOR_PORT_COUNT; port_index++) {
+		update_position_control_port(now_ms,
+			(enum board_motor_port)port_index);
+	}
 }
 
 void board_motor_init(void)
@@ -1025,6 +1098,21 @@ void board_motor_init(void)
 		measured_speed_percent[port_index] = 0;
 		speed_sample_count[port_index] = 0;
 		speed_sample_ms[port_index] = 0U;
+		position_controls[port_index].state = BOARD_MOTOR_POSITION_IDLE;
+		position_controls[port_index].type = BOARD_MOTOR_TYPE_UNKNOWN;
+		position_controls[port_index].requested_speed = 0;
+		position_controls[port_index].start_count = 0;
+		position_controls[port_index].target_count = 0;
+		position_controls[port_index].started_ms = 0U;
+		position_controls[port_index].timeout_ms = 0U;
+		position_controls[port_index].finished_ms = 0U;
+		position_controls[port_index].last_control_ms = 0U;
+		position_controls[port_index].pwm_x100 = 0;
+		speed_controls[port_index].state = BOARD_MOTOR_SPEED_IDLE;
+		speed_controls[port_index].type = BOARD_MOTOR_TYPE_UNKNOWN;
+		speed_controls[port_index].requested_speed = 0;
+		speed_controls[port_index].last_control_ms = 0U;
+		speed_controls[port_index].pwm_x100 = 0;
 	}
 	forward_count = 0;
 	reverse_count = 0;
@@ -1053,31 +1141,14 @@ void board_motor_init(void)
 	identification_refresh_float_raw = 0U;
 	identification_refresh_float_mv = 0U;
 	identification_refresh_tacho_count = 0;
-	position_state = BOARD_MOTOR_POSITION_IDLE;
-	position_port = BOARD_MOTOR_PORT_A;
-	position_type = BOARD_MOTOR_TYPE_UNKNOWN;
-	position_requested_speed = 0;
-	position_start_count = 0;
-	position_target_count = 0;
-	position_started_ms = 0U;
-	position_timeout_ms = 0U;
-	position_finished_ms = 0U;
-	position_last_control_ms = 0U;
-	position_pwm_x100 = 0;
-	speed_control_state = BOARD_MOTOR_SPEED_IDLE;
-	speed_control_port = BOARD_MOTOR_PORT_A;
-	speed_control_type = BOARD_MOTOR_TYPE_UNKNOWN;
-	speed_control_requested_speed = 0;
-	speed_control_last_control_ms = 0U;
-	speed_control_pwm_x100 = 0;
+	last_position_port = BOARD_MOTOR_PORT_A;
+	last_speed_port = BOARD_MOTOR_PORT_A;
 }
 
 bool board_motor_diagnostic_active(void)
 {
-	return normal_test_active() || stop_test_active() || dual_test_active() ||
-		position_control_active() || speed_control_active() ||
-		(identification_refresh_state != MOTOR_IDENTIFICATION_REFRESH_IDLE &&
-		 !identification_refresh_automatic);
+	return legacy_diagnostic_active() || any_position_control_active() ||
+		any_speed_control_active();
 }
 
 bool board_motor_set_power(enum board_motor_port port, int8_t power_percent)
@@ -1087,7 +1158,8 @@ bool board_motor_set_power(enum board_motor_port port, int8_t power_percent)
 
 	cancel_automatic_identification_refresh();
 	if (!motor_port_valid(port) || power_percent < -100 ||
-	    power_percent > 100 || board_motor_diagnostic_active()) {
+	    power_percent > 100 || legacy_diagnostic_active() ||
+	    port_control_active(port)) {
 		return false;
 	}
 	if (power_percent == 0) {
@@ -1109,7 +1181,8 @@ bool board_motor_set_power(enum board_motor_port port, int8_t power_percent)
 bool board_motor_coast(enum board_motor_port port)
 {
 	cancel_automatic_identification_refresh();
-	if (!motor_port_valid(port) || board_motor_diagnostic_active()) {
+	if (!motor_port_valid(port) || legacy_diagnostic_active() ||
+	    port_control_active(port)) {
 		return false;
 	}
 	motor_output_off(port);
@@ -1119,7 +1192,8 @@ bool board_motor_coast(enum board_motor_port port)
 bool board_motor_brake(enum board_motor_port port)
 {
 	cancel_automatic_identification_refresh();
-	if (!motor_port_valid(port) || board_motor_diagnostic_active()) {
+	if (!motor_port_valid(port) || legacy_diagnostic_active() ||
+	    port_control_active(port)) {
 		return false;
 	}
 	motor_output_high_push_pull_stop(port);
@@ -1129,7 +1203,8 @@ bool board_motor_brake(enum board_motor_port port)
 bool board_motor_reset_tacho(enum board_motor_port port)
 {
 	cancel_automatic_identification_refresh();
-	if (!motor_port_valid(port) || board_motor_diagnostic_active()) {
+	if (!motor_port_valid(port) || legacy_diagnostic_active() ||
+	    port_control_active(port)) {
 		return false;
 	}
 	tacho_count[(uint8_t)port] = 0;
@@ -1191,6 +1266,7 @@ bool board_motor_refresh_identification(uint32_t now_ms,
 bool board_motor_start_position(uint32_t now_ms, enum board_motor_port port,
 	uint8_t speed_percent, int32_t degrees)
 {
+	struct motor_position_control *control;
 	enum board_motor_type type;
 	int32_t absolute_degrees;
 	uint8_t maximum_speed;
@@ -1202,7 +1278,7 @@ bool board_motor_start_position(uint32_t now_ms, enum board_motor_port port,
 	    speed_percent > 100U || degrees == 0 ||
 	    degrees < -MOTOR_POSITION_MAX_DEGREES ||
 	    degrees > MOTOR_POSITION_MAX_DEGREES ||
-	    board_motor_diagnostic_active()) {
+	    legacy_diagnostic_active() || port_control_active(port)) {
 		return false;
 	}
 	type = motor_type[(uint8_t)port];
@@ -1215,60 +1291,94 @@ bool board_motor_start_position(uint32_t now_ms, enum board_motor_port port,
 	if (speed_percent > maximum_speed) {
 		speed_percent = maximum_speed;
 	}
-	motor_output_off_all();
-	position_port = port;
-	position_type = type;
-	position_start_count = tacho_count[(uint8_t)port];
-	position_target_count = position_start_count + degrees;
-	position_requested_speed = degrees < 0 ?
+	motor_output_off(port);
+	control = &position_controls[(uint8_t)port];
+	control->type = type;
+	control->start_count = tacho_count[(uint8_t)port];
+	control->target_count = control->start_count + degrees;
+	control->requested_speed = degrees < 0 ?
 		-(int8_t)speed_percent : (int8_t)speed_percent;
-	position_started_ms = now_ms;
-	position_finished_ms = 0U;
-	position_last_control_ms = now_ms - MOTOR_SPEED_CONTROL_INTERVAL_MS;
-	position_pwm_x100 = 0;
-	speed_sample_count[(uint8_t)port] = position_start_count;
+	control->started_ms = now_ms;
+	control->finished_ms = 0U;
+	control->last_control_ms = now_ms - MOTOR_SPEED_CONTROL_INTERVAL_MS;
+	control->pwm_x100 = 0;
+	speed_sample_count[(uint8_t)port] = control->start_count;
 	speed_sample_ms[(uint8_t)port] = now_ms;
 	measured_speed_percent[(uint8_t)port] = 0;
 	expected_ms = ((uint64_t)absolute_degrees *
 		motor_counts_per_speed(type) * 1000ULL) /
 		((uint64_t)speed_percent * MOTOR_SPEED_TIMER_HZ);
-	position_timeout_ms = (uint32_t)expected_ms +
+	control->timeout_ms = (uint32_t)expected_ms +
 		MOTOR_POSITION_TIMEOUT_MARGIN_MS;
-	if (position_timeout_ms < MOTOR_POSITION_TIMEOUT_MIN_MS) {
-		position_timeout_ms = MOTOR_POSITION_TIMEOUT_MIN_MS;
-	} else if (position_timeout_ms > MOTOR_POSITION_TIMEOUT_MAX_MS) {
-		position_timeout_ms = MOTOR_POSITION_TIMEOUT_MAX_MS;
+	if (control->timeout_ms < MOTOR_POSITION_TIMEOUT_MIN_MS) {
+		control->timeout_ms = MOTOR_POSITION_TIMEOUT_MIN_MS;
+	} else if (control->timeout_ms > MOTOR_POSITION_TIMEOUT_MAX_MS) {
+		control->timeout_ms = MOTOR_POSITION_TIMEOUT_MAX_MS;
 	}
-	position_state = BOARD_MOTOR_POSITION_RUNNING;
+	control->state = BOARD_MOTOR_POSITION_RUNNING;
+	last_position_port = port;
+	return true;
+}
+
+bool board_motor_stop_position(enum board_motor_port port,
+	enum board_motor_stop_mode stop_mode)
+{
+	struct motor_position_control *control;
+
+	cancel_automatic_identification_refresh();
+	if (!motor_port_valid(port) || legacy_diagnostic_active() ||
+	    speed_control_active(port) ||
+	    (stop_mode != BOARD_MOTOR_STOP_LOW_OPEN_DRAIN &&
+	     stop_mode != BOARD_MOTOR_STOP_HIGH_PUSH_PULL)) {
+		return false;
+	}
+	control = &position_controls[(uint8_t)port];
+	control->state = BOARD_MOTOR_POSITION_IDLE;
+	control->requested_speed = 0;
+	control->pwm_x100 = 0;
+	motor_apply_stop_mode(port, stop_mode);
+	return true;
+}
+
+bool board_motor_position_snapshot_for_port(enum board_motor_port port,
+	struct board_motor_position_snapshot *snapshot)
+{
+	const struct motor_position_control *control;
+
+	if (!motor_port_valid(port) || snapshot == NULL) {
+		return false;
+	}
+	control = &position_controls[(uint8_t)port];
+	snapshot->state = control->state;
+	snapshot->port = port;
+	snapshot->type = control->type;
+	snapshot->requested_speed_percent = control->requested_speed;
+	snapshot->measured_speed_percent = measured_speed_percent[(uint8_t)port];
+	snapshot->start_count = control->start_count;
+	snapshot->target_count = control->target_count;
+	snapshot->current_count = tacho_count[(uint8_t)port];
 	return true;
 }
 
 struct board_motor_position_snapshot board_motor_position_snapshot(void)
 {
-	struct board_motor_position_snapshot snapshot;
+	struct board_motor_position_snapshot snapshot = {0};
 
-	snapshot.state = position_state;
-	snapshot.port = position_port;
-	snapshot.type = position_type;
-	snapshot.requested_speed_percent = position_requested_speed;
-	snapshot.measured_speed_percent =
-		measured_speed_percent[(uint8_t)position_port];
-	snapshot.start_count = position_start_count;
-	snapshot.target_count = position_target_count;
-	snapshot.current_count = tacho_count[(uint8_t)position_port];
+	(void)board_motor_position_snapshot_for_port(last_position_port, &snapshot);
 	return snapshot;
 }
 
 bool board_motor_start_speed(uint32_t now_ms, enum board_motor_port port,
 	int8_t speed_percent)
 {
+	struct motor_speed_control *control;
 	enum board_motor_type type;
 	uint8_t magnitude;
 
 	cancel_automatic_identification_refresh();
 	if (!motor_port_valid(port) || speed_percent < -100 ||
 	    speed_percent > 100 || speed_percent == 0 ||
-	    board_motor_diagnostic_active()) {
+	    legacy_diagnostic_active() || port_control_active(port)) {
 		return false;
 	}
 	magnitude = speed_percent < 0 ?
@@ -1281,49 +1391,67 @@ bool board_motor_start_speed(uint32_t now_ms, enum board_motor_port port,
 	    type != BOARD_MOTOR_TYPE_MEDIUM) {
 		return false;
 	}
-	motor_output_off_all();
-	speed_control_state = BOARD_MOTOR_SPEED_RUNNING;
-	speed_control_port = port;
-	speed_control_type = type;
-	speed_control_requested_speed = speed_percent;
-	speed_control_last_control_ms = now_ms - MOTOR_SPEED_CONTROL_INTERVAL_MS;
-	speed_control_pwm_x100 = 0;
+	motor_output_off(port);
+	control = &speed_controls[(uint8_t)port];
+	control->state = BOARD_MOTOR_SPEED_RUNNING;
+	control->type = type;
+	control->requested_speed = speed_percent;
+	control->last_control_ms = now_ms - MOTOR_SPEED_CONTROL_INTERVAL_MS;
+	control->pwm_x100 = 0;
 	speed_sample_count[(uint8_t)port] = tacho_count[(uint8_t)port];
 	speed_sample_ms[(uint8_t)port] = now_ms;
 	measured_speed_percent[(uint8_t)port] = 0;
+	last_speed_port = port;
 	return true;
 }
 
 bool board_motor_stop_speed(enum board_motor_port port,
 	enum board_motor_stop_mode stop_mode)
 {
+	struct motor_speed_control *control;
+
 	cancel_automatic_identification_refresh();
-	if (!motor_port_valid(port) || port != speed_control_port ||
-	    (!speed_control_active() && board_motor_diagnostic_active()) ||
+	if (!motor_port_valid(port) || legacy_diagnostic_active() ||
+	    position_control_active(port) ||
 	    (stop_mode != BOARD_MOTOR_STOP_LOW_OPEN_DRAIN &&
 	     stop_mode != BOARD_MOTOR_STOP_HIGH_PUSH_PULL)) {
 		return false;
 	}
-	speed_control_state = BOARD_MOTOR_SPEED_IDLE;
-	speed_control_requested_speed = 0;
-	speed_control_pwm_x100 = 0;
+	control = &speed_controls[(uint8_t)port];
+	control->state = BOARD_MOTOR_SPEED_IDLE;
+	control->requested_speed = 0;
+	control->pwm_x100 = 0;
 	motor_apply_stop_mode(port, stop_mode);
+	return true;
+}
+
+bool board_motor_speed_snapshot_for_port(enum board_motor_port port,
+	struct board_motor_speed_snapshot *snapshot)
+{
+	const struct motor_speed_control *control;
+	uint8_t port_index;
+
+	if (!motor_port_valid(port) || snapshot == NULL) {
+		return false;
+	}
+	port_index = (uint8_t)port;
+	control = &speed_controls[port_index];
+	snapshot->state = control->state;
+	snapshot->port = port;
+	snapshot->output_state = output_state[port_index];
+	snapshot->type = control->type;
+	snapshot->requested_speed_percent = control->requested_speed;
+	snapshot->measured_speed_percent = measured_speed_percent[port_index];
+	snapshot->power_percent = output_power[port_index];
+	snapshot->tacho_count = tacho_count[port_index];
 	return true;
 }
 
 struct board_motor_speed_snapshot board_motor_speed_snapshot(void)
 {
-	struct board_motor_speed_snapshot snapshot;
-	uint8_t port_index = (uint8_t)speed_control_port;
+	struct board_motor_speed_snapshot snapshot = {0};
 
-	snapshot.state = speed_control_state;
-	snapshot.port = speed_control_port;
-	snapshot.output_state = output_state[port_index];
-	snapshot.type = speed_control_type;
-	snapshot.requested_speed_percent = speed_control_requested_speed;
-	snapshot.measured_speed_percent = measured_speed_percent[port_index];
-	snapshot.power_percent = output_power[port_index];
-	snapshot.tacho_count = tacho_count[port_index];
+	(void)board_motor_speed_snapshot_for_port(last_speed_port, &snapshot);
 	return snapshot;
 }
 
@@ -1442,17 +1570,21 @@ bool board_motor_start_dual_test(uint32_t now_ms, uint8_t power_percent)
 
 void board_motor_stop(void)
 {
+	uint8_t port_index;
+
 	cancel_identification_refresh();
 	motor_output_off_all();
 	test_state = BOARD_MOTOR_TEST_IDLE;
 	stop_test_state = BOARD_MOTOR_STOP_TEST_IDLE;
 	dual_test_state = BOARD_MOTOR_DUAL_TEST_IDLE;
-	position_state = BOARD_MOTOR_POSITION_IDLE;
-	position_requested_speed = 0;
-	position_pwm_x100 = 0;
-	speed_control_state = BOARD_MOTOR_SPEED_IDLE;
-	speed_control_requested_speed = 0;
-	speed_control_pwm_x100 = 0;
+	for (port_index = 0U; port_index < BOARD_MOTOR_PORT_COUNT; port_index++) {
+		position_controls[port_index].state = BOARD_MOTOR_POSITION_IDLE;
+		position_controls[port_index].requested_speed = 0;
+		position_controls[port_index].pwm_x100 = 0;
+		speed_controls[port_index].state = BOARD_MOTOR_SPEED_IDLE;
+		speed_controls[port_index].requested_speed = 0;
+		speed_controls[port_index].pwm_x100 = 0;
+	}
 }
 
 void board_motor_tick(uint32_t now_ms)

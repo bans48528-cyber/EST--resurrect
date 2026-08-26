@@ -139,11 +139,17 @@ bool board_motor_refresh_identification(uint32_t now_ms,
 	enum board_motor_port port);
 bool board_motor_start_position(uint32_t now_ms, enum board_motor_port port,
 	uint8_t speed_percent, int32_t degrees);
+bool board_motor_stop_position(enum board_motor_port port,
+	enum board_motor_stop_mode stop_mode);
+bool board_motor_position_snapshot_for_port(enum board_motor_port port,
+	struct board_motor_position_snapshot *snapshot);
 struct board_motor_position_snapshot board_motor_position_snapshot(void);
 bool board_motor_start_speed(uint32_t now_ms, enum board_motor_port port,
 	int8_t speed_percent);
 bool board_motor_stop_speed(enum board_motor_port port,
 	enum board_motor_stop_mode stop_mode);
+bool board_motor_speed_snapshot_for_port(enum board_motor_port port,
+	struct board_motor_speed_snapshot *snapshot);
 struct board_motor_speed_snapshot board_motor_speed_snapshot(void);
 bool board_motor_start_test(uint32_t now_ms);
 bool board_motor_start_test_with_power(uint32_t now_ms, uint8_t power_percent);
