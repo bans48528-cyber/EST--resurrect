@@ -22,6 +22,8 @@ from .constants import (
     MOTOR_CONTROL_ACTION_SET_POWER,
     MOTOR_CONTROL_COMMAND,
     MOTOR_DUAL_TEST_COMMAND,
+    MOTOR_PAIR_POSITION_ACTION_START,
+    MOTOR_PAIR_POSITION_COMMAND,
     MOTOR_POSITION_ACTION_START,
     MOTOR_POSITION_COMMAND,
     MOTOR_SPEED_ACTION_START,
@@ -142,6 +144,21 @@ class MotorSpeedResult:
     measured_speed_percent: int
     power_percent: int
     tacho_count: int
+
+
+@dataclass(frozen=True)
+class MotorPairPositionResult:
+    result: int
+    state: int
+    left_port: int
+    right_port: int
+    left_target_degrees: int
+    right_target_degrees: int
+    left_actual_degrees: int
+    right_actual_degrees: int
+    synchronization_error_degrees: int
+    maximum_synchronization_error_degrees: int
+    error: int
 
 
 @dataclass(frozen=True)
@@ -400,6 +417,46 @@ def build_motor_speed_frame(
     elif speed_percent is not None:
         raise ValueError("speed is valid only for the start action")
     return build_frame(MOTOR_SPEED_COMMAND, payload)
+
+
+def build_motor_pair_position_frame(
+    action: int,
+    left_port: int | None = None,
+    right_port: int | None = None,
+    speed_percent: int | None = None,
+    left_degrees: int | None = None,
+    right_degrees: int | None = None,
+) -> bytes:
+    if not 0 <= action <= 0xFF:
+        raise ValueError("motor pair position action must fit uint8")
+    payload = bytes((action,))
+    if action == MOTOR_PAIR_POSITION_ACTION_START:
+        if left_port not in (0, 1, 2, 3) or right_port not in (0, 1, 2, 3):
+            raise ValueError("motor ports must be 0, 1, 2, or 3")
+        if left_port == right_port:
+            raise ValueError("motor pair ports must differ")
+        if speed_percent is None or not 10 <= speed_percent <= 100:
+            raise ValueError("motor speed must be between 10 and 100 percent")
+        if (
+            left_degrees is None
+            or right_degrees is None
+            or left_degrees == 0
+            or right_degrees == 0
+            or not -3600 <= left_degrees <= 3600
+            or not -3600 <= right_degrees <= 3600
+        ):
+            raise ValueError("motor pair degrees must be between -3600 and 3600, excluding 0")
+        if abs(left_degrees) != abs(right_degrees):
+            raise ValueError("first synchronized mode requires equal absolute degrees")
+        payload += bytes((left_port, right_port, speed_percent))
+        payload += left_degrees.to_bytes(4, "little", signed=True)
+        payload += right_degrees.to_bytes(4, "little", signed=True)
+    elif any(
+        value is not None
+        for value in (left_port, right_port, speed_percent, left_degrees, right_degrees)
+    ):
+        raise ValueError("pair parameters are valid only for the start action")
+    return build_frame(MOTOR_PAIR_POSITION_COMMAND, payload)
 
 
 def build_input_sensor_frame(
@@ -686,6 +743,36 @@ def parse_motor_speed_response(report: bytes) -> MotorSpeedResult | None:
         measured_speed_percent=int.from_bytes(report[11:12], "little", signed=True),
         power_percent=int.from_bytes(report[12:13], "little", signed=True),
         tacho_count=int.from_bytes(report[13:17], "little", signed=True),
+    )
+
+
+def parse_motor_pair_position_response(
+    report: bytes,
+) -> MotorPairPositionResult | None:
+    if len(report) < 36:
+        return None
+    if report[0] != FRAME_START:
+        return None
+    if report[1] != DEVICE_DIRECTION or report[2] != MOTOR_PAIR_POSITION_COMMAND:
+        return None
+    if report[3:5] != b"\x1d\x00" or report[35] != FRAME_END:
+        return None
+    if checksum(report[:34]) != report[34]:
+        return None
+    return MotorPairPositionResult(
+        result=report[5],
+        state=report[6],
+        left_port=report[7],
+        right_port=report[8],
+        left_target_degrees=int.from_bytes(report[9:13], "little", signed=True),
+        right_target_degrees=int.from_bytes(report[13:17], "little", signed=True),
+        left_actual_degrees=int.from_bytes(report[17:21], "little", signed=True),
+        right_actual_degrees=int.from_bytes(report[21:25], "little", signed=True),
+        synchronization_error_degrees=int.from_bytes(report[25:29], "little", signed=True),
+        maximum_synchronization_error_degrees=int.from_bytes(
+            report[29:33], "little", signed=True
+        ),
+        error=int.from_bytes(report[33:34], "little", signed=True),
     )
 
 

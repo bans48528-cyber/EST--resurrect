@@ -58,6 +58,27 @@ struct board_motor_position_snapshot {
 	int32_t current_count;
 };
 
+enum board_motor_pair_position_state {
+	BOARD_MOTOR_PAIR_POSITION_IDLE = 0,
+	BOARD_MOTOR_PAIR_POSITION_RUNNING = 1,
+	BOARD_MOTOR_PAIR_POSITION_COMPLETE = 2,
+	BOARD_MOTOR_PAIR_POSITION_TIMEOUT = 3
+};
+
+struct board_motor_pair_position_snapshot {
+	enum board_motor_pair_position_state state;
+	enum board_motor_port left_port;
+	enum board_motor_port right_port;
+	int32_t left_start_count;
+	int32_t left_target_count;
+	int32_t left_current_count;
+	int32_t right_start_count;
+	int32_t right_target_count;
+	int32_t right_current_count;
+	int32_t synchronization_error_count;
+	int32_t maximum_synchronization_error_count;
+};
+
 enum board_motor_speed_state {
 	BOARD_MOTOR_SPEED_IDLE = 0,
 	BOARD_MOTOR_SPEED_RUNNING = 1
@@ -144,6 +165,13 @@ bool board_motor_stop_position(enum board_motor_port port,
 bool board_motor_position_snapshot_for_port(enum board_motor_port port,
 	struct board_motor_position_snapshot *snapshot);
 struct board_motor_position_snapshot board_motor_position_snapshot(void);
+bool board_motor_start_pair_position(uint32_t now_ms,
+	enum board_motor_port left_port, int32_t left_degrees,
+	enum board_motor_port right_port, int32_t right_degrees,
+	uint8_t maximum_speed_percent);
+bool board_motor_stop_pair_position(enum board_motor_stop_mode stop_mode);
+struct board_motor_pair_position_snapshot
+	board_motor_pair_position_snapshot(void);
 bool board_motor_start_speed(uint32_t now_ms, enum board_motor_port port,
 	int8_t speed_percent);
 bool board_motor_stop_speed(enum board_motor_port port,

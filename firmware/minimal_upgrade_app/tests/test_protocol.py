@@ -504,7 +504,7 @@ class BoardModuleLayoutTests(unittest.TestCase):
         header = (ROOT / "include" / "board_motor.h").read_text(encoding="utf-8")
         config = (ROOT / "include" / "app_config.h").read_text(encoding="utf-8")
         self.assertIn("MOTOR_POSITION_COMMAND          0x1BU", config)
-        self.assertIn("DEVICE_PROTOCOL_MINOR           5U", config)
+        self.assertIn("DEVICE_PROTOCOL_MINOR           6U", config)
         self.assertIn("MOTOR_LARGE_COUNTS_PER_SPEED 12800U", motor)
         self.assertIn("MOTOR_MEDIUM_COUNTS_PER_SPEED 8100U", motor)
         self.assertIn("medium_samples[4] = {2U, 4U, 8U, 16U}", motor)
@@ -558,6 +558,26 @@ class BoardModuleLayoutTests(unittest.TestCase):
         self.assertIn("board_motor_speed_snapshot_for_port", header)
         self.assertIn("queue_motor_position_result(result, port)", protocol)
         self.assertIn("queue_motor_speed_result(result, port)", protocol)
+
+    def test_motor_pair_position_cross_corrects_and_fails_both_safely(self) -> None:
+        motor = (SOURCE_DIR / "board_motor.c").read_text(encoding="utf-8")
+        drive = (SOURCE_DIR / "est_drive.c").read_text(encoding="utf-8")
+        protocol = (SOURCE_DIR / "update_protocol.c").read_text(encoding="utf-8")
+        config = (ROOT / "include" / "app_config.h").read_text(encoding="utf-8")
+
+        self.assertIn("MOTOR_PAIR_POSITION_COMMAND     0x1DU", config)
+        self.assertIn("DEVICE_CAPABILITY_MOTOR_PAIR_POSITION", config)
+        self.assertIn("MOTOR_PAIR_SYNC_COUNTS_PER_PERCENT 4", motor)
+        self.assertIn("MOTOR_PAIR_SYNC_MAX_CORRECTION_PERCENT 10", motor)
+        self.assertIn("pair_adjust_position_speed", motor)
+        self.assertIn("magnitude -= correction", motor)
+        self.assertIn("left_magnitude != right_magnitude", motor)
+        self.assertIn("motor_output_off(pair_position_control.left_port)", motor)
+        self.assertIn("motor_output_off(pair_position_control.right_port)", motor)
+        self.assertIn("board_motor_start_pair_position", drive)
+        self.assertIn("return EST_ERR_NOT_SUPPORTED", drive)
+        self.assertIn("handle_motor_pair_position", protocol)
+        self.assertIn("maximum_synchronization_error_degrees", protocol)
 
     def test_input_port_one_uses_verified_v5_sensor_pins(self) -> None:
         sensor = (SOURCE_DIR / "board_sensor.c").read_text(encoding="utf-8")

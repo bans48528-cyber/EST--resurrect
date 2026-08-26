@@ -377,6 +377,33 @@ class CliTests(unittest.TestCase):
         self.assertIn("safe_final_state=coast", text)
         self.assertEqual(transport.motor_speed_state, 0)
 
+    def test_motor_pair_position_reports_sync_and_finishes_safe(self) -> None:
+        output = io.StringIO()
+        transport = FakeTransport()
+        with mock.patch.object(cli.HidTransport, "open", return_value=transport), \
+             mock.patch.object(cli.time, "sleep"):
+            with contextlib.redirect_stdout(output):
+                self.assertEqual(
+                    cli.main(
+                        [
+                            "motor-pair-position",
+                            "--left-port", "C",
+                            "--right-port", "D",
+                            "--left-degrees", "360",
+                            "--right-degrees", "-360",
+                            "--speed", "20",
+                        ]
+                    ),
+                    0,
+                )
+        text = output.getvalue()
+        self.assertIn("motor_ports=C,D", text)
+        self.assertIn("target_degrees=360,-360", text)
+        self.assertIn("max_sync_error=8", text)
+        self.assertIn("motor_pair_position=complete", text)
+        self.assertIn("safe_final_state=coast", text)
+        self.assertEqual(transport.motor_pair_state, 0)
+
     def test_motor_pair_control_runs_two_ports_independently(self) -> None:
         output = io.StringIO()
         transport = FakeTransport()

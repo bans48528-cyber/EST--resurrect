@@ -122,6 +122,14 @@ python tools/est_hid_sender/est_hid_sender.py motor-speed --port B --speed -30 -
 
 `--speed` 接受 `-100..-10` 或 `10..100`，`--duration` 限制为 0.5-30 秒。电脑端会持续读取实测转速和输出功率，并在结束或异常时发送停车命令；执行前仍须保证马达轴及周围机构可以安全转动。
 
+`M0.75A` 起可让两路已识别的大型或中型马达按编码器进度差同步运行：
+
+```powershell
+python tools/est_hid_sender/est_hid_sender.py motor-pair-position --left-port A --right-port C --left-degrees 360 --right-degrees -360 --speed 20
+```
+
+首版要求两路目标角度都非零、范围为 `±3600°`，且绝对值相同；正负号可分别指定同向或反向。默认端口为当前正式验收使用的 A/C 双大型马达，但固件不会强制两路类型相同。命令会回报两路实际角度、当前同步误差和最大同步误差；任一路超时会联动停止两路，电脑端正常或异常退出时也会发送最终自由滑行命令。
+
 `M0.44A` 起可读取 EST/EV3 兼容颜色/灰度传感器；`M0.46A` 起支持 1-4 号输入口：
 
 ```powershell

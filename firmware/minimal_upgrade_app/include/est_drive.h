@@ -21,11 +21,14 @@ typedef enum {
 
 typedef struct {
 	est_drive_state_t state;
+	est_motor_port_t left_port;
+	est_motor_port_t right_port;
 	int32_t left_target_degrees;
 	int32_t right_target_degrees;
 	int32_t left_actual_degrees;
 	int32_t right_actual_degrees;
 	int32_t synchronization_error_degrees;
+	int32_t maximum_synchronization_error_degrees;
 	est_result_t error;
 } est_drive_status_t;
 
