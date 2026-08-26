@@ -559,7 +559,7 @@ class BoardModuleLayoutTests(unittest.TestCase):
         self.assertIn("queue_motor_position_result(result, port)", protocol)
         self.assertIn("queue_motor_speed_result(result, port)", protocol)
 
-    def test_motor_pair_position_cross_corrects_and_fails_both_safely(self) -> None:
+    def test_motor_pair_position_cross_corrects_without_automatic_timeout(self) -> None:
         motor = (SOURCE_DIR / "board_motor.c").read_text(encoding="utf-8")
         drive = (SOURCE_DIR / "est_drive.c").read_text(encoding="utf-8")
         protocol = (SOURCE_DIR / "update_protocol.c").read_text(encoding="utf-8")
@@ -572,8 +572,13 @@ class BoardModuleLayoutTests(unittest.TestCase):
         self.assertIn("pair_adjust_position_speed", motor)
         self.assertIn("magnitude -= correction", motor)
         self.assertIn("left_magnitude != right_magnitude", motor)
-        self.assertIn("motor_output_off(pair_position_control.left_port)", motor)
-        self.assertIn("motor_output_off(pair_position_control.right_port)", motor)
+        self.assertIn("control->timeout_ms != 0U", motor)
+        self.assertIn("position_controls[(uint8_t)left_port].timeout_ms = 0U", motor)
+        self.assertIn("position_controls[(uint8_t)right_port].timeout_ms = 0U", motor)
+        pair_state = motor[motor.index("static void update_pair_position_state") :
+                           motor.index("void board_motor_init")]
+        self.assertNotIn("BOARD_MOTOR_POSITION_TIMEOUT", pair_state)
+        self.assertNotIn("motor_output_off", pair_state)
         self.assertIn("board_motor_start_pair_position", drive)
         self.assertIn("return EST_ERR_NOT_SUPPORTED", drive)
         self.assertIn("handle_motor_pair_position", protocol)

@@ -1375,8 +1375,7 @@ def run_motor_pair_position(args: argparse.Namespace) -> int:
             if result.result != 1:
                 raise EstUpdaterError("设备拒绝了双马达同步参数")
             started = True
-            deadline = time.monotonic() + 18.0
-            while time.monotonic() < deadline:
+            while True:
                 print(
                     f"pair_state={DRIVE_STATES.get(result.state, 'unknown')} "
                     f"actual={result.left_actual_degrees},{result.right_actual_degrees} "
@@ -1393,7 +1392,6 @@ def run_motor_pair_position(args: argparse.Namespace) -> int:
                     )
                 time.sleep(0.2)
                 result = updater.read_motor_pair_position_status()
-            raise EstUpdaterError("双马达同步未按时完成，已发送联动停止")
         finally:
             if started:
                 try:

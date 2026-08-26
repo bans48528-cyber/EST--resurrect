@@ -404,6 +404,15 @@ class CliTests(unittest.TestCase):
         self.assertIn("safe_final_state=coast", text)
         self.assertEqual(transport.motor_pair_state, 0)
 
+    def test_motor_pair_position_has_no_host_deadline(self) -> None:
+        source = Path(cli.__file__).read_text(encoding="utf-8")
+        start = source.index("def run_motor_pair_position")
+        end = source.index("def run_motor_pair_control", start)
+        pair_command = source[start:end]
+        self.assertIn("while True:", pair_command)
+        self.assertNotIn("deadline", pair_command)
+        self.assertNotIn("未按时完成", pair_command)
+
     def test_motor_pair_control_runs_two_ports_independently(self) -> None:
         output = io.StringIO()
         transport = FakeTransport()

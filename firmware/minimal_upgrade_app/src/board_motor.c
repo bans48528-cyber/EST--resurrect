@@ -1051,7 +1051,8 @@ static void update_position_control_port(uint32_t now_ms,
 		finish_position_control(port, now_ms, BOARD_MOTOR_POSITION_COMPLETE);
 		return;
 	}
-	if ((uint32_t)(now_ms - control->started_ms) >= control->timeout_ms) {
+	if (control->timeout_ms != 0U &&
+	    (uint32_t)(now_ms - control->started_ms) >= control->timeout_ms) {
 		finish_position_control(port, now_ms, BOARD_MOTOR_POSITION_TIMEOUT);
 		return;
 	}
@@ -1096,20 +1097,7 @@ static void update_pair_position_state(void)
 	left = &position_controls[(uint8_t)pair_position_control.left_port];
 	right = &position_controls[(uint8_t)pair_position_control.right_port];
 	record_pair_position_error();
-	if (left->state == BOARD_MOTOR_POSITION_TIMEOUT ||
-	    right->state == BOARD_MOTOR_POSITION_TIMEOUT) {
-		motor_output_off(pair_position_control.left_port);
-		motor_output_off(pair_position_control.right_port);
-		if (left->state == BOARD_MOTOR_POSITION_RUNNING) {
-			left->state = BOARD_MOTOR_POSITION_IDLE;
-		}
-		if (right->state == BOARD_MOTOR_POSITION_RUNNING) {
-			right->state = BOARD_MOTOR_POSITION_IDLE;
-		}
-		pair_position_control.correction_percent = 0;
-		pair_position_control.state =
-			BOARD_MOTOR_PAIR_POSITION_TIMEOUT;
-	} else if (left->state == BOARD_MOTOR_POSITION_COMPLETE &&
+	if (left->state == BOARD_MOTOR_POSITION_COMPLETE &&
 		   right->state == BOARD_MOTOR_POSITION_COMPLETE) {
 		pair_position_control.correction_percent = 0;
 		pair_position_control.state =
@@ -1558,6 +1546,9 @@ bool board_motor_start_pair_position(uint32_t now_ms,
 			BOARD_MOTOR_STOP_LOW_OPEN_DRAIN);
 		return false;
 	}
+	/* Pair tasks run until both targets complete or an explicit stop arrives. */
+	position_controls[(uint8_t)left_port].timeout_ms = 0U;
+	position_controls[(uint8_t)right_port].timeout_ms = 0U;
 	pair_position_control.left_port = left_port;
 	pair_position_control.right_port = right_port;
 	pair_position_control.synchronization_error = 0;
