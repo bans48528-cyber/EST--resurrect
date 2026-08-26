@@ -10,6 +10,7 @@
 #include "board_keys.h"
 #include "board_motor.h"
 #include "board_sensor.h"
+#include "est_motor.h"
 #include "update_protocol.h"
 #include "update_storage.h"
 #include "usb_hid.h"
@@ -675,20 +676,23 @@ static void handle_motor_control(const uint8_t *data, uint16_t data_length)
 
 		if (power_percent < -100 || power_percent > 100) {
 			result = 0U;
-		} else if (!board_motor_set_power(port, power_percent)) {
+		} else if (est_motor_set_power((est_motor_port_t)port,
+		    power_percent) != EST_OK) {
 			result = 2U;
 		}
 	} else if (action == MOTOR_CONTROL_ACTION_COAST && data_length == 2U) {
-		if (!board_motor_coast(port)) {
+		if (est_motor_stop((est_motor_port_t)port,
+		    EST_STOP_COAST) != EST_OK) {
 			result = 2U;
 		}
 	} else if (action == MOTOR_CONTROL_ACTION_BRAKE && data_length == 2U) {
-		if (!board_motor_brake(port)) {
+		if (est_motor_stop((est_motor_port_t)port,
+		    EST_STOP_BRAKE) != EST_OK) {
 			result = 2U;
 		}
 	} else if (action == MOTOR_CONTROL_ACTION_RESET_TACHO &&
 		   data_length == 2U) {
-		if (!board_motor_reset_tacho(port)) {
+		if (est_motor_reset_angle((est_motor_port_t)port) != EST_OK) {
 			result = 2U;
 		}
 	} else {
@@ -697,8 +701,7 @@ static void handle_motor_control(const uint8_t *data, uint16_t data_length)
 	queue_motor_control_result(result, port);
 }
 
-static void handle_motor_position(const uint8_t *data, uint16_t data_length,
-	uint32_t now_ms)
+static void handle_motor_position(const uint8_t *data, uint16_t data_length)
 {
 	uint8_t action = data[0];
 	enum board_motor_port port = (enum board_motor_port)data[1];
@@ -709,12 +712,15 @@ static void handle_motor_position(const uint8_t *data, uint16_t data_length,
 	} else if (action == MOTOR_POSITION_ACTION_STATUS && data_length == 2U) {
 		/* Status is always available, including after completion or timeout. */
 	} else if (action == MOTOR_POSITION_ACTION_START && data_length == 7U) {
-		if (!board_motor_start_position(now_ms, port, data[2],
-		    read_i32_le(&data[3]))) {
+		if (est_motor_run_angle((est_motor_port_t)port,
+		    read_i32_le(&data[3]), data[2], EST_STOP_COAST) != EST_OK) {
 			result = 2U;
 		}
 	} else if (action == MOTOR_POSITION_ACTION_STOP && data_length == 2U) {
-		board_motor_stop();
+		if (est_motor_stop((est_motor_port_t)port,
+		    EST_STOP_COAST) != EST_OK) {
+			result = 2U;
+		}
 	} else {
 		result = 0U;
 	}
@@ -740,8 +746,7 @@ static void handle_motor_type(const uint8_t *data, uint16_t data_length,
 	queue_motor_type_result(result);
 }
 
-static void handle_motor_speed(const uint8_t *data, uint16_t data_length,
-	uint32_t now_ms)
+static void handle_motor_speed(const uint8_t *data, uint16_t data_length)
 {
 	uint8_t action = data[0];
 	enum board_motor_port port = (enum board_motor_port)data[1];
@@ -754,17 +759,18 @@ static void handle_motor_speed(const uint8_t *data, uint16_t data_length,
 	} else if (action == MOTOR_SPEED_ACTION_START && data_length == 3U) {
 		int8_t speed_percent = (int8_t)data[2];
 
-		if (!board_motor_start_speed(now_ms, port, speed_percent)) {
+		if (est_motor_run_speed((est_motor_port_t)port,
+		    speed_percent) != EST_OK) {
 			result = 2U;
 		}
 	} else if (action == MOTOR_SPEED_ACTION_COAST && data_length == 2U) {
-		if (!board_motor_stop_speed(port,
-		    BOARD_MOTOR_STOP_LOW_OPEN_DRAIN)) {
+		if (est_motor_stop((est_motor_port_t)port,
+		    EST_STOP_COAST) != EST_OK) {
 			result = 2U;
 		}
 	} else if (action == MOTOR_SPEED_ACTION_BRAKE && data_length == 2U) {
-		if (!board_motor_stop_speed(port,
-		    BOARD_MOTOR_STOP_HIGH_PUSH_PULL)) {
+		if (est_motor_stop((est_motor_port_t)port,
+		    EST_STOP_BRAKE) != EST_OK) {
 			result = 2U;
 		}
 	} else {
@@ -944,10 +950,10 @@ static void handle_logical_frame(uint32_t now_ms)
 		handle_motor_type(&logical_frame[5], data_length, now_ms);
 	} else if (logical_frame[2] == MOTOR_POSITION_COMMAND &&
 		   (data_length == 2U || data_length == 7U)) {
-		handle_motor_position(&logical_frame[5], data_length, now_ms);
+		handle_motor_position(&logical_frame[5], data_length);
 	} else if (logical_frame[2] == MOTOR_SPEED_COMMAND &&
 		   (data_length == 2U || data_length == 3U)) {
-		handle_motor_speed(&logical_frame[5], data_length, now_ms);
+		handle_motor_speed(&logical_frame[5], data_length);
 	} else if (logical_frame[2] == UPDATE_COMMAND) {
 		handle_update_frame(logical_frame, data_length, now_ms);
 	}

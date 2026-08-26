@@ -118,6 +118,74 @@ class BuildVerificationTests(unittest.TestCase):
             verify_version_pair(first, "M0.01A", second, "M0.02A")
 
 
+class EstServiceApiTests(unittest.TestCase):
+    def test_public_types_freeze_errors_ports_and_stop_modes(self) -> None:
+        types = (ROOT / "include" / "est_types.h").read_text(encoding="utf-8")
+        for token in (
+            "EST_ERR_INVALID_ARGUMENT",
+            "EST_ERR_INVALID_PORT",
+            "EST_ERR_NOT_CONNECTED",
+            "EST_ERR_TYPE_MISMATCH",
+            "EST_ERR_NOT_SUPPORTED",
+            "EST_ERR_BUSY",
+            "EST_ERR_TIMEOUT",
+            "EST_ERR_IO",
+            "EST_ERR_STATE",
+            "EST_MOTOR_PORT_A",
+            "EST_MOTOR_PORT_D",
+            "EST_SENSOR_PORT_1",
+            "EST_SENSOR_PORT_4",
+            "EST_STOP_COAST",
+            "EST_STOP_BRAKE",
+            "EST_STOP_HOLD",
+        ):
+            self.assertIn(token, types)
+
+    def test_motor_contract_wraps_the_verified_board_driver(self) -> None:
+        header = (ROOT / "include" / "est_motor.h").read_text(encoding="utf-8")
+        source = (SOURCE_DIR / "est_motor.c").read_text(encoding="utf-8")
+        for function in (
+            "est_motor_get_type",
+            "est_motor_set_power",
+            "est_motor_run_speed",
+            "est_motor_run_time",
+            "est_motor_run_angle",
+            "est_motor_stop",
+            "est_motor_stop_all",
+            "est_motor_reset_angle",
+            "est_motor_get_status",
+        ):
+            self.assertIn(function, header)
+            self.assertIn(function, source)
+        self.assertIn("board_motor_start_speed(system_time_millis()", source)
+        self.assertIn("board_motor_start_position(system_time_millis()", source)
+        self.assertIn("return EST_ERR_NOT_SUPPORTED;", source)
+
+    def test_drive_contract_is_frozen_before_sync_implementation(self) -> None:
+        drive = (ROOT / "include" / "est_drive.h").read_text(encoding="utf-8")
+        for function in (
+            "est_drive_config",
+            "est_motor_pair_run_angles",
+            "est_drive_straight",
+            "est_drive_turn",
+            "est_drive_arc",
+            "est_drive_stop",
+            "est_drive_get_status",
+        ):
+            self.assertIn(function, drive)
+
+    def test_hid_motor_commands_enter_through_est_service_layer(self) -> None:
+        protocol = (SOURCE_DIR / "update_protocol.c").read_text(encoding="utf-8")
+        self.assertIn('#include "est_motor.h"', protocol)
+        self.assertIn("est_motor_set_power", protocol)
+        self.assertIn("est_motor_run_speed", protocol)
+        self.assertIn("est_motor_run_angle", protocol)
+        self.assertIn("est_motor_stop", protocol)
+        self.assertIn("est_motor_reset_angle", protocol)
+        self.assertNotIn("board_motor_start_speed(now_ms", protocol)
+        self.assertNotIn("board_motor_start_position(now_ms", protocol)
+
+
 class BoardModuleLayoutTests(unittest.TestCase):
     def test_platform_no_longer_owns_board_gpio_or_time(self) -> None:
         platform = (SOURCE_DIR / "platform.c").read_text(encoding="utf-8")
@@ -463,8 +531,8 @@ class BoardModuleLayoutTests(unittest.TestCase):
         self.assertIn("speed_error * 8", motor)
         self.assertIn("MOTOR_SPEED_MIN_PERCENT 10", motor)
         self.assertIn("board_motor_stop_speed", motor)
-        self.assertIn("BOARD_MOTOR_STOP_LOW_OPEN_DRAIN", protocol)
-        self.assertIn("BOARD_MOTOR_STOP_HIGH_PUSH_PULL", protocol)
+        self.assertIn("EST_STOP_COAST", protocol)
+        self.assertIn("EST_STOP_BRAKE", protocol)
         self.assertIn("queue_motor_speed_result", protocol)
 
     def test_input_port_one_uses_verified_v5_sensor_pins(self) -> None:
