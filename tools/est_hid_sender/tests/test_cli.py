@@ -389,7 +389,7 @@ class CliTests(unittest.TestCase):
                             "motor-pair-position",
                             "--left-port", "C",
                             "--right-port", "D",
-                            "--left-degrees", "360",
+                            "--left-degrees", "720",
                             "--right-degrees", "-360",
                             "--speed", "20",
                         ]
@@ -398,7 +398,7 @@ class CliTests(unittest.TestCase):
                 )
         text = output.getvalue()
         self.assertIn("motor_ports=C,D", text)
-        self.assertIn("target_degrees=360,-360", text)
+        self.assertIn("target_degrees=720,-360", text)
         self.assertIn("max_sync_error=8", text)
         self.assertIn("speed=0,0 power=0,0", text)
         self.assertIn("motor_pair_position=complete", text)
@@ -429,7 +429,7 @@ class CliTests(unittest.TestCase):
                             "motor-pair-speed",
                             "--left-port", "A",
                             "--right-port", "C",
-                            "--left-speed", "20",
+                            "--left-speed", "40",
                             "--right-speed", "-20",
                             "--duration", "0.5",
                             "--stop", "brake",
@@ -438,15 +438,44 @@ class CliTests(unittest.TestCase):
                     0,
                 )
         text = output.getvalue()
-        self.assertIn("requested_speed=20,-20", text)
+        self.assertIn("requested_speed=40,-20", text)
         self.assertIn("firmware_timeout=none", text)
         self.assertIn("pair_speed_state=running", text)
-        self.assertIn("speed=20,-20 power=23,24", text)
+        self.assertIn("speed=40,-20 power=23,24", text)
         self.assertIn("stop_state=brake", text)
         self.assertIn("motor_pair_speed=complete", text)
         self.assertIn("safe_final_state=coast", text)
         self.assertEqual(transport.motor_pair_speed_state, 0)
         self.assertNotIn("未按时完成", pair_command)
+
+    def test_drive_steer_reports_ev3_mix_and_finishes_safe(self) -> None:
+        output = io.StringIO()
+        transport = FakeTransport()
+        with mock.patch.object(cli.HidTransport, "open", return_value=transport), \
+             mock.patch.object(cli.time, "sleep"):
+            with contextlib.redirect_stdout(output):
+                self.assertEqual(
+                    cli.main(
+                        [
+                            "drive-steer",
+                            "--left-port", "A",
+                            "--right-port", "C",
+                            "--steering", "50",
+                            "--speed", "80",
+                            "--duration", "0.5",
+                            "--stop", "coast",
+                        ]
+                    ),
+                    0,
+                )
+        text = output.getvalue()
+        self.assertIn("steering=50", text)
+        self.assertIn("movement_speed=80", text)
+        self.assertIn("effective_speed=80,40", text)
+        self.assertIn("drive_steer_state=running", text)
+        self.assertIn("drive_steer=complete", text)
+        self.assertIn("safe_final_state=coast", text)
+        self.assertEqual(transport.motor_pair_speed_state, 0)
 
     def test_drive_straight_reports_distance_and_finishes_safe(self) -> None:
         output = io.StringIO()

@@ -507,7 +507,7 @@ class BoardModuleLayoutTests(unittest.TestCase):
         header = (ROOT / "include" / "board_motor.h").read_text(encoding="utf-8")
         config = (ROOT / "include" / "app_config.h").read_text(encoding="utf-8")
         self.assertIn("MOTOR_POSITION_COMMAND          0x1BU", config)
-        self.assertIn("DEVICE_PROTOCOL_MINOR           9U", config)
+        self.assertIn("DEVICE_PROTOCOL_MINOR           12U", config)
         self.assertIn("MOTOR_LARGE_COUNTS_PER_SPEED 12800U", motor)
         self.assertIn("MOTOR_MEDIUM_COUNTS_PER_SPEED 8100U", motor)
         self.assertIn("medium_samples[4] = {2U, 4U, 8U, 16U}", motor)
@@ -581,15 +581,24 @@ class BoardModuleLayoutTests(unittest.TestCase):
         self.assertIn("MOTOR_PAIR_OVERSPEED_CONTROL_GAIN 32", motor)
         self.assertIn("speed_measurement_valid[BOARD_MOTOR_PORT_COUNT]", motor)
         self.assertIn("pair_adjust_position_speed", motor)
+        self.assertIn("pair_position_scaled_progress", motor)
+        self.assertIn("pair_position_equivalent_speed", motor)
+        self.assertIn("pair_position_scaled_max_speed", motor)
         self.assertIn("magnitude -= correction", motor)
-        self.assertIn("pair_progress_speed(peer_port)", motor)
+        self.assertIn("pair_position_equivalent_speed(peer_port, port)", motor)
         self.assertIn("magnitude > speed_limit", motor)
         self.assertIn("(MOTOR_PAIR_OVERSPEED_CONTROL_GAIN - 8)", motor)
         self.assertNotIn("MOTOR_PAIR_LAG_RECOVERY_MARGIN_PERCENT", motor)
         self.assertNotIn("*pwm_x100 = pwm_limit", motor)
         self.assertIn("leader_port = BOARD_MOTOR_PORT_COUNT", motor)
         self.assertIn("if (target_speed == 0)", motor)
-        self.assertIn("left_magnitude != right_magnitude", motor)
+        pair_position_start = motor[
+            motor.index("bool board_motor_start_pair_position") :
+            motor.index("bool board_motor_stop_pair_position")
+        ]
+        self.assertNotIn("left_magnitude != right_magnitude", pair_position_start)
+        self.assertIn("left_speed_percent", pair_position_start)
+        self.assertIn("right_speed_percent", pair_position_start)
         self.assertIn("control->timeout_ms != 0U", motor)
         self.assertIn("position_controls[(uint8_t)left_port].timeout_ms = 0U", motor)
         self.assertIn("position_controls[(uint8_t)right_port].timeout_ms = 0U", motor)
@@ -616,7 +625,9 @@ class BoardModuleLayoutTests(unittest.TestCase):
         self.assertIn("board_motor_stop_pair_speed", header)
         self.assertIn("pair_adjust_continuous_speed", motor)
         self.assertIn("update_pair_speed_correction", motor)
-        self.assertIn("left_magnitude != right_magnitude", motor)
+        self.assertIn("pair_speed_scaled_progress", motor)
+        self.assertIn("pair_speed_equivalent_speed", motor)
+        self.assertIn("pair_speed_scaled_correction", motor)
         self.assertIn("est_motor_pair_run_speeds", drive)
         self.assertIn("est_motor_pair_stop", drive)
         self.assertIn("handle_motor_pair_speed", protocol)
@@ -624,6 +635,7 @@ class BoardModuleLayoutTests(unittest.TestCase):
         pair_speed_start = motor[motor.index("bool board_motor_start_pair_speed") :
                                  motor.index("bool board_motor_stop_pair_speed")]
         self.assertNotIn("timeout", pair_speed_start)
+        self.assertNotIn("left_magnitude != right_magnitude", pair_speed_start)
 
     def test_drive_straight_converts_millimeters_in_firmware(self) -> None:
         drive = (SOURCE_DIR / "est_drive.c").read_text(encoding="utf-8")
@@ -670,6 +682,28 @@ class BoardModuleLayoutTests(unittest.TestCase):
         self.assertIn("handle_drive_run", protocol)
         self.assertIn("DRIVE_RUN_MODE_DEGREES", protocol)
         self.assertIn("DRIVE_RUN_MODE_TIME_MS", protocol)
+
+    def test_drive_steer_uses_ev3_classroom_speed_mix(self) -> None:
+        drive = (SOURCE_DIR / "est_drive.c").read_text(encoding="utf-8")
+        drive_header = (ROOT / "include" / "est_drive.h").read_text(
+            encoding="utf-8"
+        )
+        protocol = (SOURCE_DIR / "update_protocol.c").read_text(encoding="utf-8")
+        config = (ROOT / "include" / "app_config.h").read_text(encoding="utf-8")
+
+        self.assertIn("DRIVE_STEER_COMMAND             0x21U", config)
+        self.assertIn("DEVICE_CAPABILITY_DRIVE_STEER", config)
+        self.assertIn("est_drive_mix_steering", drive_header)
+        self.assertIn("est_drive_start_steer", drive_header)
+        self.assertIn("steering == 100 || steering == -100", drive)
+        self.assertIn("left_raw = clamp_percent(100 + steering)", drive)
+        self.assertIn("right_raw = clamp_percent(100 - steering)", drive)
+        self.assertIn("(int64_t)left_raw * speed_percent, 100LL", drive)
+        self.assertIn("closed_loop_speed_supported", drive)
+        self.assertIn("est_motor_pair_run_speeds(left_port, left_speed", drive)
+        self.assertIn("handle_drive_steer", protocol)
+        self.assertIn("queue_motor_pair_speed_result(DRIVE_STEER_COMMAND", protocol)
+        self.assertIn("data_length == 5U", protocol)
 
     def test_input_port_one_uses_verified_v5_sensor_pins(self) -> None:
         sensor = (SOURCE_DIR / "board_sensor.c").read_text(encoding="utf-8")

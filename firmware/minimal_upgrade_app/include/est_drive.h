@@ -89,6 +89,11 @@ est_result_t est_drive_run_time(est_motor_port_t left_port,
 	est_motor_port_t right_port, int32_t duration_ms,
 	uint8_t speed_percent, est_stop_mode_t stop_mode);
 est_result_t est_drive_get_motion_status(est_drive_motion_status_t *status);
+est_result_t est_drive_mix_steering(int8_t steering,
+	int8_t speed_percent, int8_t *left_speed_percent,
+	int8_t *right_speed_percent);
+est_result_t est_drive_start_steer(est_motor_port_t left_port,
+	est_motor_port_t right_port, int8_t steering, int8_t speed_percent);
 est_result_t est_drive_straight(int32_t distance_mm,
 	uint8_t speed_percent, est_stop_mode_t stop_mode);
 est_result_t est_drive_turn(int32_t angle_degrees,

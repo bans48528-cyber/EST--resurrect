@@ -558,7 +558,7 @@ static void queue_motor_pair_position_result(uint8_t result)
 	(void)usb_hid_queue_report(report, false);
 }
 
-static void queue_motor_pair_speed_result(uint8_t result)
+static void queue_motor_pair_speed_result(uint8_t command, uint8_t result)
 {
 	est_motor_pair_speed_status_t status = {0};
 	uint8_t report[USB_HID_REPORT_SIZE] = {0};
@@ -566,7 +566,7 @@ static void queue_motor_pair_speed_result(uint8_t result)
 	(void)est_motor_pair_get_speed_status(&status);
 	report[0] = FRAME_START_BYTE;
 	report[1] = DEVICE_FRAME_DIRECTION;
-	report[2] = MOTOR_PAIR_SPEED_COMMAND;
+	report[2] = command;
 	report[3] = 27U;
 	report[4] = 0U;
 	report[5] = result;
@@ -664,7 +664,8 @@ static void queue_device_status(uint32_t now_ms)
 		DEVICE_CAPABILITY_MOTOR_PAIR_POSITION |
 		DEVICE_CAPABILITY_MOTOR_PAIR_SPEED |
 		DEVICE_CAPABILITY_DRIVE_STRAIGHT |
-		DEVICE_CAPABILITY_DRIVE_RUN;
+		DEVICE_CAPABILITY_DRIVE_RUN |
+		DEVICE_CAPABILITY_DRIVE_STEER;
 
 	report[0] = FRAME_START_BYTE;
 	report[1] = DEVICE_FRAME_DIRECTION;
@@ -976,7 +977,36 @@ static void handle_motor_pair_speed(const uint8_t *data,
 			operation_result == EST_ERR_INVALID_PORT ||
 			operation_result == EST_ERR_NOT_SUPPORTED ? 0U : 2U;
 	}
-	queue_motor_pair_speed_result(result);
+	queue_motor_pair_speed_result(MOTOR_PAIR_SPEED_COMMAND, result);
+}
+
+static void handle_drive_steer(const uint8_t *data, uint16_t data_length)
+{
+	uint8_t action = data[0];
+	uint8_t result = 1U;
+	est_result_t operation_result = EST_OK;
+
+	if (action == DRIVE_STEER_ACTION_STATUS && data_length == 1U) {
+		/* Effective wheel speeds remain readable after an explicit stop. */
+	} else if (action == DRIVE_STEER_ACTION_START && data_length == 5U) {
+		operation_result = est_drive_start_steer(
+			(est_motor_port_t)data[1], (est_motor_port_t)data[2],
+			(int8_t)data[3], (int8_t)data[4]);
+	} else if (action == DRIVE_STEER_ACTION_COAST &&
+		   data_length == 1U) {
+		operation_result = est_motor_pair_stop(EST_STOP_COAST);
+	} else if (action == DRIVE_STEER_ACTION_BRAKE &&
+		   data_length == 1U) {
+		operation_result = est_motor_pair_stop(EST_STOP_BRAKE);
+	} else {
+		result = 0U;
+	}
+	if (operation_result != EST_OK) {
+		result = operation_result == EST_ERR_INVALID_ARGUMENT ||
+			operation_result == EST_ERR_INVALID_PORT ||
+			operation_result == EST_ERR_NOT_SUPPORTED ? 0U : 2U;
+	}
+	queue_motor_pair_speed_result(DRIVE_STEER_COMMAND, result);
 }
 
 static void handle_drive_straight(const uint8_t *data,
@@ -1239,6 +1269,9 @@ static void handle_logical_frame(uint32_t now_ms)
 	} else if (logical_frame[2] == DRIVE_RUN_COMMAND &&
 		   (data_length == 1U || data_length == 10U)) {
 		handle_drive_run(&logical_frame[5], data_length);
+	} else if (logical_frame[2] == DRIVE_STEER_COMMAND &&
+		   (data_length == 1U || data_length == 5U)) {
+		handle_drive_steer(&logical_frame[5], data_length);
 	} else if (logical_frame[2] == UPDATE_COMMAND) {
 		handle_update_frame(logical_frame, data_length, now_ms);
 	}

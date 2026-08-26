@@ -282,6 +282,7 @@ static bool any_position_control_active(void);
 static bool legacy_diagnostic_active(void);
 static bool pair_position_owns_port(enum board_motor_port port);
 static bool pair_speed_owns_port(enum board_motor_port port);
+static int16_t pair_progress_speed(enum board_motor_port port);
 static void record_pair_speed_error(void);
 
 static void motor_tacho_direction_drive_low(enum board_motor_port port)
@@ -933,6 +934,69 @@ static int32_t position_control_progress(enum board_motor_port port)
 	return control->requested_speed < 0 ? -movement : movement;
 }
 
+static int32_t pair_position_target_magnitude(enum board_motor_port port)
+{
+	const struct motor_position_control *control =
+		&position_controls[(uint8_t)port];
+	int32_t target = control->target_count - control->start_count;
+
+	return target < 0 ? -target : target;
+}
+
+static int32_t round_pair_ratio(int64_t numerator, int32_t denominator)
+{
+	if (numerator >= 0) {
+		return (int32_t)((numerator + denominator / 2) / denominator);
+	}
+	return (int32_t)((numerator - denominator / 2) / denominator);
+}
+
+static int32_t pair_position_scaled_progress(enum board_motor_port port)
+{
+	int32_t left_target = pair_position_target_magnitude(
+		pair_position_control.left_port);
+	int32_t right_target = pair_position_target_magnitude(
+		pair_position_control.right_port);
+	int32_t reference_target = left_target > right_target ?
+		left_target : right_target;
+	int32_t port_target = pair_position_target_magnitude(port);
+
+	if (port_target == 0) {
+		return 0;
+	}
+	return round_pair_ratio((int64_t)position_control_progress(port) *
+		reference_target, port_target);
+}
+
+static int16_t pair_position_equivalent_speed(enum board_motor_port source_port,
+	enum board_motor_port target_port)
+{
+	int32_t source_target = pair_position_target_magnitude(source_port);
+	int32_t target_target = pair_position_target_magnitude(target_port);
+	int32_t equivalent_speed;
+
+	if (source_target == 0) {
+		return 0;
+	}
+	equivalent_speed = round_pair_ratio(
+		(int64_t)pair_progress_speed(source_port) * target_target,
+		source_target);
+	return equivalent_speed > 100 ? 100 : (int16_t)equivalent_speed;
+}
+
+static uint8_t pair_position_scaled_max_speed(uint8_t maximum_speed_percent,
+	int32_t target_magnitude, int32_t reference_target)
+{
+	int32_t scaled_speed = round_pair_ratio(
+		(int64_t)maximum_speed_percent * target_magnitude,
+		reference_target);
+
+	if (scaled_speed < (int32_t)MOTOR_POSITION_MIN_SPEED_PERCENT) {
+		scaled_speed = (int32_t)MOTOR_POSITION_MIN_SPEED_PERCENT;
+	}
+	return (uint8_t)scaled_speed;
+}
+
 static int16_t pair_progress_speed(enum board_motor_port port)
 {
 	int16_t speed = measured_speed_percent[(uint8_t)port];
@@ -979,7 +1043,7 @@ static int8_t pair_adjust_position_speed(enum board_motor_port port,
 	    !speed_measurement_valid[(uint8_t)peer_port]) {
 		return target_speed < 0 ? -(int8_t)magnitude : (int8_t)magnitude;
 	}
-	speed_limit = pair_progress_speed(peer_port);
+	speed_limit = pair_position_equivalent_speed(peer_port, port);
 	if (speed_limit > 0) {
 		speed_limit += MOTOR_PAIR_SPEED_FOLLOW_TOLERANCE_PERCENT;
 	}
@@ -994,8 +1058,8 @@ static void record_pair_position_error(void)
 	int32_t absolute_error;
 
 	pair_position_control.synchronization_error =
-		position_control_progress(pair_position_control.left_port) -
-		position_control_progress(pair_position_control.right_port);
+		pair_position_scaled_progress(pair_position_control.left_port) -
+		pair_position_scaled_progress(pair_position_control.right_port);
 	absolute_error = pair_position_control.synchronization_error < 0 ?
 		-pair_position_control.synchronization_error :
 		pair_position_control.synchronization_error;
@@ -1051,6 +1115,70 @@ static int32_t pair_speed_progress(enum board_motor_port port)
 		-movement : movement;
 }
 
+static uint8_t pair_speed_target_magnitude(enum board_motor_port port)
+{
+	int8_t target = port == pair_speed_control.left_port ?
+		pair_speed_control.left_requested_speed :
+		pair_speed_control.right_requested_speed;
+
+	return target < 0 ? (uint8_t)(-(int16_t)target) : (uint8_t)target;
+}
+
+static int32_t pair_speed_scaled_progress(enum board_motor_port port)
+{
+	uint8_t left_target = pair_speed_target_magnitude(
+		pair_speed_control.left_port);
+	uint8_t right_target = pair_speed_target_magnitude(
+		pair_speed_control.right_port);
+	uint8_t reference_target = left_target > right_target ?
+		left_target : right_target;
+	uint8_t port_target = pair_speed_target_magnitude(port);
+
+	if (port_target == 0U) {
+		return 0;
+	}
+	return round_pair_ratio((int64_t)pair_speed_progress(port) *
+		reference_target, port_target);
+}
+
+static int16_t pair_speed_equivalent_speed(
+	enum board_motor_port source_port, enum board_motor_port target_port)
+{
+	uint8_t source_target = pair_speed_target_magnitude(source_port);
+	uint8_t target_target = pair_speed_target_magnitude(target_port);
+	int32_t equivalent_speed;
+
+	if (source_target == 0U) {
+		return 0;
+	}
+	equivalent_speed = round_pair_ratio(
+		(int64_t)pair_progress_speed(source_port) * target_target,
+		source_target);
+	return equivalent_speed > 100 ? 100 : (int16_t)equivalent_speed;
+}
+
+static int16_t pair_speed_scaled_correction(enum board_motor_port port,
+	int8_t correction)
+{
+	uint8_t left_target = pair_speed_target_magnitude(
+		pair_speed_control.left_port);
+	uint8_t right_target = pair_speed_target_magnitude(
+		pair_speed_control.right_port);
+	uint8_t reference_target = left_target > right_target ?
+		left_target : right_target;
+	int16_t correction_magnitude = correction < 0 ?
+		-(int16_t)correction : (int16_t)correction;
+	int32_t scaled_correction;
+
+	if (correction_magnitude == 0 || reference_target == 0U) {
+		return 0;
+	}
+	scaled_correction = round_pair_ratio(
+		(int64_t)correction_magnitude * pair_speed_target_magnitude(port),
+		reference_target);
+	return scaled_correction == 0 ? 1 : (int16_t)scaled_correction;
+}
+
 static void finish_pair_speed(enum board_motor_stop_mode stop_mode,
 	enum board_motor_pair_speed_state state)
 {
@@ -1099,8 +1227,8 @@ static void record_pair_speed_error(void)
 	int32_t absolute_error;
 
 	pair_speed_control.synchronization_error =
-		pair_speed_progress(pair_speed_control.left_port) -
-		pair_speed_progress(pair_speed_control.right_port);
+		pair_speed_scaled_progress(pair_speed_control.left_port) -
+		pair_speed_scaled_progress(pair_speed_control.right_port);
 	absolute_error = pair_speed_control.synchronization_error < 0 ?
 		-pair_speed_control.synchronization_error :
 		pair_speed_control.synchronization_error;
@@ -1158,7 +1286,7 @@ static int8_t pair_adjust_continuous_speed(enum board_motor_port port,
 		(port == pair_speed_control.left_port && correction > 0) ||
 		(port == pair_speed_control.right_port && correction < 0);
 	if (port == pair_speed_control.leader_port && correction_applies) {
-		magnitude -= correction > 0 ? correction : -correction;
+		magnitude -= pair_speed_scaled_correction(port, correction);
 		if (magnitude < MOTOR_SPEED_MIN_PERCENT) {
 			magnitude = MOTOR_SPEED_MIN_PERCENT;
 		}
@@ -1172,7 +1300,7 @@ static int8_t pair_adjust_continuous_speed(enum board_motor_port port,
 	    !speed_measurement_valid[(uint8_t)peer_port]) {
 		return target_speed < 0 ? -(int8_t)magnitude : (int8_t)magnitude;
 	}
-	speed_limit = pair_progress_speed(peer_port);
+	speed_limit = pair_speed_equivalent_speed(peer_port, port);
 	if (speed_limit > 0) {
 		speed_limit += MOTOR_PAIR_SPEED_FOLLOW_TOLERANCE_PERCENT;
 	}
@@ -1779,6 +1907,9 @@ bool board_motor_start_pair_position(uint32_t now_ms,
 {
 	int32_t left_magnitude;
 	int32_t right_magnitude;
+	int32_t reference_target;
+	uint8_t left_speed_percent;
+	uint8_t right_speed_percent;
 	enum board_motor_type left_type;
 	enum board_motor_type right_type;
 
@@ -1799,9 +1930,12 @@ bool board_motor_start_pair_position(uint32_t now_ms,
 	}
 	left_magnitude = left_degrees < 0 ? -left_degrees : left_degrees;
 	right_magnitude = right_degrees < 0 ? -right_degrees : right_degrees;
-	if (left_magnitude != right_magnitude) {
-		return false;
-	}
+	reference_target = left_magnitude > right_magnitude ?
+		left_magnitude : right_magnitude;
+	left_speed_percent = pair_position_scaled_max_speed(
+		maximum_speed_percent, left_magnitude, reference_target);
+	right_speed_percent = pair_position_scaled_max_speed(
+		maximum_speed_percent, right_magnitude, reference_target);
 	left_type = motor_type[(uint8_t)left_port];
 	right_type = motor_type[(uint8_t)right_port];
 	if ((left_type != BOARD_MOTOR_TYPE_LARGE &&
@@ -1811,11 +1945,11 @@ bool board_motor_start_pair_position(uint32_t now_ms,
 		return false;
 	}
 	if (!board_motor_start_position(now_ms, left_port,
-	    maximum_speed_percent, left_degrees)) {
+	    left_speed_percent, left_degrees)) {
 		return false;
 	}
 	if (!board_motor_start_position(now_ms, right_port,
-	    maximum_speed_percent, right_degrees)) {
+	    right_speed_percent, right_degrees)) {
 		(void)board_motor_stop_position(left_port,
 			BOARD_MOTOR_STOP_LOW_OPEN_DRAIN);
 		return false;
@@ -2008,8 +2142,7 @@ static bool start_pair_speed(uint32_t now_ms,
 		(uint8_t)(-(int16_t)right_speed_percent) :
 		(uint8_t)right_speed_percent;
 	if (left_magnitude < MOTOR_SPEED_MIN_PERCENT ||
-	    right_magnitude < MOTOR_SPEED_MIN_PERCENT ||
-	    left_magnitude != right_magnitude) {
+	    right_magnitude < MOTOR_SPEED_MIN_PERCENT) {
 		return false;
 	}
 	if (!board_motor_start_speed(now_ms, left_port, left_speed_percent)) {

@@ -54,6 +54,25 @@ static int32_t round_signed_ratio(int64_t numerator, int64_t denominator)
 	return (int32_t)((numerator - denominator / 2LL) / denominator);
 }
 
+static int16_t clamp_percent(int16_t value)
+{
+	if (value > 100) {
+		return 100;
+	}
+	if (value < -100) {
+		return -100;
+	}
+	return value;
+}
+
+static bool closed_loop_speed_supported(int8_t speed_percent)
+{
+	int16_t magnitude = speed_percent < 0 ?
+		-(int16_t)speed_percent : (int16_t)speed_percent;
+
+	return magnitude >= 10 && magnitude <= 100;
+}
+
 static bool distance_to_wheel_degrees(int32_t distance_mm,
 	uint16_t wheel_diameter_mm, int32_t *degrees)
 {
@@ -122,8 +141,6 @@ est_result_t est_motor_pair_run_angles(est_motor_port_t left_port,
 	est_stop_mode_t stop_mode)
 {
 	est_result_t result;
-	int32_t left_magnitude;
-	int32_t right_magnitude;
 
 	if (!motor_port_valid(left_port) || !motor_port_valid(right_port)) {
 		return EST_ERR_INVALID_PORT;
@@ -136,11 +153,6 @@ est_result_t est_motor_pair_run_angles(est_motor_port_t left_port,
 		return EST_ERR_INVALID_ARGUMENT;
 	}
 	if (stop_mode != EST_STOP_COAST) {
-		return EST_ERR_NOT_SUPPORTED;
-	}
-	left_magnitude = left_degrees < 0 ? -left_degrees : left_degrees;
-	right_magnitude = right_degrees < 0 ? -right_degrees : right_degrees;
-	if (left_magnitude != right_magnitude) {
 		return EST_ERR_NOT_SUPPORTED;
 	}
 	result = require_tacho_motor(left_port);
@@ -183,8 +195,7 @@ est_result_t est_motor_pair_run_speeds(est_motor_port_t left_port,
 		-(int16_t)left_speed_percent : left_speed_percent;
 	right_magnitude = right_speed_percent < 0 ?
 		-(int16_t)right_speed_percent : right_speed_percent;
-	if (left_magnitude < 10 || right_magnitude < 10 ||
-	    left_magnitude != right_magnitude) {
+	if (left_magnitude < 10 || right_magnitude < 10) {
 		return EST_ERR_NOT_SUPPORTED;
 	}
 	result = require_tacho_motor(left_port);
@@ -367,6 +378,55 @@ est_result_t est_drive_get_motion_status(est_drive_motion_status_t *status)
 		return EST_ERR_STATE;
 	}
 	return EST_OK;
+}
+
+est_result_t est_drive_mix_steering(int8_t steering,
+	int8_t speed_percent, int8_t *left_speed_percent,
+	int8_t *right_speed_percent)
+{
+	int16_t left_raw;
+	int16_t right_raw;
+	int8_t left_speed;
+	int8_t right_speed;
+
+	if (left_speed_percent == NULL || right_speed_percent == NULL ||
+	    steering < -100 || steering > 100 || speed_percent == 0 ||
+	    speed_percent < -100 || speed_percent > 100) {
+		return EST_ERR_INVALID_ARGUMENT;
+	}
+	if (steering == 100 || steering == -100) {
+		left_raw = steering;
+		right_raw = -steering;
+	} else {
+		left_raw = clamp_percent(100 + steering);
+		right_raw = clamp_percent(100 - steering);
+	}
+	left_speed = (int8_t)round_signed_ratio(
+		(int64_t)left_raw * speed_percent, 100LL);
+	right_speed = (int8_t)round_signed_ratio(
+		(int64_t)right_raw * speed_percent, 100LL);
+	if (!closed_loop_speed_supported(left_speed) ||
+	    !closed_loop_speed_supported(right_speed)) {
+		return EST_ERR_NOT_SUPPORTED;
+	}
+	*left_speed_percent = left_speed;
+	*right_speed_percent = right_speed;
+	return EST_OK;
+}
+
+est_result_t est_drive_start_steer(est_motor_port_t left_port,
+	est_motor_port_t right_port, int8_t steering, int8_t speed_percent)
+{
+	int8_t left_speed;
+	int8_t right_speed;
+	est_result_t result = est_drive_mix_steering(steering, speed_percent,
+		&left_speed, &right_speed);
+
+	if (result != EST_OK) {
+		return result;
+	}
+	return est_motor_pair_run_speeds(left_port, left_speed,
+		right_port, right_speed);
 }
 
 est_result_t est_drive_straight(int32_t distance_mm,

@@ -128,19 +128,27 @@ python tools/est_hid_sender/est_hid_sender.py motor-speed --port B --speed -30 -
 python tools/est_hid_sender/est_hid_sender.py motor-pair-position --left-port A --right-port C --left-degrees 360 --right-degrees -360 --speed 20
 ```
 
-首版要求两路目标角度都非零、范围为 `±3600°`，且绝对值相同；正负号可分别指定同向或反向。默认端口为当前正式验收使用的 A/C 双大型马达，但固件不会强制两路类型相同。命令会回报两路实际角度、当前同步误差和最大同步误差；任一路超时会联动停止两路，电脑端正常或异常退出时也会发送最终自由滑行命令。
+`M0.86A` 起两路目标角度可以不同，但都必须非零且位于 `±3600°`；正负号可分别指定同向或反向。长行程侧按指定最大速度运行，短行程侧按目标角度比例降低基础速度；同步误差是投影到较长目标后的等效角度差。默认端口为当前正式验收使用的 A/C 双大型马达，但固件不会强制两路类型相同。电脑端正常或异常退出时都会发送最终自由滑行命令。
 
 `M0.76A` 起双电机同步任务不再设置自动时间上限，电脑端也会持续等待到两路完成或用户中断。受阻电机松开后继续追赶目标；永久受阻时必须由用户用 `Ctrl+C` 或上层显式停止命令结束。升级和关机路径仍会强制关闭全部马达。
 
 双电机同步状态行中的 `speed=A,C` 是两路编码器实测速度百分比，`power=A,C` 是当时实际 PWM 百分比。它们用于区分目标速度、真实转速和闭环为抵抗负载施加的功率。
 
-`M0.83A` 起可让一组双电机持续维持闭环转速，直到收到明确的停止命令。首版要求两路速度绝对值相同，正负号可分别设置；允许用户明确选择大型/中型混合配对。`--duration` 仅决定电脑端观察多久，结束后工具会发送 `--stop coast` 或 `--stop brake`，固件自身没有超时：
+`M0.83A` 起可让一组双电机持续维持闭环转速，直到收到明确的停止命令；`M0.87A` 起两路可分别设置绝对值 `10..100%` 的独立有符号速度。固件按目标速度比例投影两侧编码器进度和同伴限速，例如 `40%/20%` 按 `2:1` 行程比较，不会被纠正成同速。允许用户明确选择大型/中型混合配对。`--duration` 仅决定电脑端观察多久，结束后工具会发送 `--stop coast` 或 `--stop brake`，固件自身没有超时：
 
 ```powershell
-python tools/est_hid_sender/est_hid_sender.py motor-pair-speed --left-port A --right-port C --left-speed 20 --right-speed 20 --duration 10 --stop coast
+python tools/est_hid_sender/est_hid_sender.py motor-pair-speed --left-port A --right-port C --left-speed 40 --right-speed 20 --duration 10 --stop coast
 ```
 
-`M0.84A` 起可在固件 C 层按轮径把毫米距离换算为两轮同步角度。正距离前进，负距离后退；首版完成后采用自由滑行。`--axle-track` 已进入底盘配置，但要到转向和圆弧功能才参与换算：
+`M0.88A` 起新增与 EV3 Classroom 移动积木一致的持续转向命令。`--steering` 为 `-100..100`，`--speed` 为有符号移动速度；转向 `0` 为直行，`+50` 配合速度 `80` 得到左/右 `80%/40%`，`-50` 得到 `40%/80%`，`±100` 为两轮反向的原地旋转。该命令不使用轮径、轮距或机身角度：
+
+```powershell
+python tools/est_hid_sender/est_hid_sender.py drive-steer --left-port A --right-port C --steering 50 --speed 80 --duration 5 --stop coast
+```
+
+持续转向复用双电机比例定速控制，固件没有自动超时，工具会在观察结束或异常退出时显式停止。当前闭环要求换算后的左右速度绝对值均不低于 10%；接近但未达到 `±100` 的转向值可能使内侧轮低于该下限并被拒绝，原地旋转应直接使用 `±100`。
+
+`M0.84A` 起可在固件 C 层按轮径把毫米距离换算为两轮同步角度。正距离前进，负距离后退；首版完成后采用自由滑行。`--axle-track` 已进入底盘配置，但当前毫米直行和 M0.88A 的 EV3 转向都不使用它，只为以后确实需要几何换算的接口保留：
 
 ```powershell
 python tools/est_hid_sender/est_hid_sender.py drive-straight --left-port A --right-port C --wheel-diameter 56 --axle-track 120 --distance 500 --speed 40

@@ -23,6 +23,7 @@ from est_hid_sender.errors import (  # noqa: E402
 )
 from est_hid_sender.protocol import (  # noqa: E402
     build_frame,
+    build_drive_steer_frame,
     build_drive_straight_frame,
     build_drive_run_frame,
     build_device_status_frame,
@@ -47,6 +48,7 @@ from est_hid_sender.protocol import (  # noqa: E402
     build_update_frame,
     checksum,
     parse_heartbeat_response,
+    parse_drive_steer_response,
     parse_drive_straight_response,
     parse_drive_run_response,
     parse_device_status_response,
@@ -284,6 +286,7 @@ def build_motor_pair_position_result(
 
 
 def build_motor_pair_speed_result(
+    command: int = 0x1E,
     result: int = 1,
     state: int = 1,
     left_port: int = 0,
@@ -302,7 +305,7 @@ def build_motor_pair_speed_result(
 ) -> bytes:
     frame = bytearray(
         (
-            0x68, 0x21, 0x1E, 0x1B, 0x00, result, state,
+            0x68, 0x21, command, 0x1B, 0x00, result, state,
             left_port, right_port,
             left_requested & 0xFF, right_requested & 0xFF,
             left_measured & 0xFF, right_measured & 0xFF,
@@ -672,13 +675,13 @@ class ProtocolTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "magnitude at least 10"):
             build_motor_speed_frame(1, 0, 9)
 
-    def test_motor_pair_position_requires_equal_progress_and_parses_error(self) -> None:
+    def test_motor_pair_position_supports_proportional_targets_and_parses_error(self) -> None:
         self.assertEqual(
-            build_motor_pair_position_frame(1, 2, 3, 20, 360, -360),
+            build_motor_pair_position_frame(1, 2, 3, 20, 720, -360),
             build_frame(
                 0x1D,
                 bytes((1, 2, 3, 20))
-                + (360).to_bytes(4, "little", signed=True)
+                + (720).to_bytes(4, "little", signed=True)
                 + (-360).to_bytes(4, "little", signed=True),
             ),
         )
@@ -691,13 +694,13 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(result.right_actual_degrees, -367)
         self.assertEqual(result.synchronization_error_degrees, -3)
         self.assertEqual(result.maximum_synchronization_error_degrees, 11)
-        with self.assertRaisesRegex(ValueError, "equal absolute degrees"):
-            build_motor_pair_position_frame(1, 2, 3, 20, 360, -180)
+        with self.assertRaisesRegex(ValueError, "excluding 0"):
+            build_motor_pair_position_frame(1, 2, 3, 20, 360, 0)
 
-    def test_motor_pair_speed_requires_equal_magnitude_and_parses_runtime(self) -> None:
+    def test_motor_pair_speed_accepts_independent_speeds_and_parses_runtime(self) -> None:
         self.assertEqual(
-            build_motor_pair_speed_frame(1, 0, 2, 20, -20),
-            build_frame(0x1E, bytes((1, 0, 2, 20, 0xEC))),
+            build_motor_pair_speed_frame(1, 0, 2, 40, -20),
+            build_frame(0x1E, bytes((1, 0, 2, 40, 0xEC))),
         )
         result = parse_motor_pair_speed_response(
             build_motor_pair_speed_result(
@@ -716,8 +719,35 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual((result.left_actual_degrees,
                           result.right_actual_degrees), (180, -178))
         self.assertEqual(result.maximum_synchronization_error_degrees, 6)
-        with self.assertRaisesRegex(ValueError, "equal absolute values"):
-            build_motor_pair_speed_frame(1, 0, 2, 20, 30)
+        with self.assertRaisesRegex(ValueError, "magnitude between 10 and 100"):
+            build_motor_pair_speed_frame(1, 0, 2, 5, 30)
+
+    def test_drive_steer_uses_ev3_classroom_speed_mix(self) -> None:
+        self.assertEqual(
+            build_drive_steer_frame(1, 0, 2, 50, 80),
+            build_frame(0x21, bytes((1, 0, 2, 50, 80))),
+        )
+        result = parse_drive_steer_response(
+            build_motor_pair_speed_result(
+                command=0x21,
+                left_requested=80,
+                right_requested=40,
+                left_measured=79,
+                right_measured=39,
+            )
+        )
+        self.assertIsNotNone(result)
+        self.assertEqual(
+            (result.left_requested_speed_percent,
+             result.right_requested_speed_percent),
+            (80, 40),
+        )
+        self.assertEqual(
+            build_drive_steer_frame(1, 0, 2, 100, 80),
+            build_frame(0x21, bytes((1, 0, 2, 100, 80))),
+        )
+        with self.assertRaisesRegex(ValueError, "between -100 and 100"):
+            build_drive_steer_frame(1, 0, 2, 101, 80)
 
     def test_drive_straight_sends_geometry_and_parses_distance(self) -> None:
         self.assertEqual(
@@ -1249,32 +1279,58 @@ class FakeTransport:
                 )
             )
             return
-        if report[0:3] == b"\x68\x11\x1e":
+        if report[0:3] in (b"\x68\x11\x1e", b"\x68\x11\x21"):
+            command = report[2]
             action = report[5]
             if action == 1:
                 self.motor_pair_speed_state = 1
                 self.motor_pair_speed_left_port = report[6]
                 self.motor_pair_speed_right_port = report[7]
-                self.motor_pair_speed_left_target = int.from_bytes(
-                    report[8:9], "little", signed=True
-                )
-                self.motor_pair_speed_right_target = int.from_bytes(
-                    report[9:10], "little", signed=True
-                )
+                if command == 0x21:
+                    steering = int.from_bytes(report[8:9], "little", signed=True)
+                    movement_speed = int.from_bytes(
+                        report[9:10], "little", signed=True
+                    )
+                    if abs(steering) == 100:
+                        left_raw, right_raw = steering, -steering
+                    else:
+                        left_raw = max(-100, min(100, 100 + steering))
+                        right_raw = max(-100, min(100, 100 - steering))
+
+                    def mix(raw: int) -> int:
+                        product = raw * movement_speed
+                        if product >= 0:
+                            return (product + 50) // 100
+                        return -((-product + 50) // 100)
+
+                    self.motor_pair_speed_left_target = mix(left_raw)
+                    self.motor_pair_speed_right_target = mix(right_raw)
+                else:
+                    self.motor_pair_speed_left_target = int.from_bytes(
+                        report[8:9], "little", signed=True
+                    )
+                    self.motor_pair_speed_right_target = int.from_bytes(
+                        report[9:10], "little", signed=True
+                    )
                 self.motor_pair_speed_left_actual = 0
                 self.motor_pair_speed_right_actual = 0
                 self.motor_pair_speed_max_error = 0
             elif action == 0 and self.motor_pair_speed_state == 1:
                 left_direction = 1 if self.motor_pair_speed_left_target > 0 else -1
                 right_direction = 1 if self.motor_pair_speed_right_target > 0 else -1
-                self.motor_pair_speed_left_actual += left_direction * 40
-                self.motor_pair_speed_right_actual += right_direction * 38
+                self.motor_pair_speed_left_actual += left_direction * (
+                    abs(self.motor_pair_speed_left_target) * 2
+                )
+                self.motor_pair_speed_right_actual += right_direction * max(
+                    1, abs(self.motor_pair_speed_right_target) * 2 - 2
+                )
                 self.motor_pair_speed_max_error = 6
             elif action in (2, 3):
                 self.motor_pair_speed_state = 0
             running = self.motor_pair_speed_state == 1
             self.acks.append(
                 build_motor_pair_speed_result(
+                    command=command,
                     state=self.motor_pair_speed_state,
                     left_port=self.motor_pair_speed_left_port,
                     right_port=self.motor_pair_speed_right_port,
@@ -1584,7 +1640,7 @@ class UpdaterTests(unittest.TestCase):
     def test_starts_reads_and_stops_synchronized_motor_pair(self) -> None:
         transport = FakeTransport()
         updater = FirmwareUpdater(transport)
-        started = updater.start_motor_pair_position(2, 360, 3, -360, 20)
+        started = updater.start_motor_pair_position(2, 720, 3, -360, 20)
         self.assertEqual(started.state, 1)
         self.assertEqual((started.left_port, started.right_port), (2, 3))
 
@@ -1594,7 +1650,7 @@ class UpdaterTests(unittest.TestCase):
 
         complete = updater.read_motor_pair_position_status()
         self.assertEqual(complete.state, 2)
-        self.assertEqual(complete.left_actual_degrees, 360)
+        self.assertEqual(complete.left_actual_degrees, 720)
         self.assertEqual(complete.right_actual_degrees, -360)
         self.assertEqual(updater.stop_motor_pair_position().state, 0)
 
@@ -1610,6 +1666,27 @@ class UpdaterTests(unittest.TestCase):
         self.assertEqual((running.left_actual_degrees,
                           running.right_actual_degrees), (40, -38))
         stopped = updater.stop_motor_pair_speed("brake")
+        self.assertEqual(stopped.state, 0)
+        self.assertEqual(transport.motor_pair_speed_state, 0)
+
+    def test_starts_reads_and_stops_ev3_continuous_steering(self) -> None:
+        transport = FakeTransport()
+        updater = FirmwareUpdater(transport)
+
+        started = updater.start_drive_steer(0, 2, 50, 80)
+        self.assertEqual(started.state, 1)
+        self.assertEqual(
+            (started.left_requested_speed_percent,
+             started.right_requested_speed_percent),
+            (80, 40),
+        )
+        running = updater.read_drive_steer_status()
+        self.assertEqual(running.state, 1)
+        self.assertEqual(
+            (running.left_actual_degrees, running.right_actual_degrees),
+            (160, 78),
+        )
+        stopped = updater.stop_drive_steer("coast")
         self.assertEqual(stopped.state, 0)
         self.assertEqual(transport.motor_pair_speed_state, 0)
 

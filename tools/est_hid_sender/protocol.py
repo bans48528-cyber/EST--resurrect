@@ -11,6 +11,8 @@ from .constants import (
     DRIVE_RUN_COMMAND,
     DRIVE_RUN_MODE_DEGREES,
     DRIVE_RUN_MODE_TIME_MS,
+    DRIVE_STEER_ACTION_START,
+    DRIVE_STEER_COMMAND,
     FLASH_ID_COMMAND,
     FLASH_SCAN_COMMAND,
     FLASH_TEST_COMMAND,
@@ -507,8 +509,6 @@ def build_motor_pair_position_frame(
             or not -3600 <= right_degrees <= 3600
         ):
             raise ValueError("motor pair degrees must be between -3600 and 3600, excluding 0")
-        if abs(left_degrees) != abs(right_degrees):
-            raise ValueError("first synchronized mode requires equal absolute degrees")
         payload += bytes((left_port, right_port, speed_percent))
         payload += left_degrees.to_bytes(4, "little", signed=True)
         payload += right_degrees.to_bytes(4, "little", signed=True)
@@ -544,8 +544,6 @@ def build_motor_pair_speed_frame(
             or abs(right_speed_percent) < 10
         ):
             raise ValueError("motor speeds must have magnitude between 10 and 100")
-        if abs(left_speed_percent) != abs(right_speed_percent):
-            raise ValueError("motor pair speeds must have equal absolute values")
         payload += bytes(
             (
                 left_port,
@@ -565,6 +563,36 @@ def build_motor_pair_speed_frame(
     ):
         raise ValueError("pair speed parameters are valid only for the start action")
     return build_frame(MOTOR_PAIR_SPEED_COMMAND, payload)
+
+
+def build_drive_steer_frame(
+    action: int,
+    left_port: int | None = None,
+    right_port: int | None = None,
+    steering: int | None = None,
+    speed_percent: int | None = None,
+) -> bytes:
+    if not 0 <= action <= 0xFF:
+        raise ValueError("drive steer action must fit uint8")
+    payload = bytes((action,))
+    if action == DRIVE_STEER_ACTION_START:
+        if left_port not in (0, 1, 2, 3) or right_port not in (0, 1, 2, 3):
+            raise ValueError("drive motor ports must be 0, 1, 2, or 3")
+        if left_port == right_port:
+            raise ValueError("drive motor ports must differ")
+        if steering is None or not -100 <= steering <= 100:
+            raise ValueError("drive steering must be between -100 and 100")
+        if speed_percent is None or speed_percent == 0 or not -100 <= speed_percent <= 100:
+            raise ValueError("drive speed must be between -100 and 100, excluding 0")
+        payload += bytes(
+            (left_port, right_port, steering & 0xFF, speed_percent & 0xFF)
+        )
+    elif any(
+        value is not None
+        for value in (left_port, right_port, steering, speed_percent)
+    ):
+        raise ValueError("drive steer parameters are valid only for the start action")
+    return build_frame(DRIVE_STEER_COMMAND, payload)
 
 
 def build_drive_straight_frame(
@@ -988,6 +1016,48 @@ def parse_motor_pair_speed_response(report: bytes) -> MotorPairSpeedResult | Non
     if report[0] != FRAME_START:
         return None
     if report[1] != DEVICE_DIRECTION or report[2] != MOTOR_PAIR_SPEED_COMMAND:
+        return None
+    if report[3:5] != b"\x1b\x00" or report[33] != FRAME_END:
+        return None
+    if checksum(report[:32]) != report[32]:
+        return None
+    return MotorPairSpeedResult(
+        result=report[5],
+        state=report[6],
+        left_port=report[7],
+        right_port=report[8],
+        left_requested_speed_percent=int.from_bytes(
+            report[9:10], "little", signed=True
+        ),
+        right_requested_speed_percent=int.from_bytes(
+            report[10:11], "little", signed=True
+        ),
+        left_measured_speed_percent=int.from_bytes(
+            report[11:12], "little", signed=True
+        ),
+        right_measured_speed_percent=int.from_bytes(
+            report[12:13], "little", signed=True
+        ),
+        left_power_percent=int.from_bytes(report[13:14], "little", signed=True),
+        right_power_percent=int.from_bytes(report[14:15], "little", signed=True),
+        left_actual_degrees=int.from_bytes(report[15:19], "little", signed=True),
+        right_actual_degrees=int.from_bytes(report[19:23], "little", signed=True),
+        synchronization_error_degrees=int.from_bytes(
+            report[23:27], "little", signed=True
+        ),
+        maximum_synchronization_error_degrees=int.from_bytes(
+            report[27:31], "little", signed=True
+        ),
+        error=int.from_bytes(report[31:32], "little", signed=True),
+    )
+
+
+def parse_drive_steer_response(report: bytes) -> MotorPairSpeedResult | None:
+    if len(report) < 34:
+        return None
+    if report[0] != FRAME_START:
+        return None
+    if report[1] != DEVICE_DIRECTION or report[2] != DRIVE_STEER_COMMAND:
         return None
     if report[3:5] != b"\x1b\x00" or report[33] != FRAME_END:
         return None

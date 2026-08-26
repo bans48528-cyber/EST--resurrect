@@ -9,6 +9,7 @@ from .constants import (
     DEVICE_CAPABILITY_BATTERY,
     DEVICE_CAPABILITY_DRIVE_STRAIGHT,
     DEVICE_CAPABILITY_DRIVE_RUN,
+    DEVICE_CAPABILITY_DRIVE_STEER,
     DEVICE_CAPABILITY_INPUT_SENSOR,
     DEVICE_CAPABILITY_KEYS,
     DEVICE_CAPABILITY_MOTOR_CONTROL,
@@ -213,7 +214,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     motor_pair_speed.add_argument(
         "--right-speed", type=int, default=20,
-        help="右侧有方向目标速度，默认 20；绝对值须与左侧相同",
+        help="右侧有方向目标速度，默认 20",
     )
     motor_pair_speed.add_argument(
         "--duration", type=float, default=5.0,
@@ -282,6 +283,35 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     drive_run.add_argument(
         "--stop", choices=("coast", "brake"), default="coast",
         help="按秒模式到时自由滑行或主动刹车；角度/圈数当前仅支持 coast",
+    )
+
+    drive_steer = commands.add_parser(
+        "drive-steer", help="按 EV3 转向值持续控制双电机，直到显式停止"
+    )
+    add_device_options(drive_steer)
+    drive_steer.add_argument(
+        "--left-port", choices=("A", "B", "C", "D"), default="A",
+        help="左轮输出端口，默认 A",
+    )
+    drive_steer.add_argument(
+        "--right-port", choices=("A", "B", "C", "D"), default="C",
+        help="右轮输出端口，默认 C",
+    )
+    drive_steer.add_argument(
+        "--steering", type=int, default=50,
+        help="EV3 转向值，范围 -100 到 100；默认 50",
+    )
+    drive_steer.add_argument(
+        "--speed", type=int, default=80,
+        help="有方向移动速度，范围 -100 到 100 且不能为 0；默认 80",
+    )
+    drive_steer.add_argument(
+        "--duration", type=float, default=5.0,
+        help="电脑端观察秒数，范围 0.5-60，默认 5；固件没有运行时限",
+    )
+    drive_steer.add_argument(
+        "--stop", choices=("coast", "brake"), default="coast",
+        help="观察结束时显式自由滑行或刹车，默认 coast",
     )
 
     motor_pair_control = commands.add_parser(
@@ -507,6 +537,7 @@ DEVICE_CAPABILITY_NAMES = (
     (DEVICE_CAPABILITY_MOTOR_PAIR_SPEED, "motor-pair-speed"),
     (DEVICE_CAPABILITY_DRIVE_STRAIGHT, "drive-straight"),
     (DEVICE_CAPABILITY_DRIVE_RUN, "drive-run"),
+    (DEVICE_CAPABILITY_DRIVE_STEER, "drive-steer"),
 )
 
 
@@ -1438,9 +1469,6 @@ def run_motor_pair_position(args: argparse.Namespace) -> int:
     degrees = (args.left_degrees, args.right_degrees)
     if any(value == 0 or not -3600 <= value <= 3600 for value in degrees):
         raise ValueError("两路目标角度必须在 -3600 到 3600 之间且不能为 0")
-    if abs(args.left_degrees) != abs(args.right_degrees):
-        raise ValueError("首版同步控制要求两路目标角度绝对值相同")
-
     port_numbers = {"A": 0, "B": 1, "C": 2, "D": 3}
     left_port = port_numbers[args.left_port]
     right_port = port_numbers[args.right_port]
@@ -1515,8 +1543,6 @@ def run_motor_pair_speed(args: argparse.Namespace) -> int:
         raise ValueError("两个端口不能相同")
     if any(speed == 0 or not -100 <= speed <= 100 or abs(speed) < 10 for speed in speeds):
         raise ValueError("两个速度的绝对值都必须在 10 到 100 之间")
-    if abs(args.left_speed) != abs(args.right_speed):
-        raise ValueError("首版持续同步要求两个速度的绝对值相同")
     if not 0.5 <= args.duration <= 60.0:
         raise ValueError("--duration 必须在 0.5 到 60 秒之间")
 
@@ -1582,6 +1608,90 @@ def run_motor_pair_speed(args: argparse.Namespace) -> int:
                     safe = updater.stop_motor_pair_speed("coast")
                     if safe.result != 1:
                         raise EstUpdaterError("最终双路自由滑行命令被拒绝")
+                    print("safe_final_state=coast", flush=True)
+                except (EstUpdaterError, OSError):
+                    print("safe_final_state=unconfirmed", flush=True)
+
+
+def run_drive_steer(args: argparse.Namespace) -> int:
+    if args.left_port == args.right_port:
+        raise ValueError("左右轮端口不能相同")
+    if not -100 <= args.steering <= 100:
+        raise ValueError("--steering 必须在 -100 到 100 之间")
+    if args.speed == 0 or not -100 <= args.speed <= 100:
+        raise ValueError("--speed 必须在 -100 到 100 之间且不能为 0")
+    if not 0.5 <= args.duration <= 60.0:
+        raise ValueError("--duration 必须在 0.5 到 60 秒之间")
+
+    port_numbers = {"A": 0, "B": 1, "C": 2, "D": 3}
+    left_port = port_numbers[args.left_port]
+    right_port = port_numbers[args.right_port]
+    sample_count = max(1, int(args.duration / 0.2))
+    with open_transport(args) as transport:
+        print(f"device={transport.path}", flush=True)
+        updater = FirmwareUpdater(transport)
+        print(f"current_version={updater.ping()}", flush=True)
+        print(f"drive_ports={args.left_port},{args.right_port}", flush=True)
+        print(f"steering={args.steering}", flush=True)
+        print(f"movement_speed={args.speed}", flush=True)
+        print(f"observation_seconds={args.duration:g}", flush=True)
+        print("firmware_timeout=none", flush=True)
+        started = False
+        try:
+            result = updater.start_drive_steer(
+                left_port, right_port, args.steering, args.speed
+            )
+            if result.result == 2:
+                raise EstUpdaterError(
+                    "设备未启动持续转向；请确认两端口已有马达且没有其他任务"
+                )
+            if result.result != 1:
+                raise EstUpdaterError(
+                    "设备拒绝了转向参数；当前闭环要求换算后的左右速度绝对值均不低于 10%"
+                )
+            started = True
+            print(
+                "effective_speed="
+                f"{result.left_requested_speed_percent},"
+                f"{result.right_requested_speed_percent}",
+                flush=True,
+            )
+            for _ in range(sample_count):
+                time.sleep(0.2)
+                result = updater.read_drive_steer_status()
+                if result.result != 1 or result.state != 1:
+                    raise EstUpdaterError("持续转向意外停止")
+                print(
+                    "drive_steer_state=running "
+                    f"actual={result.left_actual_degrees},"
+                    f"{result.right_actual_degrees} "
+                    f"sync_error={result.synchronization_error_degrees} "
+                    f"max_sync_error={result.maximum_synchronization_error_degrees} "
+                    f"speed={result.left_measured_speed_percent},"
+                    f"{result.right_measured_speed_percent} "
+                    f"power={result.left_power_percent},{result.right_power_percent}",
+                    flush=True,
+                )
+            stopped = updater.stop_drive_steer(args.stop)
+            if stopped.result != 1 or stopped.state != 0:
+                raise EstUpdaterError(f"设备未能按 {args.stop} 停止持续转向")
+            print(f"stop_state={args.stop}", flush=True)
+            if args.stop == "brake":
+                time.sleep(0.3)
+                left_safe = updater.stop_motor_speed(left_port, "coast")
+                right_safe = updater.stop_motor_speed(right_port, "coast")
+                if left_safe.result != 1 or right_safe.result != 1:
+                    raise EstUpdaterError("刹车后未能恢复双路自由滑行")
+            started = False
+            print("drive_steer=complete", flush=True)
+            print("safe_final_state=coast", flush=True)
+            return 0
+        finally:
+            if started:
+                try:
+                    safe = updater.stop_drive_steer("coast")
+                    if safe.result != 1:
+                        raise EstUpdaterError("最终底盘自由滑行命令被拒绝")
                     print("safe_final_state=coast", flush=True)
                 except (EstUpdaterError, OSError):
                     print("safe_final_state=unconfirmed", flush=True)
@@ -1980,6 +2090,8 @@ def main(argv: list[str] | None = None) -> int:
             return run_drive_straight(args)
         if args.mode == "drive-run":
             return run_drive_run(args)
+        if args.mode == "drive-steer":
+            return run_drive_steer(args)
         if args.mode == "motor-pair-control":
             return run_motor_pair_control(args)
         if args.mode == "sensor-read":
