@@ -5,7 +5,7 @@
 
 #include "board_sensor.h"
 #include "est_sensor.h"
-#include "system_time.h"
+#include "est_system.h"
 
 static bool est_sensor_port_valid(est_sensor_port_t port)
 {
@@ -157,7 +157,7 @@ est_result_t est_sensor_set_mode(est_sensor_port_t port,
 		return EST_ERR_INVALID_ARGUMENT;
 	}
 	if (!board_sensor_set_mode(board_port_from_est(port),
-	    (enum board_sensor_mode)mode, system_time_millis())) {
+	    (enum board_sensor_mode)mode, est_system_millis())) {
 		return EST_ERR_NOT_SUPPORTED;
 	}
 	return EST_OK;
@@ -169,7 +169,7 @@ est_result_t est_sensor_restart(est_sensor_port_t port)
 		return EST_ERR_INVALID_PORT;
 	}
 	if (!board_sensor_restart(board_port_from_est(port),
-	    system_time_millis())) {
+	    est_system_millis())) {
 		return EST_ERR_IO;
 	}
 	return EST_OK;

@@ -4,18 +4,17 @@
 
 #include "app_version.h"
 #include "board_audio.h"
-#include "board_battery.h"
 #include "board_flash.h"
 #include "board_lcd.h"
 #include "board_motor.h"
-#include "board_power.h"
 #include "board_sensor.h"
 #include "est_backlight.h"
+#include "est_battery.h"
 #include "est_buttons.h"
 #include "est_display.h"
 #include "est_led.h"
+#include "est_system.h"
 #include "platform.h"
-#include "system_time.h"
 #include "update_protocol.h"
 #include "usb_hid.h"
 
@@ -358,7 +357,7 @@ static void append_status_text(char output[STATUS_DISPLAY_LINE_SIZE],
 	output[*output_index] = '\0';
 }
 
-static void format_status_line(const struct board_battery_snapshot *battery,
+static void format_status_line(const est_battery_status_t *battery,
 	bool audio_test_attempted, bool audio_test_succeeded,
 	char output[STATUS_DISPLAY_LINE_SIZE])
 {
@@ -369,7 +368,7 @@ static void format_status_line(const struct board_battery_snapshot *battery,
 	output[0] = '\0';
 	append_status_text(output, &output_index, "BAT:");
 	if (battery->valid) {
-		format_u16((uint16_t)battery->level * 25U, percent);
+		format_u16(battery->percent, percent);
 		append_status_text(output, &output_index, percent);
 		append_status_text(output, &output_index, "%");
 	} else {
@@ -408,16 +407,15 @@ int main(void)
 	char displayed_motor_lines[BOARD_MOTOR_PORT_COUNT][MOTOR_DISPLAY_LINE_SIZE] = {{0}};
 	char displayed_status_line[STATUS_DISPLAY_LINE_SIZE] = {0};
 
-	board_power_init();
+	est_system_init();
 	est_backlight_init();
 	est_led_init();
-	system_time_init();
-	est_buttons_init(system_time_millis());
+	est_buttons_init(est_system_millis());
 	board_flash_init();
 	board_audio_init();
 	board_motor_init();
-	board_sensor_init(system_time_millis());
-	board_battery_init(system_time_millis());
+	board_sensor_init(est_system_millis());
+	est_battery_init(est_system_millis());
 	(void)est_led_set(EST_LED_RED);
 	update_protocol_init();
 	(void)est_led_set(EST_LED_BLUE);
@@ -438,7 +436,7 @@ int main(void)
 		uint8_t key_mask;
 
 		usb_hid_poll();
-		now_ms = system_time_millis();
+		now_ms = est_system_millis();
 		est_backlight_tick(now_ms);
 		board_audio_tick(now_ms);
 		if (backlight_test_phase == 0U && now_ms >= BACKLIGHT_DIM_AT_MS) {
@@ -473,7 +471,7 @@ int main(void)
 		last_key_mask = key_mask;
 		board_motor_tick(now_ms);
 		board_sensor_tick(now_ms);
-		board_battery_tick(now_ms);
+		est_battery_tick(now_ms);
 #ifndef DIAGNOSTIC_SKIP_LCD_STARTUP
 		if ((uint32_t)(now_ms - last_display_ms) >=
 		    SENSOR_DISPLAY_INTERVAL_MS) {
@@ -485,7 +483,7 @@ int main(void)
 			uint8_t sensor_kinds = 0U;
 			uint8_t index;
 			bool display_changed;
-			struct board_battery_snapshot battery;
+			est_battery_status_t battery = {0};
 
 			last_display_ms = now_ms;
 			for (index = 0U; index < BOARD_SENSOR_PORT_COUNT; index++) {
@@ -523,7 +521,7 @@ int main(void)
 				}
 			}
 			active_sensor_kinds = sensor_kinds;
-			battery = board_battery_snapshot();
+			(void)est_battery_get_status(&battery);
 			format_status_line(&battery, audio_test_attempted,
 				audio_test_succeeded, status_line);
 			display_changed = !display_initialized ||
@@ -565,11 +563,7 @@ int main(void)
 		update_protocol_tick(now_ms);
 		if (usb_hid_power_off_requested() ||
 		    update_protocol_power_off_due(now_ms)) {
-			board_motor_stop();
-			board_sensor_stop();
-			platform_disable_interrupts();
-			(void)est_led_set(EST_LED_OFF);
-			board_power_off();
+			est_system_power_off();
 		}
 	}
 }

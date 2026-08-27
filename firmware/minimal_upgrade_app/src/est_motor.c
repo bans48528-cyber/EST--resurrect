@@ -5,7 +5,7 @@
 
 #include "board_motor.h"
 #include "est_motor.h"
-#include "system_time.h"
+#include "est_system.h"
 
 static bool est_motor_port_valid(est_motor_port_t port)
 {
@@ -115,7 +115,7 @@ est_result_t est_motor_run_speed(est_motor_port_t port,
 	if (result != EST_OK) {
 		return result;
 	}
-	if (!board_motor_start_speed(system_time_millis(),
+	if (!board_motor_start_speed(est_system_millis(),
 	    board_port_from_est(port), speed_percent)) {
 		return EST_ERR_BUSY;
 	}
@@ -155,7 +155,7 @@ est_result_t est_motor_run_angle(est_motor_port_t port, int32_t degrees,
 	if (result != EST_OK) {
 		return result;
 	}
-	if (!board_motor_start_position(system_time_millis(),
+	if (!board_motor_start_position(est_system_millis(),
 	    board_port_from_est(port), maximum_speed_percent, degrees)) {
 		return EST_ERR_BUSY;
 	}

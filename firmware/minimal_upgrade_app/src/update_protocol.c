@@ -5,14 +5,15 @@
 
 #include "app_config.h"
 #include "app_version.h"
-#include "board_battery.h"
 #include "board_flash.h"
 #include "board_motor.h"
 #include "board_sensor.h"
+#include "est_battery.h"
 #include "est_buttons.h"
 #include "est_drive.h"
 #include "est_motor.h"
 #include "est_sensor.h"
+#include "est_system.h"
 #include "update_protocol.h"
 #include "update_storage.h"
 #include "usb_hid.h"
@@ -691,7 +692,7 @@ static void queue_drive_steer_for_result(uint8_t result)
 
 static void queue_device_status(uint32_t now_ms)
 {
-	struct board_battery_snapshot battery = board_battery_snapshot();
+	est_battery_status_t battery = {0};
 	uint8_t report[USB_HID_REPORT_SIZE] = {0};
 	uint8_t *payload = &report[5];
 	uint8_t index;
@@ -707,6 +708,7 @@ static void queue_device_status(uint32_t now_ms)
 		DEVICE_CAPABILITY_DRIVE_STEER |
 		DEVICE_CAPABILITY_DRIVE_STEER_FOR;
 
+	(void)est_battery_get_status(&battery);
 	report[0] = FRAME_START_BYTE;
 	report[1] = DEVICE_FRAME_DIRECTION;
 	report[2] = DEVICE_STATUS_COMMAND;
@@ -1203,8 +1205,7 @@ static void handle_update_frame(const uint8_t *frame, uint16_t data_length,
 	if (data_length < 4U) {
 		return;
 	}
-	board_motor_stop();
-	board_sensor_stop();
+	(void)est_system_emergency_stop();
 	total_frames = read_u16_le(&frame[5]);
 	frame_index = read_u16_le(&frame[7]);
 	payload_length = data_length - 4U;

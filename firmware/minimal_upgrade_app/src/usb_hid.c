@@ -9,7 +9,7 @@
 #include <libopencm3/usb/usbd.h>
 
 #include "app_config.h"
-#include "system_time.h"
+#include "est_system.h"
 #include "update_protocol.h"
 #include "usb_hs_ulpi_driver.h"
 #include "usb_hid.h"
@@ -235,7 +235,7 @@ static void hid_out_callback(usbd_device *device, uint8_t endpoint)
 	received = usbd_ep_read_packet(device, USB_HID_OUT_ENDPOINT,
 		out_report, sizeof(out_report));
 	if (received != 0U) {
-		update_protocol_feed_report(out_report, received, system_time_millis());
+		update_protocol_feed_report(out_report, received, est_system_millis());
 	}
 }
 

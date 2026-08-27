@@ -157,8 +157,8 @@ class EstServiceApiTests(unittest.TestCase):
         ):
             self.assertIn(function, header)
             self.assertIn(function, source)
-        self.assertIn("board_motor_start_speed(system_time_millis()", source)
-        self.assertIn("board_motor_start_position(system_time_millis()", source)
+        self.assertIn("board_motor_start_speed(est_system_millis()", source)
+        self.assertIn("board_motor_start_position(est_system_millis()", source)
         self.assertIn("return EST_ERR_NOT_SUPPORTED;", source)
 
     def test_sensor_contract_wraps_the_verified_board_driver(self) -> None:
@@ -249,6 +249,53 @@ class EstServiceApiTests(unittest.TestCase):
         self.assertNotIn("board_keys_pressed_mask()", protocol)
         self.assertIn("est_display_text(36U, 54U, app_version_text, 3U)", main)
 
+    def test_battery_and_system_contracts_wrap_verified_board_services(self) -> None:
+        battery_header = (ROOT / "include" / "est_battery.h").read_text(
+            encoding="utf-8"
+        )
+        battery_source = (SOURCE_DIR / "est_battery.c").read_text(
+            encoding="utf-8"
+        )
+        system_header = (ROOT / "include" / "est_system.h").read_text(
+            encoding="utf-8"
+        )
+        system_source = (SOURCE_DIR / "est_system.c").read_text(
+            encoding="utf-8"
+        )
+        main = (SOURCE_DIR / "main.c").read_text(encoding="utf-8")
+        protocol = (SOURCE_DIR / "update_protocol.c").read_text(encoding="utf-8")
+        usb = (SOURCE_DIR / "usb_hid.c").read_text(encoding="utf-8")
+
+        for function in (
+            "est_battery_init",
+            "est_battery_tick",
+            "est_battery_get_status",
+        ):
+            self.assertIn(function, battery_header)
+            self.assertIn(function, battery_source)
+        self.assertIn("board_battery_snapshot", battery_source)
+        self.assertIn("EST_BATTERY_LOW_LEVEL_MAX", battery_header)
+
+        for function in (
+            "est_system_init",
+            "est_system_millis",
+            "est_system_emergency_stop",
+            "est_system_cleanup",
+            "est_system_reboot",
+            "est_system_power_off",
+        ):
+            self.assertIn(function, system_header)
+            self.assertIn(function, system_source)
+        self.assertIn("est_motor_stop_all(EST_STOP_COAST)", system_source)
+        self.assertIn("board_sensor_stop();", system_source)
+        self.assertIn("return EST_ERR_NOT_SUPPORTED;", system_source)
+        self.assertNotIn("scb_reset_system", system_source)
+        self.assertIn("est_system_power_off();", main)
+        self.assertIn("est_system_emergency_stop();", protocol)
+        self.assertIn("est_battery_get_status(&battery)", protocol)
+        self.assertIn("est_system_millis()", usb)
+        self.assertNotIn("board_battery_snapshot()", protocol)
+
     def test_drive_contract_is_frozen_before_sync_implementation(self) -> None:
         drive = (ROOT / "include" / "est_drive.h").read_text(encoding="utf-8")
         for function in (
@@ -300,18 +347,16 @@ class BoardModuleLayoutTests(unittest.TestCase):
         self.assertIn("#define BATTERY_ADC_CHANNEL ADC_CHANNEL9", battery)
         for threshold in ("1661U", "1591U", "1521U", "1451U"):
             self.assertIn(threshold, battery)
-        self.assertIn("board_battery_init(system_time_millis());", main)
-        self.assertIn("board_battery_tick(now_ms);", main)
+        self.assertIn("est_battery_init(est_system_millis());", main)
+        self.assertIn("est_battery_tick(now_ms);", main)
 
     def test_main_initializes_power_before_other_board_services(self) -> None:
         main = (SOURCE_DIR / "main.c").read_text(encoding="utf-8")
-        power = main.index("board_power_init();")
+        power = main.index("est_system_init();")
         led = main.index("est_led_init();")
-        clock = main.index("system_time_init();")
         usb = main.index("usb_hid_init();")
         self.assertLess(power, led)
-        self.assertLess(led, clock)
-        self.assertLess(clock, usb)
+        self.assertLess(led, usb)
 
     def test_key_module_keeps_all_six_documented_pins(self) -> None:
         keys = (SOURCE_DIR / "board_keys.c").read_text(encoding="utf-8")
@@ -982,7 +1027,7 @@ class BoardModuleLayoutTests(unittest.TestCase):
         self.assertIn("queue_input_sensor_result", protocol)
         self.assertIn("est_sensor_set_mode", protocol)
         self.assertIn("est_sensor_restart", protocol)
-        self.assertIn("board_sensor_stop();", protocol)
+        self.assertIn("est_system_emergency_stop();", protocol)
 
     def test_device_status_is_additive_and_returns_all_runtime_subsystems(self) -> None:
         protocol = (SOURCE_DIR / "update_protocol.c").read_text(encoding="utf-8")
@@ -990,7 +1035,7 @@ class BoardModuleLayoutTests(unittest.TestCase):
         self.assertIn("DEVICE_STATUS_COMMAND           0x19U", config)
         self.assertIn("DEVICE_PROTOCOL_MAJOR           1U", config)
         self.assertIn("DEVICE_STATUS_PAYLOAD_LENGTH 72U", protocol)
-        self.assertIn("board_battery_snapshot()", protocol)
+        self.assertIn("est_battery_get_status(&battery)", protocol)
         self.assertIn("est_buttons_pressed_mask()", protocol)
         self.assertIn("board_motor_control_snapshot", protocol)
         self.assertIn("est_sensor_get_status", protocol)

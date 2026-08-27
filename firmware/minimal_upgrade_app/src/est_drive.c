@@ -6,7 +6,7 @@
 #include "board_motor.h"
 #include "est_drive.h"
 #include "est_motor.h"
-#include "system_time.h"
+#include "est_system.h"
 
 #define EST_DRIVE_PI_NUMERATOR 355LL
 #define EST_DRIVE_PI_DENOMINATOR 113LL
@@ -189,7 +189,7 @@ est_result_t est_motor_pair_run_angles(est_motor_port_t left_port,
 	if (result != EST_OK) {
 		return result;
 	}
-	if (!board_motor_start_pair_position(system_time_millis(),
+	if (!board_motor_start_pair_position(est_system_millis(),
 	    (enum board_motor_port)left_port, left_degrees,
 	    (enum board_motor_port)right_port, right_degrees,
 	    maximum_speed_percent)) {
@@ -232,7 +232,7 @@ est_result_t est_motor_pair_run_speeds(est_motor_port_t left_port,
 	if (result != EST_OK) {
 		return result;
 	}
-	if (!board_motor_start_pair_speed(system_time_millis(),
+	if (!board_motor_start_pair_speed(est_system_millis(),
 	    (enum board_motor_port)left_port, left_speed_percent,
 	    (enum board_motor_port)right_port, right_speed_percent)) {
 		return EST_ERR_BUSY;
@@ -336,7 +336,7 @@ est_result_t est_drive_run_time(est_motor_port_t left_port,
 		(int8_t)speed_percent;
 	duration_magnitude = duration_ms < 0 ?
 		(uint32_t)(-duration_ms) : (uint32_t)duration_ms;
-	if (!board_motor_start_pair_speed_for_time(system_time_millis(),
+	if (!board_motor_start_pair_speed_for_time(est_system_millis(),
 	    (enum board_motor_port)left_port, signed_speed,
 	    (enum board_motor_port)right_port, signed_speed,
 	    duration_magnitude, board_stop_from_est(stop_mode))) {
@@ -519,7 +519,7 @@ est_result_t est_drive_steer_for(est_motor_port_t left_port,
 		if (result != EST_OK) {
 			return result;
 		}
-		if (!board_motor_start_pair_speed_for_time(system_time_millis(),
+		if (!board_motor_start_pair_speed_for_time(est_system_millis(),
 		    (enum board_motor_port)left_port, left_speed,
 		    (enum board_motor_port)right_port, right_speed,
 		    (uint32_t)target_value, board_stop_from_est(stop_mode))) {
