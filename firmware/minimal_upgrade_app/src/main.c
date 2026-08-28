@@ -14,6 +14,7 @@
 #include "est_display.h"
 #include "est_led.h"
 #include "est_micropython.h"
+#include "est_runtime.h"
 #include "est_system.h"
 #include "platform.h"
 #include "update_protocol.h"
@@ -428,6 +429,7 @@ int main(void)
 	est_battery_init(est_system_millis());
 	(void)est_led_set(EST_LED_RED);
 	update_protocol_init();
+	est_runtime_init(est_system_millis());
 	(void)est_led_set(EST_LED_BLUE);
 	usb_hid_init();
 	(void)est_led_set(EST_LED_RED_BLUE);
@@ -448,8 +450,7 @@ int main(void)
 
 		usb_hid_poll();
 		now_ms = est_system_millis();
-		est_backlight_tick(now_ms);
-		board_audio_tick(now_ms);
+		est_runtime_tick(now_ms);
 		if (backlight_test_phase == 0U && now_ms >= BACKLIGHT_DIM_AT_MS) {
 			(void)est_backlight_set_percent(20U);
 			backlight_test_phase = 1U;
@@ -466,7 +467,6 @@ int main(void)
 			audio_test_succeeded = board_audio_start_test(now_ms);
 			audio_test_attempted = true;
 		}
-		est_buttons_tick(now_ms);
 		key_mask = est_buttons_pressed_mask();
 		if (key_mask != 0U && last_key_mask == 0U) {
 			uint8_t mode_count = active_sensor_kinds == SENSOR_KIND_SOUND ? 1U :
@@ -480,9 +480,6 @@ int main(void)
 				selected_sensor_mode, now_ms);
 		}
 		last_key_mask = key_mask;
-		board_motor_tick(now_ms);
-		board_sensor_tick(now_ms);
-		est_battery_tick(now_ms);
 #ifndef DIAGNOSTIC_SKIP_LCD_STARTUP
 		if ((uint32_t)(now_ms - last_display_ms) >=
 		    SENSOR_DISPLAY_INTERVAL_MS) {
@@ -573,7 +570,6 @@ int main(void)
 			(void)est_led_set((diag_phase & 1U) != 0U ?
 				EST_LED_BLUE : EST_LED_OFF);
 		}
-		update_protocol_tick(now_ms);
 		est_micropython_tick();
 		if (usb_hid_power_off_requested() ||
 		    update_protocol_power_off_due(now_ms)) {

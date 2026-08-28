@@ -18,6 +18,7 @@
 
 #include "est_micropython.h"
 #include "est_motor.h"
+#include "est_runtime.h"
 #include "est_sensor.h"
 #include "est_system.h"
 #include "usb_hid.h"
@@ -438,6 +439,7 @@ void est_micropython_vm_hook(void)
 	if ((uint32_t)(now_ms - program_last_usb_poll_ms) >= 1U) {
 		program_last_usb_poll_ms = now_ms;
 		usb_hid_poll();
+		est_runtime_tick(now_ms);
 	}
 	if ((uint32_t)(now_ms - program_last_watchdog_ms) >= 10U) {
 		program_last_watchdog_ms = now_ms;

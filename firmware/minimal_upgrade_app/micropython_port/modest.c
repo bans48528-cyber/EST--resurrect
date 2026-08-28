@@ -7,6 +7,7 @@
 #include "est_drive.h"
 #include "est_micropython.h"
 #include "est_motor.h"
+#include "est_runtime.h"
 #include "est_sensor.h"
 #include "est_system.h"
 
@@ -106,6 +107,15 @@ static mp_obj_t modest_force_gc(void)
 }
 static MP_DEFINE_CONST_FUN_OBJ_0(modest_force_gc_obj, modest_force_gc);
 
+static mp_obj_t modest_runtime_ticks(void)
+{
+	est_runtime_status_t status = {0};
+
+	(void)est_runtime_get_status(&status);
+	return mp_obj_new_int_from_uint(status.tick_count);
+}
+static MP_DEFINE_CONST_FUN_OBJ_0(modest_runtime_ticks_obj, modest_runtime_ticks);
+
 static mp_obj_t modest_self_test_complete(mp_obj_t value_object)
 {
 	int32_t value = require_integer_range(
@@ -136,6 +146,8 @@ static const mp_rom_map_elem_t modest_module_globals_table[] = {
 	{MP_ROM_QSTR(MP_QSTR_drive_mix), MP_ROM_PTR(&modest_drive_mix_obj)},
 	{MP_ROM_QSTR(MP_QSTR_sensor), MP_ROM_PTR(&modest_sensor_obj)},
 	{MP_ROM_QSTR(MP_QSTR_force_gc), MP_ROM_PTR(&modest_force_gc_obj)},
+	{MP_ROM_QSTR(MP_QSTR__runtime_ticks),
+		MP_ROM_PTR(&modest_runtime_ticks_obj)},
 	{MP_ROM_QSTR(MP_QSTR__self_test_complete),
 		MP_ROM_PTR(&modest_self_test_complete_obj)},
 	{MP_ROM_QSTR(MP_QSTR__program_result),

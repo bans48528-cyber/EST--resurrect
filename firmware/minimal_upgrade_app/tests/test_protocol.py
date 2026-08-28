@@ -341,6 +341,7 @@ class BoardModuleLayoutTests(unittest.TestCase):
     def test_battery_driver_uses_v5_adc_pin_and_original_level_thresholds(self) -> None:
         battery = (SOURCE_DIR / "board_battery.c").read_text(encoding="utf-8")
         main = (SOURCE_DIR / "main.c").read_text(encoding="utf-8")
+        runtime = (SOURCE_DIR / "est_runtime.c").read_text(encoding="utf-8")
         self.assertIn("#define BATTERY_ADC_PORT GPIOF", battery)
         self.assertIn("#define BATTERY_ADC_PIN GPIO3", battery)
         self.assertIn("#define BATTERY_ADC ADC3", battery)
@@ -348,7 +349,7 @@ class BoardModuleLayoutTests(unittest.TestCase):
         for threshold in ("1661U", "1591U", "1521U", "1451U"):
             self.assertIn(threshold, battery)
         self.assertIn("est_battery_init(est_system_millis());", main)
-        self.assertIn("est_battery_tick(now_ms);", main)
+        self.assertIn("est_battery_tick(now_ms);", runtime)
 
     def test_main_initializes_power_before_other_board_services(self) -> None:
         main = (SOURCE_DIR / "main.c").read_text(encoding="utf-8")
@@ -900,6 +901,7 @@ class BoardModuleLayoutTests(unittest.TestCase):
         sensor = (SOURCE_DIR / "board_sensor.c").read_text(encoding="utf-8")
         header = (ROOT / "include" / "board_sensor.h").read_text(encoding="utf-8")
         main = (SOURCE_DIR / "main.c").read_text(encoding="utf-8")
+        runtime = (SOURCE_DIR / "est_runtime.c").read_text(encoding="utf-8")
         self.assertIn("SENSOR_SYNC_BAUD 2400U", sensor)
         self.assertIn("SENSOR_DEFAULT_DATA_BAUD 57600U", sensor)
         self.assertIn("BOARD_SENSOR_TYPE_EV3_COLOR 0x1DU", header)
@@ -910,7 +912,7 @@ class BoardModuleLayoutTests(unittest.TestCase):
         self.assertIn("BOARD_SENSOR_MODE_AMBIENT", header)
         self.assertIn("BOARD_SENSOR_MODE_COLOR", header)
         self.assertLess(main.index("board_sensor_init"), main.index("usb_hid_init"))
-        self.assertIn("board_sensor_tick(now_ms);", main)
+        self.assertIn("board_sensor_tick(now_ms);", runtime)
 
     def test_touch_sensor_preserves_legacy_adc_thresholds_and_shows_state(self) -> None:
         sensor = (SOURCE_DIR / "board_sensor.c").read_text(encoding="utf-8")
@@ -1078,13 +1080,14 @@ class BoardModuleLayoutTests(unittest.TestCase):
 
     def test_startup_exercises_backlight_and_audio_without_blocking_main_loop(self) -> None:
         main = (SOURCE_DIR / "main.c").read_text(encoding="utf-8")
+        runtime = (SOURCE_DIR / "est_runtime.c").read_text(encoding="utf-8")
         backlight = (SOURCE_DIR / "board_backlight.c").read_text(encoding="utf-8")
         audio = (SOURCE_DIR / "board_audio.c").read_text(encoding="utf-8")
         self.assertIn("est_backlight_set_percent(20U);", main)
         self.assertIn("est_backlight_set_percent(0U);", main)
         self.assertIn("est_backlight_set_percent(100U);", main)
         self.assertIn("board_audio_start_test(now_ms)", main)
-        self.assertIn("board_audio_tick(now_ms);", main)
+        self.assertIn("board_audio_tick(now_ms);", runtime)
         self.assertIn("BACKLIGHT_PORT GPIOA", backlight)
         self.assertIn("BACKLIGHT_PIN GPIO8", backlight)
         self.assertIn("timer_set_oc_value(TIM1, TIM_OC1", backlight)
@@ -1233,9 +1236,38 @@ class MicroPythonIntegrationTests(unittest.TestCase):
         self.assertIn("est_micropython_program_write", protocol)
         self.assertIn("est_micropython_tick();", main)
         self.assertLess(
-            main.index("update_protocol_tick(now_ms);"),
+            main.index("est_runtime_tick(now_ms);"),
             main.index("est_micropython_tick();"),
         )
+
+    def test_runtime_service_tick_is_shared_by_main_and_vm(self) -> None:
+        service = (SOURCE_DIR / "est_runtime.c").read_text(encoding="utf-8")
+        header = (ROOT / "include" / "est_runtime.h").read_text(encoding="utf-8")
+        main = (SOURCE_DIR / "main.c").read_text(encoding="utf-8")
+        runtime = (ROOT / "micropython_port" / "est_micropython.c").read_text(
+            encoding="utf-8"
+        )
+        module = (ROOT / "micropython_port" / "modest.c").read_text(
+            encoding="utf-8"
+        )
+
+        for service_call in (
+            "est_backlight_tick(now_ms);",
+            "board_audio_tick(now_ms);",
+            "est_buttons_tick(now_ms);",
+            "board_motor_tick(now_ms);",
+            "board_sensor_tick(now_ms);",
+            "est_battery_tick(now_ms);",
+            "update_protocol_tick(now_ms);",
+        ):
+            self.assertIn(service_call, service)
+        self.assertIn("now_ms == runtime_status.last_tick_ms", service)
+        self.assertIn("runtime_status.maximum_gap_ms", service)
+        self.assertIn("est_runtime_status_t", header)
+        self.assertIn("est_runtime_init(est_system_millis());", main)
+        self.assertIn("est_runtime_tick(now_ms);", main)
+        self.assertIn("est_runtime_tick(now_ms);", runtime)
+        self.assertIn("MP_QSTR__runtime_ticks", module)
 
     def test_ram_program_exit_always_stops_motors_and_failures_cleanup(self) -> None:
         runtime = (ROOT / "micropython_port" / "est_micropython.c").read_text(
