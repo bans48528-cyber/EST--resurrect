@@ -531,6 +531,22 @@ EV3 Classroom 1.5.2 缓存中的 `TravelGuideBuilder.steeringToSpeeds()` 已给�
 - `run_angle()` 当前只支持完成后自由滑行；传入 `STOP_BRAKE` 会明确抛出不支持异常。`HOLD` 尚未开放，不得静默降级。
 - 已验证 A 口大型和 D 口中型马达、强制 GC、未连接端口、参数错误、Python 异常、硬超时、电脑主动停止和定时任务中途取消；所有退出路径均由 C 层停止全部马达。
 
+### 16.7 M1.02A 已冻结的双马达与底盘契约
+
+- `est.MotorPair(left, right)` 与 `est.DriveBase(left, right)` 只接受两个不同端口，执行动作前要求两端均为同型号大型或同型号中型马达；混合型号和空口明确拒绝。产品只允许同时设置一组双电机任务。
+- `MotorPair` 提供 `run_speed(left_speed, right_speed)`、`run_time(duration_ms, left_speed=50, right_speed=50, stop=STOP_COAST, wait=False)`、`run_angle(left_degrees, right_degrees, speed=50, stop=STOP_COAST, wait=False)`、状态查询与停止。
+- `DriveBase` 提供 `straight_angle()`、`straight_time()`、`steer()`、`steer_angle()` 和 `steer_time()`；转向值采用 EV3 Classroom 的 `-100..100` 语义，不新增轮径、轮距与机身角度换算接口，毫米直行只保留为诊断能力。
+- `wait=True` 轮询 C 控制状态并持续执行统一 VM hook。双电机不设置自动联动超时，程序退出、异常、硬超时和电脑主动停止仍统一停止全部马达。
+
+### 16.8 M1.04A 已冻结的类型化传感器契约
+
+- 通用 `est.Sensor(port)` 在 M0.98A 只读接口基础上新增 `set_mode(mode)`、`read_mode(mode)` 和 `restart()`。模式读取会等待该模式的新数据，等待期间持续执行 VM hook，并每 500 ms 重发模式命令，最长等待 3000 ms。
+- 七种类型类为 `SoundSensor`、`TemperatureSensor`、`TouchSensor`、`ColorSensor`、`UltrasonicSensor`、`GyroSensor` 和 `InfraredSensor`；构造时必须验证端口上的真实类型，类型不匹配不得降级为通用读取。
+- 专用方法分别为：声音 `db()`；温度 `celsius_tenths()`/`fahrenheit_tenths()`；触摸 `pressed()`；颜色 `reflection()`/`ambient()`/`color()`；超声波 `distance_mm()`/`inches_tenths()`/`presence()`；陀螺仪 `angle()`/`speed()`/`reset_angle()`；红外 `proximity()`/`beacon()`/`remote()`。
+- 温度与英寸值以十分之一单位返回整数。`InfraredSensor.beacon()` 当前返回通道 1 的 `(heading, distance)`，`remote()` 也只返回当前底层提供的通道 1 值；多通道选择留给后续运行时扩展。
+- `GyroSensor.reset_angle()` 只设置该 Python 对象的本地软件零点，后续 `angle()` 返回原始角度减零点；它不重启端口通信，也不改变同一端口上其他对象的零点。
+- M1.04A 已对红外、声音、陀螺仪和超声波完成三轮真机测试。颜色、触摸和温度类已实现且可拒绝错误类型，但仍等待对应实物回归。
+
 ## 17. 全部积木的 MicroPython 代码生成映射
 
 本节定义建议的 V1 代码生成契约，当前尚不表示这些 `est`/`est_runtime` 接口已经全部实现。建议生成程序统一使用：

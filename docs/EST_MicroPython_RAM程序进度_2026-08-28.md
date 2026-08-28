@@ -4,9 +4,9 @@
 
 ## 当前结论
 
-当前设备运行 `M1.02A`，官方 MicroPython `v1.29.0` 已经真实集成、启动并执行电脑上传的 Python 源码；统一 C 服务 tick、传感器/按键/电池只读 API、单马达 API，以及双马达/底盘首轮自动实机测试均已完成。
+当前设备运行 `M1.04A`，官方 MicroPython `v1.29.0` 已经真实集成、启动并执行电脑上传的 Python 源码；统一 C 服务 tick、传感器/按键/电池 API、单马达 API、双马达/底盘 API，以及首批类型化传感器 API 的自动实机测试均已完成。
 
-`M1.02A` 新增 `MotorPair`、`DriveBase`、同型号配对限制和双电机 `wait=True`。A/C 双大型两次完整自动测试均通过，用户确认肉眼未见问题；对象停止、电脑主动停止和异常清理也已完成实机验收。测试脚本位于 `tools/est_hid_sender/examples`。
+`M1.04A` 新增七种类型化传感器类、合法模式检查、等待新数据的模式读取，以及陀螺仪对象内软件归零。1 号红外、2 号声音、3 号陀螺仪、4 号超声波完成三轮真机脚本；测试脚本位于 `tools/est_hid_sender/examples/test_typed_sensors.py`。
 
 - APP 起点仍为 `0x08010000`，现有 `03.00B` Bootloader 和 `APP=` 升级格式不变。
 - 应用协议为 `1.15`；`0x23` 查询解释器健康，`0x24` 管理 RAM Python 程序。
@@ -48,8 +48,13 @@
 | M1.02A 异常清理 | A/C 以 60% 持续运行 500 ms 后故意抛出异常；504 ms 进入 exception，flags=0x07，随后 A-D 全部 coast/power 0 |
 | M1.02A 电脑主动停止 | A/C 以 60% 持续运行时由电脑发送 `python-stop`；952 ms 进入 stopped，flags=0x07，随后 A-D 全部 coast/power 0 |
 | M1.02A 结束状态 | A-D 均为 coast/power 0；四路传感器 streaming；解释器 state=passed、堆剩余 46928 字节、最大 GC 停顿 601 us；RAM 程序已清空 |
+| M1.03A 诊断失败 | 首轮模式读取曾在红外模式切换处超时；重跑推进到陀螺仪归零，但把端口通信重启误当成物理角度归零，稳定在阶段 32 超时。该版本不得作为恢复或继续开发基线 |
+| M1.04A 类型化传感器 | `InfraredSensor`、`SoundSensor`、`GyroSensor`、`UltrasonicSensor` 的模式方法、声音非法模式拒绝、错误类型拒绝、通用 `Sensor.read_mode()` 和声音端口重启均通过 |
+| M1.04A 陀螺仪归零 | `GyroSensor.reset_angle()` 改为对象内软件零点，归零后误差不超过 5 度；不再重启传感器通信 |
+| M1.04A 重复测试 | 三轮完整脚本分别在 84、91、185 ms 完成，均为 flags=0x03、result=7；最后一轮包含 `SoundSensor.restart()` 回归 |
+| M1.04A 解释器与结束状态 | 堆总量 48384 字节、剩余 45632 字节，启动 13 ms，最大 GC 停顿 599 us，自检值 96；A-D 均为 coast/power 0，RAM 程序已清空 |
 
-M0.95A 已完成正常执行、异常和硬超时，但 Python VM 运行时没有轮询 USB，电脑主动停止会写入超时。M0.96A 修复 USB 主动停止，M0.97A 建立统一 C 服务 tick，M0.98A 开放正式只读传感器、按键和电池 API，M0.99A 开放马达状态与安全停止，M1.00A 开放首批单马达运行方法，M1.01A 补齐 C 层单马达计时，M1.02A 开放双马达/底盘。因此后续开发和恢复应使用 M1.02A，不应回退到 M0.95A。
+M0.95A 已完成正常执行、异常和硬超时，但 Python VM 运行时没有轮询 USB，电脑主动停止会写入超时。M0.96A 修复 USB 主动停止，M0.97A 建立统一 C 服务 tick，M0.98A 开放正式只读传感器、按键和电池 API，M0.99A 开放马达状态与安全停止，M1.00A 开放首批单马达运行方法，M1.01A 补齐 C 层单马达计时，M1.02A 开放双马达/底盘，M1.04A 开放类型化传感器。后续开发和恢复应使用 M1.04A；M1.03A 已废弃。
 
 ## 使用命令
 
@@ -64,6 +69,7 @@ python tools/est_hid_sender/est_hid_sender.py python-run --file tools/est_hid_se
 python tools/est_hid_sender/est_hid_sender.py python-run --file tools/est_hid_sender/examples/run_timed_motor.py --timeout-ms 6000
 python tools/est_hid_sender/est_hid_sender.py python-run --file tools/est_hid_sender/examples/run_timed_medium_motor.py --timeout-ms 5000
 python tools/est_hid_sender/est_hid_sender.py python-run --file tools/est_hid_sender/examples/test_motor_pair_drive.py --timeout-ms 10000
+python tools/est_hid_sender/est_hid_sender.py python-run --file tools/est_hid_sender/examples/test_typed_sensors.py --timeout-ms 5000
 python tools/est_hid_sender/est_hid_sender.py python-program-status
 python tools/est_hid_sender/est_hid_sender.py python-stop
 python tools/est_hid_sender/est_hid_sender.py python-clear
@@ -73,7 +79,9 @@ python tools/est_hid_sender/est_hid_sender.py python-clear
 
 ## 当前限制
 
-- `Sensor`、`buttons`、`battery`、`Motor`、`MotorPair` 和 `DriveBase` 已完成对应阶段的实机自动验证，包括双电机对象停止、电脑主动停止和异常清理。各传感器便捷类型类、模式切换和重置仍未开放。
+- `Sensor`、`buttons`、`battery`、`Motor`、`MotorPair` 和 `DriveBase` 已完成对应阶段的实机自动验证，包括双电机对象停止、电脑主动停止和异常清理。
+- 七种类型化传感器类已经开放；当前连接的红外、声音、陀螺仪和超声波已实机验证。颜色、触摸和温度类已构建并具备类型检查，但尚缺对应实物回归。
+- 当前红外数据结构只提供通道 1 的信标方向/距离和遥控值，尚未开放 EV3 多通道选择。温度和英寸接口以十分之一单位返回整数，避免引入浮点依赖。
 - `Motor` 已支持 `run_power()`、`run_speed()`、`run_time()`、`run_angle()`、`reset_angle()` 和 `stop()`。`HOLD` 以及角度完成后的 `STOP_BRAKE` 仍未实现，并会明确抛出不支持异常。
 - `run_time()` 接受 `1..600000 ms`，但当前 RAM 程序本身的硬执行上限为 10000 ms；需要在脚本内等待完成，脚本直接返回会触发统一清理并停止马达。
 - 用户脚本执行期间，电机闭环、传感器解析、按键、电池、背光、音频维护、协议超时、USB 与看门狗都持续运行；LCD 页面刷新仍在主循环，忙循环期间暂不刷新。
@@ -83,25 +91,25 @@ python tools/est_hid_sender/est_hid_sender.py python-clear
 
 ## 下一步
 
-1. 开放传感器便捷类型类、模式操作和重置，并逐类完成实机回归。
-2. 设计 LCD 刷新与 VM 并行方案，再开放 `Display`、`LED` 和背光用户 API。
+1. 设计 LCD 刷新与 VM 并行方案，再开放 `Display`、`LED` 和背光用户 API。
+2. 接入颜色、触摸和温度传感器实物后，补齐剩余三种类型化类的回归。
 3. 设计用户程序持久化和启动策略；在该策略完成前继续使用 RAM 上传，避免把不稳定脚本写入 Flash 自动运行。
 
 ## 构建与发布
 
-M1.01A 上一实机基线：
-
-- 发布包：`firmware/releases/M1.01A/est_minimal_upgrade_app_M1.01A.upgrade.bin`
-- manifest：`firmware/releases/M1.01A/est_minimal_upgrade_app_M1.01A.manifest.json`
-- SHA-256：`6d817cce5c2628c0cf081fa4eb5332cb012eb7b9ff5b0480e7d7f8236e8ca9ea`
-- 固件测试：78 项通过。
-- HID 工具测试：112 项通过。
-- ARM GCC 12.2.1 `-Werror`、向量表、包头、固定 256 KiB 长度和 manifest 校验通过。
-
-M1.02A 当前实机包：
+M1.02A 上一实机基线：
 
 - 发布包：`firmware/releases/M1.02A/est_minimal_upgrade_app_M1.02A.upgrade.bin`
 - manifest：`firmware/releases/M1.02A/est_minimal_upgrade_app_M1.02A.manifest.json`
 - SHA-256：`f203a73428054c151fc92a1b25374484c851ab96f3d5702f2e3269dcbebe2610`
-- 固件测试：79 项通过；HID 工具测试：112 项通过。
-- ARM GCC 12.2.1 `-Werror`、向量表、`APP=` 包头、固定 256 KiB 长度和 manifest 校验通过；双电机动作、对象停止、异常清理和电脑主动停止均已实机通过。
+- 固件测试：79 项通过。
+- HID 工具测试：112 项通过。
+- ARM GCC 12.2.1 `-Werror`、向量表、包头、固定 256 KiB 长度和 manifest 校验通过。
+
+M1.04A 当前实机包：
+
+- 发布包：`firmware/releases/M1.04A/est_minimal_upgrade_app_M1.04A.upgrade.bin`
+- manifest：`firmware/releases/M1.04A/est_minimal_upgrade_app_M1.04A.manifest.json`
+- SHA-256：`c3c8afe269030228535a11fbdc76f30bcf9da179a33b0d99d08a7b50037f19aa`
+- 固件测试：80 项通过；HID 工具测试：112 项通过。
+- ARM GCC 12.2.1 `-Werror`、向量表、`APP=` 包头、固定 256 KiB 长度和 manifest 校验通过；红外、声音、陀螺仪和超声波类型化 API 三轮真机脚本均已通过。

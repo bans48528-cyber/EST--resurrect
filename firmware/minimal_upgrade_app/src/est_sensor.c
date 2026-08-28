@@ -17,6 +17,27 @@ static bool est_sensor_mode_valid(est_sensor_mode_t mode)
 	return (uint32_t)mode <= (uint32_t)EST_SENSOR_MODE_COLOR;
 }
 
+static bool est_sensor_mode_supported(est_sensor_type_t type,
+	est_sensor_mode_t mode)
+{
+	switch (type) {
+	case EST_SENSOR_TYPE_COLOR:
+	case EST_SENSOR_TYPE_ULTRASONIC:
+	case EST_SENSOR_TYPE_INFRARED:
+		return true;
+	case EST_SENSOR_TYPE_GYRO:
+	case EST_SENSOR_TYPE_TEMPERATURE:
+		return (uint32_t)mode <= 1U;
+	case EST_SENSOR_TYPE_SOUND:
+	case EST_SENSOR_TYPE_TOUCH:
+		return mode == EST_SENSOR_MODE_REFLECTED;
+	case EST_SENSOR_TYPE_NONE:
+	case EST_SENSOR_TYPE_UNKNOWN:
+	default:
+		return false;
+	}
+}
+
 static enum board_sensor_port board_port_from_est(est_sensor_port_t port)
 {
 	return (enum board_sensor_port)port;
@@ -150,11 +171,27 @@ est_result_t est_sensor_get_type(est_sensor_port_t port,
 est_result_t est_sensor_set_mode(est_sensor_port_t port,
 	est_sensor_mode_t mode)
 {
+	est_sensor_type_t type;
+	est_result_t result;
+
 	if (!est_sensor_port_valid(port)) {
 		return EST_ERR_INVALID_PORT;
 	}
 	if (!est_sensor_mode_valid(mode)) {
 		return EST_ERR_INVALID_ARGUMENT;
+	}
+	result = est_sensor_get_type(port, &type);
+	if (result != EST_OK) {
+		return result;
+	}
+	if (type == EST_SENSOR_TYPE_NONE) {
+		return EST_ERR_NOT_CONNECTED;
+	}
+	if (type == EST_SENSOR_TYPE_UNKNOWN) {
+		return EST_ERR_TYPE_MISMATCH;
+	}
+	if (!est_sensor_mode_supported(type, mode)) {
+		return EST_ERR_NOT_SUPPORTED;
 	}
 	if (!board_sensor_set_mode(board_port_from_est(port),
 	    (enum board_sensor_mode)mode, est_system_millis())) {

@@ -1305,6 +1305,59 @@ class MicroPythonIntegrationTests(unittest.TestCase):
         self.assertNotIn("board_keys_", module)
         self.assertNotIn("board_battery_", module)
 
+    def test_typed_sensor_python_api_validates_modes_and_waits_for_data(self) -> None:
+        module = (ROOT / "micropython_port" / "modest.c").read_text(
+            encoding="utf-8"
+        )
+        sensor_source = (SOURCE_DIR / "est_sensor.c").read_text(
+            encoding="utf-8"
+        )
+        script = (
+            ROOT.parents[1] / "tools" / "est_hid_sender" / "examples" /
+            "test_typed_sensors.py"
+        ).read_text(encoding="utf-8")
+
+        for class_name in (
+            "SoundSensor",
+            "TemperatureSensor",
+            "TouchSensor",
+            "ColorSensor",
+            "UltrasonicSensor",
+            "GyroSensor",
+            "InfraredSensor",
+        ):
+            self.assertIn(f"MP_QSTR_{class_name}", module)
+            self.assertIn(f"est.{class_name}", script)
+        for public_call in (
+            "est_sensor_get_status",
+            "est_sensor_set_mode",
+            "est_sensor_restart",
+            "est_micropython_vm_hook",
+        ):
+            self.assertIn(public_call, module)
+        for method in (
+            "MP_QSTR_set_mode",
+            "MP_QSTR_read_mode",
+            "MP_QSTR_restart",
+            "MP_QSTR_reflection",
+            "MP_QSTR_pressed",
+            "MP_QSTR_distance_mm",
+            "MP_QSTR_angle",
+            "MP_QSTR_reset_angle",
+            "MP_QSTR_proximity",
+            "MP_QSTR_beacon",
+            "MP_QSTR_remote",
+        ):
+            self.assertIn(method, module)
+        self.assertIn("est_sensor_mode_supported", sensor_source)
+        self.assertIn("case EST_SENSOR_TYPE_SOUND:", sensor_source)
+        self.assertIn("case EST_SENSOR_TYPE_GYRO:", sensor_source)
+        self.assertIn("return EST_ERR_NOT_SUPPORTED;", sensor_source)
+        self.assertIn("sound.set_mode(1)", script)
+        self.assertIn("gyro.reset_angle()", script)
+        self.assertIn("est.ColorSensor(1)", script)
+        self.assertNotIn("board_sensor_", module)
+
     def test_motor_python_api_wraps_single_motor_services(self) -> None:
         module = (ROOT / "micropython_port" / "modest.c").read_text(
             encoding="utf-8"

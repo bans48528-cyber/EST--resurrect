@@ -1124,14 +1124,25 @@ static MP_DEFINE_CONST_FUN_OBJ_1(modest_sensor_obj, modest_sensor);
 typedef struct {
 	mp_obj_base_t base;
 	est_sensor_port_t port;
+	est_sensor_type_t expected_type;
+	bool type_constrained;
+	int32_t gyro_zero_degrees;
 } modest_sensor_instance_t;
 
 static void modest_raise_sensor_error(est_result_t error)
 {
 	switch (error) {
+	case EST_ERR_INVALID_ARGUMENT:
+		mp_raise_ValueError(MP_ERROR_TEXT("invalid sensor argument"));
 	case EST_ERR_NOT_CONNECTED:
 		mp_raise_msg(&mp_type_RuntimeError,
 			MP_ERROR_TEXT("sensor not connected"));
+	case EST_ERR_TYPE_MISMATCH:
+		mp_raise_msg(&mp_type_RuntimeError,
+			MP_ERROR_TEXT("sensor type mismatch"));
+	case EST_ERR_NOT_SUPPORTED:
+		mp_raise_msg(&mp_type_RuntimeError,
+			MP_ERROR_TEXT("sensor mode unsupported"));
 	case EST_ERR_BUSY:
 		mp_raise_msg(&mp_type_RuntimeError,
 			MP_ERROR_TEXT("sensor not ready"));
@@ -1144,6 +1155,21 @@ static void modest_raise_sensor_error(est_result_t error)
 	}
 }
 
+static void modest_sensor_require_type(modest_sensor_instance_t *self,
+	const est_sensor_status_t *status)
+{
+	if (!self->type_constrained || status->type == self->expected_type) {
+		return;
+	}
+	if (status->state == EST_SENSOR_SYNCING) {
+		modest_raise_sensor_error(EST_ERR_BUSY);
+	}
+	if (status->type == EST_SENSOR_TYPE_NONE) {
+		modest_raise_sensor_error(EST_ERR_NOT_CONNECTED);
+	}
+	modest_raise_sensor_error(EST_ERR_TYPE_MISMATCH);
+}
+
 static void modest_sensor_read(mp_obj_t self_object,
 	est_sensor_status_t *status)
 {
@@ -1153,20 +1179,90 @@ static void modest_sensor_read(mp_obj_t self_object,
 	if (result != EST_OK) {
 		modest_raise_sensor_error(result);
 	}
+	modest_sensor_require_type(self, status);
 }
 
-static mp_obj_t modest_sensor_make_new(const mp_obj_type_t *type,
-	size_t argument_count, size_t keyword_count, const mp_obj_t *arguments)
+static mp_obj_t modest_sensor_make_new_for_type(const mp_obj_type_t *type,
+	size_t argument_count, size_t keyword_count, const mp_obj_t *arguments,
+	est_sensor_type_t expected_type, bool type_constrained)
 {
 	int32_t port;
 	modest_sensor_instance_t *self;
+	est_sensor_status_t status = {0};
+	est_result_t result;
 
 	mp_arg_check_num(argument_count, keyword_count, 1U, 1U, false);
 	port = require_integer_range(arguments[0], 1, EST_SENSOR_PORT_COUNT,
 		MP_ERROR_TEXT("sensor port must be 1..4"));
 	self = mp_obj_malloc(modest_sensor_instance_t, type);
 	self->port = (est_sensor_port_t)(port - 1);
+	self->expected_type = expected_type;
+	self->type_constrained = type_constrained;
+	self->gyro_zero_degrees = 0;
+	if (type_constrained) {
+		result = est_sensor_get_status(self->port, &status);
+		if (result != EST_OK) {
+			modest_raise_sensor_error(result);
+		}
+		modest_sensor_require_type(self, &status);
+	}
 	return MP_OBJ_FROM_PTR(self);
+}
+
+static mp_obj_t modest_sensor_make_new(const mp_obj_type_t *type,
+	size_t argument_count, size_t keyword_count, const mp_obj_t *arguments)
+{
+	return modest_sensor_make_new_for_type(type, argument_count, keyword_count,
+		arguments, EST_SENSOR_TYPE_UNKNOWN, false);
+}
+
+static mp_obj_t modest_sound_sensor_make_new(const mp_obj_type_t *type,
+	size_t argument_count, size_t keyword_count, const mp_obj_t *arguments)
+{
+	return modest_sensor_make_new_for_type(type, argument_count, keyword_count,
+		arguments, EST_SENSOR_TYPE_SOUND, true);
+}
+
+static mp_obj_t modest_temperature_sensor_make_new(const mp_obj_type_t *type,
+	size_t argument_count, size_t keyword_count, const mp_obj_t *arguments)
+{
+	return modest_sensor_make_new_for_type(type, argument_count, keyword_count,
+		arguments, EST_SENSOR_TYPE_TEMPERATURE, true);
+}
+
+static mp_obj_t modest_touch_sensor_make_new(const mp_obj_type_t *type,
+	size_t argument_count, size_t keyword_count, const mp_obj_t *arguments)
+{
+	return modest_sensor_make_new_for_type(type, argument_count, keyword_count,
+		arguments, EST_SENSOR_TYPE_TOUCH, true);
+}
+
+static mp_obj_t modest_color_sensor_make_new(const mp_obj_type_t *type,
+	size_t argument_count, size_t keyword_count, const mp_obj_t *arguments)
+{
+	return modest_sensor_make_new_for_type(type, argument_count, keyword_count,
+		arguments, EST_SENSOR_TYPE_COLOR, true);
+}
+
+static mp_obj_t modest_ultrasonic_sensor_make_new(const mp_obj_type_t *type,
+	size_t argument_count, size_t keyword_count, const mp_obj_t *arguments)
+{
+	return modest_sensor_make_new_for_type(type, argument_count, keyword_count,
+		arguments, EST_SENSOR_TYPE_ULTRASONIC, true);
+}
+
+static mp_obj_t modest_gyro_sensor_make_new(const mp_obj_type_t *type,
+	size_t argument_count, size_t keyword_count, const mp_obj_t *arguments)
+{
+	return modest_sensor_make_new_for_type(type, argument_count, keyword_count,
+		arguments, EST_SENSOR_TYPE_GYRO, true);
+}
+
+static mp_obj_t modest_infrared_sensor_make_new(const mp_obj_type_t *type,
+	size_t argument_count, size_t keyword_count, const mp_obj_t *arguments)
+{
+	return modest_sensor_make_new_for_type(type, argument_count, keyword_count,
+		arguments, EST_SENSOR_TYPE_INFRARED, true);
 }
 
 static mp_obj_t modest_sensor_port(mp_obj_t self_object)
@@ -1266,17 +1362,276 @@ static mp_obj_t modest_sensor_status(mp_obj_t self_object)
 }
 static MP_DEFINE_CONST_FUN_OBJ_1(modest_sensor_status_obj, modest_sensor_status);
 
+#define MODEST_SENSOR_VALUE_TIMEOUT_MS 3000U
+#define MODEST_SENSOR_MODE_RETRY_MS 500U
+
+static int32_t modest_sensor_wait_value(mp_obj_t self_object,
+	est_sensor_mode_t requested_mode)
+{
+	modest_sensor_instance_t *self = MP_OBJ_TO_PTR(self_object);
+	est_sensor_status_t status = {0};
+	est_sensor_type_t expected_type = self->expected_type;
+	est_result_t result;
+	uint32_t started_ms = est_system_millis();
+	uint32_t last_request_ms = started_ms;
+	bool mode_requested = false;
+
+	result = est_sensor_get_status(self->port, &status);
+	if (result != EST_OK) {
+		modest_raise_sensor_error(result);
+	}
+	if (!self->type_constrained) {
+		if (status.state == EST_SENSOR_SYNCING) {
+			modest_raise_sensor_error(EST_ERR_BUSY);
+		}
+		if (status.type == EST_SENSOR_TYPE_NONE) {
+			modest_raise_sensor_error(EST_ERR_NOT_CONNECTED);
+		}
+		expected_type = status.type;
+	}
+	for (;;) {
+		if (status.type == expected_type) {
+			uint32_t now_ms = est_system_millis();
+
+			if ((status.mode != requested_mode || !status.value_valid) &&
+			    (!mode_requested ||
+			     (uint32_t)(now_ms - last_request_ms) >=
+				MODEST_SENSOR_MODE_RETRY_MS)) {
+				result = est_sensor_set_mode(self->port, requested_mode);
+				if (result != EST_OK) {
+					modest_raise_sensor_error(result);
+				}
+				mode_requested = true;
+				last_request_ms = now_ms;
+			} else if (status.state == EST_SENSOR_STREAMING &&
+			    status.mode == requested_mode && status.value_valid &&
+			    status.error == EST_OK) {
+				return status.value;
+			}
+		} else if (status.state != EST_SENSOR_SYNCING) {
+			if (status.type == EST_SENSOR_TYPE_NONE) {
+				modest_raise_sensor_error(EST_ERR_NOT_CONNECTED);
+			}
+			modest_raise_sensor_error(EST_ERR_TYPE_MISMATCH);
+		}
+		if ((uint32_t)(est_system_millis() - started_ms) >=
+		    MODEST_SENSOR_VALUE_TIMEOUT_MS) {
+			mp_raise_msg(&mp_type_RuntimeError,
+				MP_ERROR_TEXT("sensor mode timeout"));
+		}
+		est_micropython_vm_hook();
+		result = est_sensor_get_status(self->port, &status);
+		if (result != EST_OK) {
+			modest_raise_sensor_error(result);
+		}
+	}
+}
+
+static mp_obj_t modest_sensor_set_mode(mp_obj_t self_object,
+	mp_obj_t mode_object)
+{
+	modest_sensor_instance_t *self = MP_OBJ_TO_PTR(self_object);
+	est_sensor_status_t status = {0};
+	int32_t mode = require_integer_range(mode_object, 0, 2,
+		MP_ERROR_TEXT("sensor mode must be 0..2"));
+	est_result_t result;
+
+	modest_sensor_read(self_object, &status);
+	result = est_sensor_set_mode(self->port, (est_sensor_mode_t)mode);
+	if (result != EST_OK) {
+		modest_raise_sensor_error(result);
+	}
+	return mp_const_none;
+}
+static MP_DEFINE_CONST_FUN_OBJ_2(
+	modest_sensor_set_mode_obj, modest_sensor_set_mode);
+
+static mp_obj_t modest_sensor_read_mode(mp_obj_t self_object,
+	mp_obj_t mode_object)
+{
+	int32_t mode = require_integer_range(mode_object, 0, 2,
+		MP_ERROR_TEXT("sensor mode must be 0..2"));
+
+	return mp_obj_new_int(modest_sensor_wait_value(
+		self_object, (est_sensor_mode_t)mode));
+}
+static MP_DEFINE_CONST_FUN_OBJ_2(
+	modest_sensor_read_mode_obj, modest_sensor_read_mode);
+
+static mp_obj_t modest_sensor_restart(mp_obj_t self_object)
+{
+	modest_sensor_instance_t *self = MP_OBJ_TO_PTR(self_object);
+	est_sensor_status_t status = {0};
+	est_result_t result;
+
+	modest_sensor_read(self_object, &status);
+	result = est_sensor_restart(self->port);
+	if (result != EST_OK) {
+		modest_raise_sensor_error(result);
+	}
+	return mp_const_none;
+}
+static MP_DEFINE_CONST_FUN_OBJ_1(modest_sensor_restart_obj, modest_sensor_restart);
+
+static mp_obj_t modest_sound_db(mp_obj_t self_object)
+{
+	return mp_obj_new_int(modest_sensor_wait_value(
+		self_object, EST_SENSOR_MODE_SOUND_DB));
+}
+static MP_DEFINE_CONST_FUN_OBJ_1(modest_sound_db_obj, modest_sound_db);
+
+static mp_obj_t modest_temperature_celsius(mp_obj_t self_object)
+{
+	return mp_obj_new_int(modest_sensor_wait_value(
+		self_object, EST_SENSOR_MODE_CELSIUS));
+}
+static MP_DEFINE_CONST_FUN_OBJ_1(
+	modest_temperature_celsius_obj, modest_temperature_celsius);
+
+static mp_obj_t modest_temperature_fahrenheit(mp_obj_t self_object)
+{
+	return mp_obj_new_int(modest_sensor_wait_value(
+		self_object, EST_SENSOR_MODE_FAHRENHEIT));
+}
+static MP_DEFINE_CONST_FUN_OBJ_1(
+	modest_temperature_fahrenheit_obj, modest_temperature_fahrenheit);
+
+static mp_obj_t modest_touch_pressed(mp_obj_t self_object)
+{
+	return mp_obj_new_bool(modest_sensor_wait_value(
+		self_object, EST_SENSOR_MODE_REFLECTED) != 0);
+}
+static MP_DEFINE_CONST_FUN_OBJ_1(modest_touch_pressed_obj, modest_touch_pressed);
+
+static mp_obj_t modest_color_reflection(mp_obj_t self_object)
+{
+	return mp_obj_new_int(modest_sensor_wait_value(
+		self_object, EST_SENSOR_MODE_REFLECTED));
+}
+static MP_DEFINE_CONST_FUN_OBJ_1(
+	modest_color_reflection_obj, modest_color_reflection);
+
+static mp_obj_t modest_color_ambient(mp_obj_t self_object)
+{
+	return mp_obj_new_int(modest_sensor_wait_value(
+		self_object, EST_SENSOR_MODE_AMBIENT));
+}
+static MP_DEFINE_CONST_FUN_OBJ_1(modest_color_ambient_obj, modest_color_ambient);
+
+static mp_obj_t modest_color_color(mp_obj_t self_object)
+{
+	return mp_obj_new_int(modest_sensor_wait_value(
+		self_object, EST_SENSOR_MODE_COLOR));
+}
+static MP_DEFINE_CONST_FUN_OBJ_1(modest_color_color_obj, modest_color_color);
+
+static mp_obj_t modest_ultrasonic_distance_mm(mp_obj_t self_object)
+{
+	return mp_obj_new_int(modest_sensor_wait_value(
+		self_object, EST_SENSOR_MODE_DISTANCE_CM));
+}
+static MP_DEFINE_CONST_FUN_OBJ_1(
+	modest_ultrasonic_distance_mm_obj, modest_ultrasonic_distance_mm);
+
+static mp_obj_t modest_ultrasonic_inches_tenths(mp_obj_t self_object)
+{
+	return mp_obj_new_int(modest_sensor_wait_value(
+		self_object, EST_SENSOR_MODE_DISTANCE_INCH));
+}
+static MP_DEFINE_CONST_FUN_OBJ_1(
+	modest_ultrasonic_inches_tenths_obj, modest_ultrasonic_inches_tenths);
+
+static mp_obj_t modest_ultrasonic_presence(mp_obj_t self_object)
+{
+	return mp_obj_new_bool(modest_sensor_wait_value(
+		self_object, EST_SENSOR_MODE_PRESENCE) != 0);
+}
+static MP_DEFINE_CONST_FUN_OBJ_1(
+	modest_ultrasonic_presence_obj, modest_ultrasonic_presence);
+
+static mp_obj_t modest_gyro_angle(mp_obj_t self_object)
+{
+	modest_sensor_instance_t *self = MP_OBJ_TO_PTR(self_object);
+	int32_t raw_angle = modest_sensor_wait_value(
+		self_object, EST_SENSOR_MODE_GYRO_ANGLE);
+
+	return mp_obj_new_int(raw_angle - self->gyro_zero_degrees);
+}
+static MP_DEFINE_CONST_FUN_OBJ_1(modest_gyro_angle_obj, modest_gyro_angle);
+
+static mp_obj_t modest_gyro_speed(mp_obj_t self_object)
+{
+	return mp_obj_new_int(modest_sensor_wait_value(
+		self_object, EST_SENSOR_MODE_GYRO_RATE));
+}
+static MP_DEFINE_CONST_FUN_OBJ_1(modest_gyro_speed_obj, modest_gyro_speed);
+
+static mp_obj_t modest_gyro_reset_angle(mp_obj_t self_object)
+{
+	modest_sensor_instance_t *self = MP_OBJ_TO_PTR(self_object);
+
+	self->gyro_zero_degrees = modest_sensor_wait_value(
+		self_object, EST_SENSOR_MODE_GYRO_ANGLE);
+	return mp_const_none;
+}
+static MP_DEFINE_CONST_FUN_OBJ_1(
+	modest_gyro_reset_angle_obj, modest_gyro_reset_angle);
+
+static mp_obj_t modest_infrared_proximity(mp_obj_t self_object)
+{
+	uint16_t value = (uint16_t)modest_sensor_wait_value(
+		self_object, EST_SENSOR_MODE_IR_PROXIMITY);
+
+	return mp_obj_new_int((mp_int_t)(value & 0xFFU));
+}
+static MP_DEFINE_CONST_FUN_OBJ_1(
+	modest_infrared_proximity_obj, modest_infrared_proximity);
+
+static mp_obj_t modest_infrared_beacon(mp_obj_t self_object)
+{
+	uint16_t value = (uint16_t)modest_sensor_wait_value(
+		self_object, EST_SENSOR_MODE_IR_BEACON);
+	uint8_t heading_byte = (uint8_t)(value & 0xFFU);
+	int16_t heading = heading_byte <= 180U ? (int16_t)heading_byte :
+		-(int16_t)(255U - heading_byte);
+	mp_obj_t values[2];
+
+	values[0] = mp_obj_new_int((mp_int_t)heading);
+	values[1] = mp_obj_new_int((mp_int_t)((value >> 8U) & 0xFFU));
+	return mp_obj_new_tuple(2U, values);
+}
+static MP_DEFINE_CONST_FUN_OBJ_1(
+	modest_infrared_beacon_obj, modest_infrared_beacon);
+
+static mp_obj_t modest_infrared_remote(mp_obj_t self_object)
+{
+	uint16_t value = (uint16_t)modest_sensor_wait_value(
+		self_object, EST_SENSOR_MODE_IR_REMOTE);
+
+	return mp_obj_new_int((mp_int_t)(value & 0xFFU));
+}
+static MP_DEFINE_CONST_FUN_OBJ_1(
+	modest_infrared_remote_obj, modest_infrared_remote);
+
+#define MODEST_SENSOR_COMMON_LOCAL_ENTRIES \
+	{MP_ROM_QSTR(MP_QSTR_port), MP_ROM_PTR(&modest_sensor_port_obj)}, \
+	{MP_ROM_QSTR(MP_QSTR_type), MP_ROM_PTR(&modest_sensor_type_value_obj)}, \
+	{MP_ROM_QSTR(MP_QSTR_state), MP_ROM_PTR(&modest_sensor_state_obj)}, \
+	{MP_ROM_QSTR(MP_QSTR_mode), MP_ROM_PTR(&modest_sensor_mode_obj)}, \
+	{MP_ROM_QSTR(MP_QSTR_value_format), \
+		MP_ROM_PTR(&modest_sensor_value_format_obj)}, \
+	{MP_ROM_QSTR(MP_QSTR_valid), MP_ROM_PTR(&modest_sensor_valid_obj)}, \
+	{MP_ROM_QSTR(MP_QSTR_error), MP_ROM_PTR(&modest_sensor_error_obj)}, \
+	{MP_ROM_QSTR(MP_QSTR_value), MP_ROM_PTR(&modest_sensor_value_obj)}, \
+	{MP_ROM_QSTR(MP_QSTR_status), MP_ROM_PTR(&modest_sensor_status_obj)}, \
+	{MP_ROM_QSTR(MP_QSTR_set_mode), \
+		MP_ROM_PTR(&modest_sensor_set_mode_obj)}, \
+	{MP_ROM_QSTR(MP_QSTR_read_mode), \
+		MP_ROM_PTR(&modest_sensor_read_mode_obj)}, \
+	{MP_ROM_QSTR(MP_QSTR_restart), MP_ROM_PTR(&modest_sensor_restart_obj)},
+
 static const mp_rom_map_elem_t modest_sensor_locals_table[] = {
-	{MP_ROM_QSTR(MP_QSTR_port), MP_ROM_PTR(&modest_sensor_port_obj)},
-	{MP_ROM_QSTR(MP_QSTR_type), MP_ROM_PTR(&modest_sensor_type_value_obj)},
-	{MP_ROM_QSTR(MP_QSTR_state), MP_ROM_PTR(&modest_sensor_state_obj)},
-	{MP_ROM_QSTR(MP_QSTR_mode), MP_ROM_PTR(&modest_sensor_mode_obj)},
-	{MP_ROM_QSTR(MP_QSTR_value_format),
-		MP_ROM_PTR(&modest_sensor_value_format_obj)},
-	{MP_ROM_QSTR(MP_QSTR_valid), MP_ROM_PTR(&modest_sensor_valid_obj)},
-	{MP_ROM_QSTR(MP_QSTR_error), MP_ROM_PTR(&modest_sensor_error_obj)},
-	{MP_ROM_QSTR(MP_QSTR_value), MP_ROM_PTR(&modest_sensor_value_obj)},
-	{MP_ROM_QSTR(MP_QSTR_status), MP_ROM_PTR(&modest_sensor_status_obj)},
+	MODEST_SENSOR_COMMON_LOCAL_ENTRIES
 	{MP_ROM_QSTR(MP_QSTR_TYPE_NONE), MP_ROM_INT(EST_SENSOR_TYPE_NONE)},
 	{MP_ROM_QSTR(MP_QSTR_TYPE_SOUND), MP_ROM_INT(EST_SENSOR_TYPE_SOUND)},
 	{MP_ROM_QSTR(MP_QSTR_TYPE_TEMPERATURE),
@@ -1297,6 +1652,11 @@ static const mp_rom_map_elem_t modest_sensor_locals_table[] = {
 		MP_ROM_INT(EST_SENSOR_STREAMING)},
 	{MP_ROM_QSTR(MP_QSTR_STATE_STALE), MP_ROM_INT(EST_SENSOR_STALE)},
 	{MP_ROM_QSTR(MP_QSTR_STATE_ERROR), MP_ROM_INT(EST_SENSOR_ERROR)},
+	{MP_ROM_QSTR(MP_QSTR_MODE_REFLECTED),
+		MP_ROM_INT(EST_SENSOR_MODE_REFLECTED)},
+	{MP_ROM_QSTR(MP_QSTR_MODE_AMBIENT),
+		MP_ROM_INT(EST_SENSOR_MODE_AMBIENT)},
+	{MP_ROM_QSTR(MP_QSTR_MODE_COLOR), MP_ROM_INT(EST_SENSOR_MODE_COLOR)},
 };
 static MP_DEFINE_CONST_DICT(
 	modest_sensor_locals, modest_sensor_locals_table);
@@ -1307,6 +1667,152 @@ static MP_DEFINE_CONST_OBJ_TYPE(
 	MP_TYPE_FLAG_NONE,
 	make_new, modest_sensor_make_new,
 	locals_dict, &modest_sensor_locals);
+
+static const mp_rom_map_elem_t modest_sound_sensor_locals_table[] = {
+	MODEST_SENSOR_COMMON_LOCAL_ENTRIES
+	{MP_ROM_QSTR(MP_QSTR_db), MP_ROM_PTR(&modest_sound_db_obj)},
+	{MP_ROM_QSTR(MP_QSTR_MODE_DB), MP_ROM_INT(EST_SENSOR_MODE_SOUND_DB)},
+};
+static MP_DEFINE_CONST_DICT(
+	modest_sound_sensor_locals, modest_sound_sensor_locals_table);
+static MP_DEFINE_CONST_OBJ_TYPE(
+	modest_sound_sensor_type,
+	MP_QSTR_SoundSensor,
+	MP_TYPE_FLAG_NONE,
+	make_new, modest_sound_sensor_make_new,
+	locals_dict, &modest_sound_sensor_locals);
+
+static const mp_rom_map_elem_t modest_temperature_sensor_locals_table[] = {
+	MODEST_SENSOR_COMMON_LOCAL_ENTRIES
+	{MP_ROM_QSTR(MP_QSTR_celsius_tenths),
+		MP_ROM_PTR(&modest_temperature_celsius_obj)},
+	{MP_ROM_QSTR(MP_QSTR_fahrenheit_tenths),
+		MP_ROM_PTR(&modest_temperature_fahrenheit_obj)},
+	{MP_ROM_QSTR(MP_QSTR_MODE_CELSIUS),
+		MP_ROM_INT(EST_SENSOR_MODE_CELSIUS)},
+	{MP_ROM_QSTR(MP_QSTR_MODE_FAHRENHEIT),
+		MP_ROM_INT(EST_SENSOR_MODE_FAHRENHEIT)},
+	{MP_ROM_QSTR(MP_QSTR_SCALE_TENTHS), MP_ROM_INT(10)},
+};
+static MP_DEFINE_CONST_DICT(
+	modest_temperature_sensor_locals, modest_temperature_sensor_locals_table);
+static MP_DEFINE_CONST_OBJ_TYPE(
+	modest_temperature_sensor_type,
+	MP_QSTR_TemperatureSensor,
+	MP_TYPE_FLAG_NONE,
+	make_new, modest_temperature_sensor_make_new,
+	locals_dict, &modest_temperature_sensor_locals);
+
+static const mp_rom_map_elem_t modest_touch_sensor_locals_table[] = {
+	MODEST_SENSOR_COMMON_LOCAL_ENTRIES
+	{MP_ROM_QSTR(MP_QSTR_pressed), MP_ROM_PTR(&modest_touch_pressed_obj)},
+};
+static MP_DEFINE_CONST_DICT(
+	modest_touch_sensor_locals, modest_touch_sensor_locals_table);
+static MP_DEFINE_CONST_OBJ_TYPE(
+	modest_touch_sensor_type,
+	MP_QSTR_TouchSensor,
+	MP_TYPE_FLAG_NONE,
+	make_new, modest_touch_sensor_make_new,
+	locals_dict, &modest_touch_sensor_locals);
+
+static const mp_rom_map_elem_t modest_color_sensor_locals_table[] = {
+	MODEST_SENSOR_COMMON_LOCAL_ENTRIES
+	{MP_ROM_QSTR(MP_QSTR_reflection),
+		MP_ROM_PTR(&modest_color_reflection_obj)},
+	{MP_ROM_QSTR(MP_QSTR_ambient), MP_ROM_PTR(&modest_color_ambient_obj)},
+	{MP_ROM_QSTR(MP_QSTR_color), MP_ROM_PTR(&modest_color_color_obj)},
+	{MP_ROM_QSTR(MP_QSTR_MODE_REFLECTED),
+		MP_ROM_INT(EST_SENSOR_MODE_REFLECTED)},
+	{MP_ROM_QSTR(MP_QSTR_MODE_AMBIENT),
+		MP_ROM_INT(EST_SENSOR_MODE_AMBIENT)},
+	{MP_ROM_QSTR(MP_QSTR_MODE_COLOR), MP_ROM_INT(EST_SENSOR_MODE_COLOR)},
+	{MP_ROM_QSTR(MP_QSTR_COLOR_NONE), MP_ROM_INT(0)},
+	{MP_ROM_QSTR(MP_QSTR_COLOR_BLACK), MP_ROM_INT(1)},
+	{MP_ROM_QSTR(MP_QSTR_COLOR_BLUE), MP_ROM_INT(2)},
+	{MP_ROM_QSTR(MP_QSTR_COLOR_GREEN), MP_ROM_INT(3)},
+	{MP_ROM_QSTR(MP_QSTR_COLOR_YELLOW), MP_ROM_INT(4)},
+	{MP_ROM_QSTR(MP_QSTR_COLOR_RED), MP_ROM_INT(5)},
+	{MP_ROM_QSTR(MP_QSTR_COLOR_WHITE), MP_ROM_INT(6)},
+	{MP_ROM_QSTR(MP_QSTR_COLOR_BROWN), MP_ROM_INT(7)},
+};
+static MP_DEFINE_CONST_DICT(
+	modest_color_sensor_locals, modest_color_sensor_locals_table);
+static MP_DEFINE_CONST_OBJ_TYPE(
+	modest_color_sensor_type,
+	MP_QSTR_ColorSensor,
+	MP_TYPE_FLAG_NONE,
+	make_new, modest_color_sensor_make_new,
+	locals_dict, &modest_color_sensor_locals);
+
+static const mp_rom_map_elem_t modest_ultrasonic_sensor_locals_table[] = {
+	MODEST_SENSOR_COMMON_LOCAL_ENTRIES
+	{MP_ROM_QSTR(MP_QSTR_distance_mm),
+		MP_ROM_PTR(&modest_ultrasonic_distance_mm_obj)},
+	{MP_ROM_QSTR(MP_QSTR_inches_tenths),
+		MP_ROM_PTR(&modest_ultrasonic_inches_tenths_obj)},
+	{MP_ROM_QSTR(MP_QSTR_presence),
+		MP_ROM_PTR(&modest_ultrasonic_presence_obj)},
+	{MP_ROM_QSTR(MP_QSTR_MODE_DISTANCE_MM),
+		MP_ROM_INT(EST_SENSOR_MODE_DISTANCE_CM)},
+	{MP_ROM_QSTR(MP_QSTR_MODE_DISTANCE_INCH),
+		MP_ROM_INT(EST_SENSOR_MODE_DISTANCE_INCH)},
+	{MP_ROM_QSTR(MP_QSTR_MODE_PRESENCE),
+		MP_ROM_INT(EST_SENSOR_MODE_PRESENCE)},
+	{MP_ROM_QSTR(MP_QSTR_SCALE_INCH_TENTHS), MP_ROM_INT(10)},
+};
+static MP_DEFINE_CONST_DICT(
+	modest_ultrasonic_sensor_locals, modest_ultrasonic_sensor_locals_table);
+static MP_DEFINE_CONST_OBJ_TYPE(
+	modest_ultrasonic_sensor_type,
+	MP_QSTR_UltrasonicSensor,
+	MP_TYPE_FLAG_NONE,
+	make_new, modest_ultrasonic_sensor_make_new,
+	locals_dict, &modest_ultrasonic_sensor_locals);
+
+static const mp_rom_map_elem_t modest_gyro_sensor_locals_table[] = {
+	MODEST_SENSOR_COMMON_LOCAL_ENTRIES
+	{MP_ROM_QSTR(MP_QSTR_angle), MP_ROM_PTR(&modest_gyro_angle_obj)},
+	{MP_ROM_QSTR(MP_QSTR_speed), MP_ROM_PTR(&modest_gyro_speed_obj)},
+	{MP_ROM_QSTR(MP_QSTR_reset_angle),
+		MP_ROM_PTR(&modest_gyro_reset_angle_obj)},
+	{MP_ROM_QSTR(MP_QSTR_MODE_ANGLE),
+		MP_ROM_INT(EST_SENSOR_MODE_GYRO_ANGLE)},
+	{MP_ROM_QSTR(MP_QSTR_MODE_RATE),
+		MP_ROM_INT(EST_SENSOR_MODE_GYRO_RATE)},
+};
+static MP_DEFINE_CONST_DICT(
+	modest_gyro_sensor_locals, modest_gyro_sensor_locals_table);
+static MP_DEFINE_CONST_OBJ_TYPE(
+	modest_gyro_sensor_type,
+	MP_QSTR_GyroSensor,
+	MP_TYPE_FLAG_NONE,
+	make_new, modest_gyro_sensor_make_new,
+	locals_dict, &modest_gyro_sensor_locals);
+
+static const mp_rom_map_elem_t modest_infrared_sensor_locals_table[] = {
+	MODEST_SENSOR_COMMON_LOCAL_ENTRIES
+	{MP_ROM_QSTR(MP_QSTR_proximity),
+		MP_ROM_PTR(&modest_infrared_proximity_obj)},
+	{MP_ROM_QSTR(MP_QSTR_beacon),
+		MP_ROM_PTR(&modest_infrared_beacon_obj)},
+	{MP_ROM_QSTR(MP_QSTR_remote),
+		MP_ROM_PTR(&modest_infrared_remote_obj)},
+	{MP_ROM_QSTR(MP_QSTR_MODE_PROXIMITY),
+		MP_ROM_INT(EST_SENSOR_MODE_IR_PROXIMITY)},
+	{MP_ROM_QSTR(MP_QSTR_MODE_BEACON),
+		MP_ROM_INT(EST_SENSOR_MODE_IR_BEACON)},
+	{MP_ROM_QSTR(MP_QSTR_MODE_REMOTE),
+		MP_ROM_INT(EST_SENSOR_MODE_IR_REMOTE)},
+};
+static MP_DEFINE_CONST_DICT(
+	modest_infrared_sensor_locals, modest_infrared_sensor_locals_table);
+static MP_DEFINE_CONST_OBJ_TYPE(
+	modest_infrared_sensor_type,
+	MP_QSTR_InfraredSensor,
+	MP_TYPE_FLAG_NONE,
+	make_new, modest_infrared_sensor_make_new,
+	locals_dict, &modest_infrared_sensor_locals);
 
 static mp_obj_t modest_buttons_value(void)
 {
@@ -1495,6 +2001,20 @@ static const mp_rom_map_elem_t modest_module_globals_table[] = {
 	{MP_ROM_QSTR(MP_QSTR_drive_mix), MP_ROM_PTR(&modest_drive_mix_obj)},
 	{MP_ROM_QSTR(MP_QSTR_sensor), MP_ROM_PTR(&modest_sensor_obj)},
 	{MP_ROM_QSTR(MP_QSTR_Sensor), MP_ROM_PTR(&modest_sensor_type)},
+	{MP_ROM_QSTR(MP_QSTR_SoundSensor),
+		MP_ROM_PTR(&modest_sound_sensor_type)},
+	{MP_ROM_QSTR(MP_QSTR_TemperatureSensor),
+		MP_ROM_PTR(&modest_temperature_sensor_type)},
+	{MP_ROM_QSTR(MP_QSTR_TouchSensor),
+		MP_ROM_PTR(&modest_touch_sensor_type)},
+	{MP_ROM_QSTR(MP_QSTR_ColorSensor),
+		MP_ROM_PTR(&modest_color_sensor_type)},
+	{MP_ROM_QSTR(MP_QSTR_UltrasonicSensor),
+		MP_ROM_PTR(&modest_ultrasonic_sensor_type)},
+	{MP_ROM_QSTR(MP_QSTR_GyroSensor),
+		MP_ROM_PTR(&modest_gyro_sensor_type)},
+	{MP_ROM_QSTR(MP_QSTR_InfraredSensor),
+		MP_ROM_PTR(&modest_infrared_sensor_type)},
 	{MP_ROM_QSTR(MP_QSTR_buttons), MP_ROM_PTR(&modest_buttons_module)},
 	{MP_ROM_QSTR(MP_QSTR_battery), MP_ROM_PTR(&modest_battery_module)},
 	{MP_ROM_QSTR(MP_QSTR_force_gc), MP_ROM_PTR(&modest_force_gc_obj)},
