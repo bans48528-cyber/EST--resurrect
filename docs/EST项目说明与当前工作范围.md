@@ -4,9 +4,10 @@
 
 本文用于说明当前 EST 主控重构项目的真实状态、工作目标和边界。若本文与早期迁移记录或旧分支对话冲突，应优先采用本文和当前工作区文件；尤其应采用 `docs/EST_Bootloader_对话迁移上下文_2026-08-21.md` 最前面的“最新迁移覆盖段（2026-08-21，必须优先采用）”。
 
-## 最新覆盖（2026-08-28，M1.04A 类型化传感器实机通过，必须优先采用）
+## 最新覆盖（2026-08-28，M1.05A 显示与灯光 API 实机通过，必须优先采用）
 
-- 当前接入设备正常运行 `M1.04A`，心跳、协议 `1.15`、电量、USB、四路传感器和 A-D 四路马达安全停止状态均正常。发布包 SHA-256 为 `c3c8afe269030228535a11fbdc76f30bcf9da179a33b0d99d08a7b50037f19aa`。
+- 当前接入设备正常运行 `M1.05A`，心跳、协议 `1.15`、电量、USB、四路传感器和 A-D 四路马达安全停止状态均正常。发布包 SHA-256 为 `bf41afdd7df8af9bd24801dfab2679333abde864b69399572889e2343bd64455`。
+- `M1.05A` 已开放 `est.display`、`est.led` 和 `est.backlight`。1625 字节脚本完成像素、线、矩形、文字、位图和整帧刷新，并顺序验证红灯、蓝灯、红蓝同亮、灭灯以及背光 20%/0%/100%；三轮分别在 4090、7090、7089 ms 完成，均为 flags `0x03`、result `7`，用户确认没有问题。LCD 刷新期间按小传输块执行 VM hook，脚本结束后主循环状态页恢复。
 - `M1.04A` 已开放 `SoundSensor`、`TemperatureSensor`、`TouchSensor`、`ColorSensor`、`UltrasonicSensor`、`GyroSensor` 和 `InfraredSensor`，以及通用模式切换、模式读取和端口重启。当前连接的红外、声音、陀螺仪和超声波完成三轮真机脚本，分别用时 84、91、185 ms，均为 flags `0x03`、result `7`；最后一轮包含声音端口重启。陀螺仪归零采用对象内软件零点，不再错误地重启传感器通信。
 - `M1.03A` 暴露了陀螺仪归零语义错误并已废弃：通信重启不能代表物理角度归零，该版本稳定在测试阶段 32 超时，不得作为恢复或继续开发基线。
 - `M1.02A` 已完成 `MotorPair` 和 `DriveBase`：左右独立持续/定时速度、左右独立角度、直行角度/时间、EV3 持续/定量转向和 `wait=True` 均调用现有精确 C 控制器。配对强制要求同型号大型或同型号中型马达，不开放毫米距离，也不恢复双电机自动超时。A/C 双大型两次完整脚本均完成 80/40% 定时速度、80% 同步两圈、-80% 定时直行、`+50` 转向和约 7300 次强制 GC，最大同步误差 11°/28°；用户确认肉眼未见问题。对象 `BRAKE`、故意 Python 异常和电脑 `python-stop` 三条持续运行停止路径也已通过，分别在 800 ms、504 ms 和 952 ms 生效，退出后 A-D 全部 coast/power 0。
@@ -245,7 +246,7 @@ firmware\minimal_upgrade_app
 当前实机包：
 
 ```text
-firmware\releases\M1.04A\est_minimal_upgrade_app_M1.04A.upgrade.bin
+firmware\releases\M1.05A\est_minimal_upgrade_app_M1.05A.upgrade.bin
 ```
 
 该包已经实机验证。详细版本状态统一以 `firmware/releases/README.md` 为准。
@@ -282,9 +283,9 @@ firmware\releases\M1.04A\est_minimal_upgrade_app_M1.04A.upgrade.bin
 
 ### 主线：开放正式 MicroPython 用户 API
 
-1. 决定 LCD 刷新如何与 VM 并行，再开放 `Display`、`LED` 和背光用户 API；当前底层显示状态安全，但 Python 忙循环期间页面不刷新。
+1. 设计用户脚本持久化、存储分区和开机启动策略；当前继续使用 RAM 上传。
 2. 获得颜色、触摸和温度传感器实物后，补齐对应类型化类的真机回归；当前四种已连接传感器已经通过。
-3. 最后设计用户脚本持久化和开机自动运行；当前继续使用 RAM 上传。
+3. 把尚未通过的音频播放作为独立问题处理，验证稳定播放后再开放 `Audio` 用户 API。
 
 完整短期清单见 `docs/EST_C_API与MicroPython下一步工作清单.md`，本阶段实机数据见 `docs/EST_MicroPython_RAM程序进度_2026-08-28.md`。
 

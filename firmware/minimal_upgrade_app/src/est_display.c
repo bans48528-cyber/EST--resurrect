@@ -54,3 +54,8 @@ void est_display_refresh(void)
 {
 	board_lcd_refresh();
 }
+
+void est_display_refresh_with_hook(est_display_refresh_hook_t hook)
+{
+	board_lcd_refresh_with_hook(hook);
+}

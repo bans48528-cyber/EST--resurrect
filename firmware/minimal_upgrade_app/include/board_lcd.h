@@ -9,6 +9,8 @@
 #define BOARD_LCD_HEIGHT 128U
 #define BOARD_LCD_MOTOR_LINE_CHARACTERS 18U
 
+typedef void (*board_lcd_refresh_hook_t)(void);
+
 void board_lcd_init(void);
 void board_lcd_clear(void);
 bool board_lcd_set_pixel(uint16_t x, uint16_t y, bool on);
@@ -22,6 +24,7 @@ bool board_lcd_draw_bitmap(uint16_t x, uint16_t y,
 	uint16_t width, uint16_t height, const uint8_t *bitmap,
 	size_t bitmap_size);
 void board_lcd_refresh(void);
+void board_lcd_refresh_with_hook(board_lcd_refresh_hook_t hook);
 void board_lcd_show_version(const char *version);
 void board_lcd_show_sensor(const char *version, const char *mode,
 	const char *reading);

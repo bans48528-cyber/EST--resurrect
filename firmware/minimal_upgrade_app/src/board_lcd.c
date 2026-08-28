@@ -257,7 +257,7 @@ static void set_address(uint16_t page, uint8_t column)
 	write_control_byte(0xF9U);
 }
 
-static void refresh_framebuffer(void)
+static void refresh_framebuffer(board_lcd_refresh_hook_t hook)
 {
 	uint16_t column_group;
 	uint8_t page;
@@ -280,6 +280,9 @@ static void refresh_framebuffer(void)
 				write_data(value);
 			}
 			watchdog_kick();
+			if (hook != NULL) {
+				hook();
+			}
 		}
 	}
 }
@@ -304,6 +307,9 @@ static const uint8_t *glyph_for(char character)
 	}
 	if (character >= 'A' && character <= 'Z') {
 		return glyph_letters[(uint8_t)character - (uint8_t)'A'];
+	}
+	if (character >= 'a' && character <= 'z') {
+		return glyph_letters[(uint8_t)character - (uint8_t)'a'];
 	}
 	if (character == '.') {
 		return glyph_dot;
@@ -518,7 +524,12 @@ bool board_lcd_draw_bitmap(uint16_t x, uint16_t y,
 
 void board_lcd_refresh(void)
 {
-	refresh_framebuffer();
+	refresh_framebuffer(NULL);
+}
+
+void board_lcd_refresh_with_hook(board_lcd_refresh_hook_t hook)
+{
+	refresh_framebuffer(hook);
 }
 
 void board_lcd_show_version(const char *version)
@@ -531,7 +542,7 @@ void board_lcd_show_version(const char *version)
 		x = (uint16_t)(x + 18U);
 		version++;
 	}
-	refresh_framebuffer();
+	refresh_framebuffer(NULL);
 }
 
 void board_lcd_show_sensor(const char *version, const char *mode,
@@ -545,7 +556,7 @@ void board_lcd_show_sensor(const char *version, const char *mode,
 	draw_text_centered(27U, mode, 2U);
 	draw_text_centered(58U, reading, reading_scale);
 	draw_text_centered(112U, "ANY KEY", 1U);
-	refresh_framebuffer();
+	refresh_framebuffer(NULL);
 }
 
 void board_lcd_show_sensor_ports(const char *version, const char *mode,
@@ -561,7 +572,7 @@ void board_lcd_show_sensor_ports(const char *version, const char *mode,
 			readings[index], 2U);
 	}
 	draw_text_centered(116U, "KEY MODE", 1U);
-	refresh_framebuffer();
+	refresh_framebuffer(NULL);
 }
 
 void board_lcd_show_io_ports(const char *version, const char *mode,
@@ -581,5 +592,5 @@ void board_lcd_show_io_ports(const char *version, const char *mode,
 			motor_readings[index], 1U);
 	}
 	draw_text_centered(116U, status, 1U);
-	refresh_framebuffer();
+	refresh_framebuffer(NULL);
 }

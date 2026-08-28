@@ -1358,6 +1358,59 @@ class MicroPythonIntegrationTests(unittest.TestCase):
         self.assertIn("est.ColorSensor(1)", script)
         self.assertNotIn("board_sensor_", module)
 
+    def test_display_led_and_backlight_python_api_uses_public_services(self) -> None:
+        module = (ROOT / "micropython_port" / "modest.c").read_text(
+            encoding="utf-8"
+        )
+        display_header = (ROOT / "include" / "est_display.h").read_text(
+            encoding="utf-8"
+        )
+        lcd_header = (ROOT / "include" / "board_lcd.h").read_text(
+            encoding="utf-8"
+        )
+        lcd_source = (SOURCE_DIR / "board_lcd.c").read_text(encoding="utf-8")
+        script = (
+            ROOT.parents[1] / "tools" / "est_hid_sender" / "examples" /
+            "test_display_led_backlight.py"
+        ).read_text(encoding="utf-8")
+
+        for module_name in ("display", "led", "backlight"):
+            self.assertIn(f"MP_QSTR_{module_name}", module)
+            self.assertIn(f"est.{module_name}", script)
+        for display_method in (
+            "MP_QSTR_clear",
+            "MP_QSTR_pixel",
+            "MP_QSTR_line",
+            "MP_QSTR_rectangle",
+            "MP_QSTR_text",
+            "MP_QSTR_bitmap",
+            "MP_QSTR_refresh",
+        ):
+            self.assertIn(display_method, module)
+        for public_call in (
+            "est_display_clear",
+            "est_display_pixel",
+            "est_display_line",
+            "est_display_rectangle",
+            "est_display_text",
+            "est_display_bitmap",
+            "est_led_set",
+            "est_led_get",
+            "est_backlight_set_percent",
+            "est_backlight_get_percent",
+        ):
+            self.assertIn(public_call, module)
+        self.assertIn("est_display_refresh_with_hook", display_header)
+        self.assertIn("board_lcd_refresh_with_hook", lcd_header)
+        self.assertIn("board_lcd_refresh_with_hook", lcd_source)
+        self.assertIn("hook();", lcd_source)
+        self.assertIn(
+            "est_display_refresh_with_hook(est_micropython_vm_hook)", module
+        )
+        self.assertNotIn("board_lcd_", module)
+        self.assertNotIn("board_led_", module)
+        self.assertNotIn("board_backlight_", module)
+
     def test_motor_python_api_wraps_single_motor_services(self) -> None:
         module = (ROOT / "micropython_port" / "modest.c").read_text(
             encoding="utf-8"

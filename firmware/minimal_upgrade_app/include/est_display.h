@@ -10,6 +10,8 @@
 #define EST_DISPLAY_WIDTH 180U
 #define EST_DISPLAY_HEIGHT 128U
 
+typedef void (*est_display_refresh_hook_t)(void);
+
 void est_display_init(void);
 void est_display_clear(void);
 est_result_t est_display_pixel(uint16_t x, uint16_t y, bool on);
@@ -23,5 +25,6 @@ est_result_t est_display_bitmap(uint16_t x, uint16_t y,
 	uint16_t width, uint16_t height, const uint8_t *bitmap,
 	size_t bitmap_size);
 void est_display_refresh(void);
+void est_display_refresh_with_hook(est_display_refresh_hook_t hook);
 
 #endif

@@ -6,8 +6,11 @@
 #include "py/runtime.h"
 
 #include "est_battery.h"
+#include "est_backlight.h"
 #include "est_buttons.h"
+#include "est_display.h"
 #include "est_drive.h"
+#include "est_led.h"
 #include "est_micropython.h"
 #include "est_motor.h"
 #include "est_runtime.h"
@@ -1814,6 +1817,223 @@ static MP_DEFINE_CONST_OBJ_TYPE(
 	make_new, modest_infrared_sensor_make_new,
 	locals_dict, &modest_infrared_sensor_locals);
 
+static void modest_require_peripheral_result(est_result_t result)
+{
+	if (result == EST_OK) {
+		return;
+	}
+	if (result == EST_ERR_INVALID_ARGUMENT) {
+		mp_raise_ValueError(MP_ERROR_TEXT("invalid peripheral argument"));
+	}
+	mp_raise_msg(&mp_type_RuntimeError,
+		MP_ERROR_TEXT("peripheral operation failed"));
+}
+
+static mp_obj_t modest_display_clear(void)
+{
+	est_display_clear();
+	return mp_const_none;
+}
+static MP_DEFINE_CONST_FUN_OBJ_0(
+	modest_display_clear_obj, modest_display_clear);
+
+static mp_obj_t modest_display_pixel(size_t argument_count,
+	const mp_obj_t *arguments)
+{
+	uint16_t x = (uint16_t)require_integer_range(arguments[0], 0,
+		EST_DISPLAY_WIDTH - 1, MP_ERROR_TEXT("x must be 0..179"));
+	uint16_t y = (uint16_t)require_integer_range(arguments[1], 0,
+		EST_DISPLAY_HEIGHT - 1, MP_ERROR_TEXT("y must be 0..127"));
+	bool on = argument_count == 2U || mp_obj_is_true(arguments[2]);
+
+	modest_require_peripheral_result(est_display_pixel(x, y, on));
+	return mp_const_none;
+}
+static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(
+	modest_display_pixel_obj, 2, 3, modest_display_pixel);
+
+static mp_obj_t modest_display_line(size_t argument_count,
+	const mp_obj_t *arguments)
+{
+	uint16_t x0 = (uint16_t)require_integer_range(arguments[0], 0,
+		EST_DISPLAY_WIDTH - 1, MP_ERROR_TEXT("x0 must be 0..179"));
+	uint16_t y0 = (uint16_t)require_integer_range(arguments[1], 0,
+		EST_DISPLAY_HEIGHT - 1, MP_ERROR_TEXT("y0 must be 0..127"));
+	uint16_t x1 = (uint16_t)require_integer_range(arguments[2], 0,
+		EST_DISPLAY_WIDTH - 1, MP_ERROR_TEXT("x1 must be 0..179"));
+	uint16_t y1 = (uint16_t)require_integer_range(arguments[3], 0,
+		EST_DISPLAY_HEIGHT - 1, MP_ERROR_TEXT("y1 must be 0..127"));
+	bool on = argument_count == 4U || mp_obj_is_true(arguments[4]);
+
+	modest_require_peripheral_result(
+		est_display_line(x0, y0, x1, y1, on));
+	return mp_const_none;
+}
+static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(
+	modest_display_line_obj, 4, 5, modest_display_line);
+
+static mp_obj_t modest_display_rectangle(size_t argument_count,
+	const mp_obj_t *arguments)
+{
+	uint16_t x = (uint16_t)require_integer_range(arguments[0], 0,
+		EST_DISPLAY_WIDTH - 1, MP_ERROR_TEXT("x must be 0..179"));
+	uint16_t y = (uint16_t)require_integer_range(arguments[1], 0,
+		EST_DISPLAY_HEIGHT - 1, MP_ERROR_TEXT("y must be 0..127"));
+	uint16_t width = (uint16_t)require_integer_range(arguments[2], 1,
+		EST_DISPLAY_WIDTH, MP_ERROR_TEXT("width must be 1..180"));
+	uint16_t height = (uint16_t)require_integer_range(arguments[3], 1,
+		EST_DISPLAY_HEIGHT, MP_ERROR_TEXT("height must be 1..128"));
+	bool filled = argument_count >= 5U && mp_obj_is_true(arguments[4]);
+	bool on = argument_count < 6U || mp_obj_is_true(arguments[5]);
+
+	modest_require_peripheral_result(est_display_rectangle(
+		x, y, width, height, filled, on));
+	return mp_const_none;
+}
+static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(
+	modest_display_rectangle_obj, 4, 6, modest_display_rectangle);
+
+static mp_obj_t modest_display_text(size_t argument_count,
+	const mp_obj_t *arguments)
+{
+	uint16_t x = (uint16_t)require_integer_range(arguments[0], 0,
+		EST_DISPLAY_WIDTH - 1, MP_ERROR_TEXT("x must be 0..179"));
+	uint16_t y = (uint16_t)require_integer_range(arguments[1], 0,
+		EST_DISPLAY_HEIGHT - 1, MP_ERROR_TEXT("y must be 0..127"));
+	const char *value;
+	uint8_t scale = 1U;
+
+	if (!mp_obj_is_str(arguments[2])) {
+		mp_raise_TypeError(MP_ERROR_TEXT("display text must be a string"));
+	}
+	value = mp_obj_str_get_str(arguments[2]);
+	if (argument_count == 4U) {
+		scale = (uint8_t)require_integer_range(arguments[3], 1, 4,
+			MP_ERROR_TEXT("text scale must be 1..4"));
+	}
+	modest_require_peripheral_result(
+		est_display_text(x, y, value, scale));
+	return mp_const_none;
+}
+static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(
+	modest_display_text_obj, 3, 4, modest_display_text);
+
+static mp_obj_t modest_display_bitmap(size_t argument_count,
+	const mp_obj_t *arguments)
+{
+	uint16_t x = (uint16_t)require_integer_range(arguments[0], 0,
+		EST_DISPLAY_WIDTH - 1, MP_ERROR_TEXT("x must be 0..179"));
+	uint16_t y = (uint16_t)require_integer_range(arguments[1], 0,
+		EST_DISPLAY_HEIGHT - 1, MP_ERROR_TEXT("y must be 0..127"));
+	uint16_t width = (uint16_t)require_integer_range(arguments[2], 1,
+		EST_DISPLAY_WIDTH, MP_ERROR_TEXT("width must be 1..180"));
+	uint16_t height = (uint16_t)require_integer_range(arguments[3], 1,
+		EST_DISPLAY_HEIGHT, MP_ERROR_TEXT("height must be 1..128"));
+	mp_buffer_info_t buffer;
+
+	(void)argument_count;
+	mp_get_buffer_raise(arguments[4], &buffer, MP_BUFFER_READ);
+	modest_require_peripheral_result(est_display_bitmap(x, y, width, height,
+		(const uint8_t *)buffer.buf, buffer.len));
+	return mp_const_none;
+}
+static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(
+	modest_display_bitmap_obj, 5, 5, modest_display_bitmap);
+
+static mp_obj_t modest_display_refresh(void)
+{
+	est_micropython_vm_hook();
+	est_display_refresh_with_hook(est_micropython_vm_hook);
+	est_micropython_vm_hook();
+	return mp_const_none;
+}
+static MP_DEFINE_CONST_FUN_OBJ_0(
+	modest_display_refresh_obj, modest_display_refresh);
+
+static const mp_rom_map_elem_t modest_display_globals_table[] = {
+	{MP_ROM_QSTR(MP_QSTR___name__), MP_ROM_QSTR(MP_QSTR_display)},
+	{MP_ROM_QSTR(MP_QSTR_clear), MP_ROM_PTR(&modest_display_clear_obj)},
+	{MP_ROM_QSTR(MP_QSTR_pixel), MP_ROM_PTR(&modest_display_pixel_obj)},
+	{MP_ROM_QSTR(MP_QSTR_line), MP_ROM_PTR(&modest_display_line_obj)},
+	{MP_ROM_QSTR(MP_QSTR_rectangle),
+		MP_ROM_PTR(&modest_display_rectangle_obj)},
+	{MP_ROM_QSTR(MP_QSTR_text), MP_ROM_PTR(&modest_display_text_obj)},
+	{MP_ROM_QSTR(MP_QSTR_bitmap), MP_ROM_PTR(&modest_display_bitmap_obj)},
+	{MP_ROM_QSTR(MP_QSTR_refresh), MP_ROM_PTR(&modest_display_refresh_obj)},
+	{MP_ROM_QSTR(MP_QSTR_WIDTH), MP_ROM_INT(EST_DISPLAY_WIDTH)},
+	{MP_ROM_QSTR(MP_QSTR_HEIGHT), MP_ROM_INT(EST_DISPLAY_HEIGHT)},
+};
+static MP_DEFINE_CONST_DICT(
+	modest_display_globals, modest_display_globals_table);
+static const mp_obj_module_t modest_display_module = {
+	.base = {&mp_type_module},
+	.globals = (mp_obj_dict_t *)&modest_display_globals,
+};
+
+static mp_obj_t modest_led_set(mp_obj_t color_object)
+{
+	int32_t color = require_integer_range(color_object, EST_LED_OFF,
+		EST_LED_RED_BLUE, MP_ERROR_TEXT("invalid LED color"));
+
+	modest_require_peripheral_result(est_led_set((est_led_color_t)color));
+	return mp_const_none;
+}
+static MP_DEFINE_CONST_FUN_OBJ_1(modest_led_set_obj, modest_led_set);
+
+static mp_obj_t modest_led_get(void)
+{
+	return mp_obj_new_int((mp_int_t)est_led_get());
+}
+static MP_DEFINE_CONST_FUN_OBJ_0(modest_led_get_obj, modest_led_get);
+
+static const mp_rom_map_elem_t modest_led_globals_table[] = {
+	{MP_ROM_QSTR(MP_QSTR___name__), MP_ROM_QSTR(MP_QSTR_led)},
+	{MP_ROM_QSTR(MP_QSTR_set), MP_ROM_PTR(&modest_led_set_obj)},
+	{MP_ROM_QSTR(MP_QSTR_get), MP_ROM_PTR(&modest_led_get_obj)},
+	{MP_ROM_QSTR(MP_QSTR_OFF), MP_ROM_INT(EST_LED_OFF)},
+	{MP_ROM_QSTR(MP_QSTR_RED), MP_ROM_INT(EST_LED_RED)},
+	{MP_ROM_QSTR(MP_QSTR_BLUE), MP_ROM_INT(EST_LED_BLUE)},
+	{MP_ROM_QSTR(MP_QSTR_RED_BLUE), MP_ROM_INT(EST_LED_RED_BLUE)},
+};
+static MP_DEFINE_CONST_DICT(modest_led_globals, modest_led_globals_table);
+static const mp_obj_module_t modest_led_module = {
+	.base = {&mp_type_module},
+	.globals = (mp_obj_dict_t *)&modest_led_globals,
+};
+
+static mp_obj_t modest_backlight_set(mp_obj_t percent_object)
+{
+	int32_t percent = require_integer_range(percent_object, 0, 100,
+		MP_ERROR_TEXT("backlight must be 0..100"));
+
+	modest_require_peripheral_result(
+		est_backlight_set_percent((uint8_t)percent));
+	return mp_const_none;
+}
+static MP_DEFINE_CONST_FUN_OBJ_1(
+	modest_backlight_set_obj, modest_backlight_set);
+
+static mp_obj_t modest_backlight_get(void)
+{
+	return mp_obj_new_int_from_uint(est_backlight_get_percent());
+}
+static MP_DEFINE_CONST_FUN_OBJ_0(
+	modest_backlight_get_obj, modest_backlight_get);
+
+static const mp_rom_map_elem_t modest_backlight_globals_table[] = {
+	{MP_ROM_QSTR(MP_QSTR___name__), MP_ROM_QSTR(MP_QSTR_backlight)},
+	{MP_ROM_QSTR(MP_QSTR_set), MP_ROM_PTR(&modest_backlight_set_obj)},
+	{MP_ROM_QSTR(MP_QSTR_get), MP_ROM_PTR(&modest_backlight_get_obj)},
+	{MP_ROM_QSTR(MP_QSTR_MIN), MP_ROM_INT(0)},
+	{MP_ROM_QSTR(MP_QSTR_MAX), MP_ROM_INT(100)},
+};
+static MP_DEFINE_CONST_DICT(
+	modest_backlight_globals, modest_backlight_globals_table);
+static const mp_obj_module_t modest_backlight_module = {
+	.base = {&mp_type_module},
+	.globals = (mp_obj_dict_t *)&modest_backlight_globals,
+};
+
 static mp_obj_t modest_buttons_value(void)
 {
 	return mp_obj_new_int_from_uint(est_buttons_pressed_mask());
@@ -2015,6 +2235,10 @@ static const mp_rom_map_elem_t modest_module_globals_table[] = {
 		MP_ROM_PTR(&modest_gyro_sensor_type)},
 	{MP_ROM_QSTR(MP_QSTR_InfraredSensor),
 		MP_ROM_PTR(&modest_infrared_sensor_type)},
+	{MP_ROM_QSTR(MP_QSTR_display), MP_ROM_PTR(&modest_display_module)},
+	{MP_ROM_QSTR(MP_QSTR_led), MP_ROM_PTR(&modest_led_module)},
+	{MP_ROM_QSTR(MP_QSTR_backlight),
+		MP_ROM_PTR(&modest_backlight_module)},
 	{MP_ROM_QSTR(MP_QSTR_buttons), MP_ROM_PTR(&modest_buttons_module)},
 	{MP_ROM_QSTR(MP_QSTR_battery), MP_ROM_PTR(&modest_battery_module)},
 	{MP_ROM_QSTR(MP_QSTR_force_gc), MP_ROM_PTR(&modest_force_gc_obj)},

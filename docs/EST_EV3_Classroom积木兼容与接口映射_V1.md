@@ -547,6 +547,16 @@ EV3 Classroom 1.5.2 缓存中的 `TravelGuideBuilder.steeringToSpeeds()` 已给�
 - `GyroSensor.reset_angle()` 只设置该 Python 对象的本地软件零点，后续 `angle()` 返回原始角度减零点；它不重启端口通信，也不改变同一端口上其他对象的零点。
 - M1.04A 已对红外、声音、陀螺仪和超声波完成三轮真机测试。颜色、触摸和温度类已实现且可拒绝错误类型，但仍等待对应实物回归。
 
+### 16.9 M1.05A 已冻结的显示、双色灯和背光契约
+
+- `est.display` 是单例模块，提供 `clear()`、`pixel(x, y, on=True)`、`line(x0, y0, x1, y1, on=True)`、`rectangle(x, y, width, height, filled=False, on=True)`、`text(x, y, value, scale=1)`、`bitmap(x, y, width, height, data)` 和 `refresh()`；尺寸常量为 `WIDTH=180`、`HEIGHT=128`。
+- 绘图方法只修改单色帧缓冲，必须显式调用 `refresh()` 才送到 LCD。整帧刷新会在每个小传输块后执行 VM hook，持续维护 USB、实时服务、停止、超时和看门狗。
+- 当前内建字体支持英文字母、数字、空格及 `.:-%`，小写字母按大写字形显示；中文字体、图片资源 ID、按行排版和自动换行仍由后续显示运行时实现。
+- `bitmap()` 接受按行排列、每行高位在前的 1 位缓冲区；每行字节数为 `(width + 7) // 8`，数据长度不得小于该值乘高度。
+- `est.led.set()`/`get()` 使用物理灯常量 `OFF`、`RED`、`BLUE`、`RED_BLUE`。EV3 Classroom 的绿色/橙色状态灯菜单不能直接等同于 EST 红蓝硬件，代码生成层的颜色映射仍需单独冻结。
+- `est.backlight.set(percent)`/`get()` 使用整数 `0..100`。脚本执行期间主循环状态页暂停；脚本结束后状态页重新接管，但背光值不会被退出清理任意改写。
+- M1.05A 已用测试图、红/蓝/红蓝/灭灯和背光 20%/0%/100% 完成三轮真机测试，用户确认画面和灯光均无问题。
+
 ## 17. 全部积木的 MicroPython 代码生成映射
 
 本节定义建议的 V1 代码生成契约，当前尚不表示这些 `est`/`est_runtime` 接口已经全部实现。建议生成程序统一使用：

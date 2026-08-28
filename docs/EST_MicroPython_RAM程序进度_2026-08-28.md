@@ -4,9 +4,9 @@
 
 ## 当前结论
 
-当前设备运行 `M1.04A`，官方 MicroPython `v1.29.0` 已经真实集成、启动并执行电脑上传的 Python 源码；统一 C 服务 tick、传感器/按键/电池 API、单马达 API、双马达/底盘 API，以及首批类型化传感器 API 的自动实机测试均已完成。
+当前设备运行 `M1.05A`，官方 MicroPython `v1.29.0` 已经真实集成、启动并执行电脑上传的 Python 源码；统一 C 服务 tick、传感器/按键/电池 API、单马达 API、双马达/底盘 API、类型化传感器，以及显示/双色灯/背光 API 的自动实机测试均已完成。
 
-`M1.04A` 新增七种类型化传感器类、合法模式检查、等待新数据的模式读取，以及陀螺仪对象内软件归零。1 号红外、2 号声音、3 号陀螺仪、4 号超声波完成三轮真机脚本；测试脚本位于 `tools/est_hid_sender/examples/test_typed_sensors.py`。
+`M1.05A` 新增 `est.display`、`est.led` 和 `est.backlight`；LCD 刷新会在小传输块之间执行 VM hook。测试图、三种灯态和背光 20%/0%/100% 完成三轮真机脚本，用户确认没有问题；测试脚本位于 `tools/est_hid_sender/examples/test_display_led_backlight.py`。
 
 - APP 起点仍为 `0x08010000`，现有 `03.00B` Bootloader 和 `APP=` 升级格式不变。
 - 应用协议为 `1.15`；`0x23` 查询解释器健康，`0x24` 管理 RAM Python 程序。
@@ -53,8 +53,12 @@
 | M1.04A 陀螺仪归零 | `GyroSensor.reset_angle()` 改为对象内软件零点，归零后误差不超过 5 度；不再重启传感器通信 |
 | M1.04A 重复测试 | 三轮完整脚本分别在 84、91、185 ms 完成，均为 flags=0x03、result=7；最后一轮包含 `SoundSensor.restart()` 回归 |
 | M1.04A 解释器与结束状态 | 堆总量 48384 字节、剩余 45632 字节，启动 13 ms，最大 GC 停顿 599 us，自检值 96；A-D 均为 coast/power 0，RAM 程序已清空 |
+| M1.05A 屏幕 API | 清屏、像素、线、边框、填充/擦除矩形、英文文字、8×8 单色位图和显式刷新均由 1625 字节脚本完成；屏幕显示测试图，脚本结束后状态页自动恢复 |
+| M1.05A 刷新服务 | 整帧刷新在每个 LCD 小传输块后调用 VM hook；脚本断言单次刷新小于 1000 ms，运行期间 USB、C 服务 tick、停止、超时和看门狗保持服务 |
+| M1.05A 灯光与背光 | 红灯、蓝灯、红蓝同亮、灭灯，以及背光 20%、0%、100% 顺序通过；用户三次观察后确认没有问题 |
+| M1.05A 重复测试 | 首次 4090 ms、延长观察后两次 7090/7089 ms，均为 completed、flags=0x03、result=7；结束后 A-D coast/power 0、传感器 streaming，RAM 程序已清空 |
 
-M0.95A 已完成正常执行、异常和硬超时，但 Python VM 运行时没有轮询 USB，电脑主动停止会写入超时。M0.96A 修复 USB 主动停止，M0.97A 建立统一 C 服务 tick，M0.98A 开放正式只读传感器、按键和电池 API，M0.99A 开放马达状态与安全停止，M1.00A 开放首批单马达运行方法，M1.01A 补齐 C 层单马达计时，M1.02A 开放双马达/底盘，M1.04A 开放类型化传感器。后续开发和恢复应使用 M1.04A；M1.03A 已废弃。
+M0.95A 已完成正常执行、异常和硬超时，但 Python VM 运行时没有轮询 USB，电脑主动停止会写入超时。M0.96A 修复 USB 主动停止，M0.97A 建立统一 C 服务 tick，M0.98A 开放正式只读传感器、按键和电池 API，M0.99A 开放马达状态与安全停止，M1.00A 开放首批单马达运行方法，M1.01A 补齐 C 层单马达计时，M1.02A 开放双马达/底盘，M1.04A 开放类型化传感器，M1.05A 开放显示、双色灯和背光。后续开发和恢复应使用 M1.05A；M1.03A 已废弃。
 
 ## 使用命令
 
@@ -70,6 +74,7 @@ python tools/est_hid_sender/est_hid_sender.py python-run --file tools/est_hid_se
 python tools/est_hid_sender/est_hid_sender.py python-run --file tools/est_hid_sender/examples/run_timed_medium_motor.py --timeout-ms 5000
 python tools/est_hid_sender/est_hid_sender.py python-run --file tools/est_hid_sender/examples/test_motor_pair_drive.py --timeout-ms 10000
 python tools/est_hid_sender/est_hid_sender.py python-run --file tools/est_hid_sender/examples/test_typed_sensors.py --timeout-ms 5000
+python tools/est_hid_sender/est_hid_sender.py python-run --file tools/est_hid_sender/examples/test_display_led_backlight.py --timeout-ms 10000
 python tools/est_hid_sender/est_hid_sender.py python-program-status
 python tools/est_hid_sender/est_hid_sender.py python-stop
 python tools/est_hid_sender/est_hid_sender.py python-clear
@@ -84,16 +89,17 @@ python tools/est_hid_sender/est_hid_sender.py python-clear
 - 当前红外数据结构只提供通道 1 的信标方向/距离和遥控值，尚未开放 EV3 多通道选择。温度和英寸接口以十分之一单位返回整数，避免引入浮点依赖。
 - `Motor` 已支持 `run_power()`、`run_speed()`、`run_time()`、`run_angle()`、`reset_angle()` 和 `stop()`。`HOLD` 以及角度完成后的 `STOP_BRAKE` 仍未实现，并会明确抛出不支持异常。
 - `run_time()` 接受 `1..600000 ms`，但当前 RAM 程序本身的硬执行上限为 10000 ms；需要在脚本内等待完成，脚本直接返回会触发统一清理并停止马达。
-- 用户脚本执行期间，电机闭环、传感器解析、按键、电池、背光、音频维护、协议超时、USB 与看门狗都持续运行；LCD 页面刷新仍在主循环，忙循环期间暂不刷新。
+- 用户脚本执行期间，电机闭环、传感器解析、按键、电池、背光、音频维护、协议超时、USB 与看门狗都持续运行；用户调用 `est.display.refresh()` 时也会在 LCD 小传输块之间执行同一 VM hook。
+- 用户显示采用显式刷新；脚本运行期间主循环状态页暂停，脚本结束后状态页重新接管。当前内建字体只覆盖英文字母、数字、空格及 `.:-%`，小写字母使用大写字形，中文字体和图片资源管理尚未开放。
 - 脚本入口仍会先停止全部马达；大型和中型马达已验证普通循环、强制 GC、正常结束、异常、硬超时和主动停止路径。
 - Python 标准输出当前被丢弃，运行结果暂以 `_program_result(int32)` 测试接口和状态码返回。
 - 源码未写入外部 Flash，重启后不会保留。
 
 ## 下一步
 
-1. 设计 LCD 刷新与 VM 并行方案，再开放 `Display`、`LED` 和背光用户 API。
+1. 设计用户程序持久化和启动策略；在该策略完成前继续使用 RAM 上传，避免把不稳定脚本写入 Flash 自动运行。
 2. 接入颜色、触摸和温度传感器实物后，补齐剩余三种类型化类的回归。
-3. 设计用户程序持久化和启动策略；在该策略完成前继续使用 RAM 上传，避免把不稳定脚本写入 Flash 自动运行。
+3. 独立处理尚未通过的音频播放，再决定 `Audio` 用户 API；不把旧的异常测试音直接开放给用户程序。
 
 ## 构建与发布
 
@@ -106,10 +112,10 @@ M1.02A 上一实机基线：
 - HID 工具测试：112 项通过。
 - ARM GCC 12.2.1 `-Werror`、向量表、包头、固定 256 KiB 长度和 manifest 校验通过。
 
-M1.04A 当前实机包：
+M1.05A 当前实机包：
 
-- 发布包：`firmware/releases/M1.04A/est_minimal_upgrade_app_M1.04A.upgrade.bin`
-- manifest：`firmware/releases/M1.04A/est_minimal_upgrade_app_M1.04A.manifest.json`
-- SHA-256：`c3c8afe269030228535a11fbdc76f30bcf9da179a33b0d99d08a7b50037f19aa`
-- 固件测试：80 项通过；HID 工具测试：112 项通过。
-- ARM GCC 12.2.1 `-Werror`、向量表、`APP=` 包头、固定 256 KiB 长度和 manifest 校验通过；红外、声音、陀螺仪和超声波类型化 API 三轮真机脚本均已通过。
+- 发布包：`firmware/releases/M1.05A/est_minimal_upgrade_app_M1.05A.upgrade.bin`
+- manifest：`firmware/releases/M1.05A/est_minimal_upgrade_app_M1.05A.manifest.json`
+- SHA-256：`bf41afdd7df8af9bd24801dfab2679333abde864b69399572889e2343bd64455`
+- 固件测试：81 项通过；HID 工具测试：112 项通过。
+- ARM GCC 12.2.1 `-Werror`、向量表、`APP=` 包头、固定 256 KiB 长度和 manifest 校验通过；显示、双色灯和背光三轮真机脚本均已通过。
