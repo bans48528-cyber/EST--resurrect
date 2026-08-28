@@ -99,6 +99,10 @@ est_result_t est_motor_pair_run_angles(est_motor_port_t left_port,
 est_result_t est_motor_pair_run_speeds(est_motor_port_t left_port,
 	int8_t left_speed_percent, est_motor_port_t right_port,
 	int8_t right_speed_percent);
+est_result_t est_motor_pair_run_speeds_for_time(
+	est_motor_port_t left_port, int8_t left_speed_percent,
+	est_motor_port_t right_port, int8_t right_speed_percent,
+	uint32_t duration_ms, est_stop_mode_t stop_mode);
 est_result_t est_motor_pair_stop(est_stop_mode_t stop_mode);
 est_result_t est_motor_pair_get_speed_status(
 	est_motor_pair_speed_status_t *status);

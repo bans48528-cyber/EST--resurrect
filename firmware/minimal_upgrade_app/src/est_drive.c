@@ -126,18 +126,29 @@ static int32_t wheel_degrees_to_distance(int32_t degrees,
 	return round_signed_ratio(numerator, denominator);
 }
 
-static est_result_t require_tacho_motor(est_motor_port_t port)
+static est_result_t require_matching_tacho_motors(
+	est_motor_port_t left_port, est_motor_port_t right_port)
 {
-	est_motor_type_t type;
-	est_result_t result = est_motor_get_type(port, &type);
+	est_motor_type_t left_type;
+	est_motor_type_t right_type;
+	est_result_t result = est_motor_get_type(left_port, &left_type);
 
 	if (result != EST_OK) {
 		return result;
 	}
-	if (type == EST_MOTOR_TYPE_NONE) {
+	result = est_motor_get_type(right_port, &right_type);
+	if (result != EST_OK) {
+		return result;
+	}
+	if (left_type == EST_MOTOR_TYPE_NONE ||
+	    right_type == EST_MOTOR_TYPE_NONE) {
 		return EST_ERR_NOT_CONNECTED;
 	}
-	if (type != EST_MOTOR_TYPE_LARGE && type != EST_MOTOR_TYPE_MEDIUM) {
+	if ((left_type != EST_MOTOR_TYPE_LARGE &&
+	     left_type != EST_MOTOR_TYPE_MEDIUM) ||
+	    (right_type != EST_MOTOR_TYPE_LARGE &&
+	     right_type != EST_MOTOR_TYPE_MEDIUM) ||
+	    left_type != right_type) {
 		return EST_ERR_TYPE_MISMATCH;
 	}
 	return EST_OK;
@@ -181,11 +192,7 @@ est_result_t est_motor_pair_run_angles(est_motor_port_t left_port,
 	if (stop_mode != EST_STOP_COAST) {
 		return EST_ERR_NOT_SUPPORTED;
 	}
-	result = require_tacho_motor(left_port);
-	if (result != EST_OK) {
-		return result;
-	}
-	result = require_tacho_motor(right_port);
+	result = require_matching_tacho_motors(left_port, right_port);
 	if (result != EST_OK) {
 		return result;
 	}
@@ -224,11 +231,7 @@ est_result_t est_motor_pair_run_speeds(est_motor_port_t left_port,
 	if (left_magnitude < 10 || right_magnitude < 10) {
 		return EST_ERR_NOT_SUPPORTED;
 	}
-	result = require_tacho_motor(left_port);
-	if (result != EST_OK) {
-		return result;
-	}
-	result = require_tacho_motor(right_port);
+	result = require_matching_tacho_motors(left_port, right_port);
 	if (result != EST_OK) {
 		return result;
 	}
@@ -242,16 +245,67 @@ est_result_t est_motor_pair_run_speeds(est_motor_port_t left_port,
 	return EST_OK;
 }
 
+est_result_t est_motor_pair_run_speeds_for_time(
+	est_motor_port_t left_port, int8_t left_speed_percent,
+	est_motor_port_t right_port, int8_t right_speed_percent,
+	uint32_t duration_ms, est_stop_mode_t stop_mode)
+{
+	est_result_t result;
+	int16_t left_magnitude;
+	int16_t right_magnitude;
+
+	if (!motor_port_valid(left_port) || !motor_port_valid(right_port)) {
+		return EST_ERR_INVALID_PORT;
+	}
+	if (left_port == right_port || left_speed_percent == 0 ||
+	    right_speed_percent == 0 || left_speed_percent < -100 ||
+	    left_speed_percent > 100 || right_speed_percent < -100 ||
+	    right_speed_percent > 100 || duration_ms == 0U ||
+	    duration_ms > EST_DRIVE_MAX_DURATION_MS ||
+	    !stop_mode_valid(stop_mode) || stop_mode == EST_STOP_HOLD) {
+		return EST_ERR_INVALID_ARGUMENT;
+	}
+	left_magnitude = left_speed_percent < 0 ?
+		-(int16_t)left_speed_percent : left_speed_percent;
+	right_magnitude = right_speed_percent < 0 ?
+		-(int16_t)right_speed_percent : right_speed_percent;
+	if (left_magnitude < 10 || right_magnitude < 10) {
+		return EST_ERR_NOT_SUPPORTED;
+	}
+	result = require_matching_tacho_motors(left_port, right_port);
+	if (result != EST_OK) {
+		return result;
+	}
+	if (!board_motor_start_pair_speed_for_time(est_system_millis(),
+	    (enum board_motor_port)left_port, left_speed_percent,
+	    (enum board_motor_port)right_port, right_speed_percent,
+	    duration_ms, board_stop_from_est(stop_mode))) {
+		return EST_ERR_BUSY;
+	}
+	drive_operation = EST_DRIVE_OPERATION_NONE;
+	drive_target_distance_mm = 0;
+	return EST_OK;
+}
+
 est_result_t est_motor_pair_stop(est_stop_mode_t stop_mode)
 {
+	bool position_stopped;
+	bool speed_stopped;
+
 	if (!stop_mode_valid(stop_mode)) {
 		return EST_ERR_INVALID_ARGUMENT;
 	}
 	if (stop_mode == EST_STOP_HOLD) {
 		return EST_ERR_NOT_SUPPORTED;
 	}
-	return board_motor_stop_pair_speed(board_stop_from_est(stop_mode)) ?
-		EST_OK : EST_ERR_STATE;
+	position_stopped = board_motor_stop_pair_position(
+		board_stop_from_est(stop_mode));
+	speed_stopped = board_motor_stop_pair_speed(
+		board_stop_from_est(stop_mode));
+	if (position_stopped || speed_stopped) {
+		return EST_OK;
+	}
+	return EST_ERR_STATE;
 }
 
 est_result_t est_motor_pair_get_speed_status(
@@ -324,23 +378,14 @@ est_result_t est_drive_run_time(est_motor_port_t left_port,
 	    !stop_mode_valid(stop_mode) || stop_mode == EST_STOP_HOLD) {
 		return EST_ERR_INVALID_ARGUMENT;
 	}
-	result = require_tacho_motor(left_port);
-	if (result != EST_OK) {
-		return result;
-	}
-	result = require_tacho_motor(right_port);
-	if (result != EST_OK) {
-		return result;
-	}
 	signed_speed = duration_ms < 0 ? -(int8_t)speed_percent :
 		(int8_t)speed_percent;
 	duration_magnitude = duration_ms < 0 ?
 		(uint32_t)(-duration_ms) : (uint32_t)duration_ms;
-	if (!board_motor_start_pair_speed_for_time(est_system_millis(),
-	    (enum board_motor_port)left_port, signed_speed,
-	    (enum board_motor_port)right_port, signed_speed,
-	    duration_magnitude, board_stop_from_est(stop_mode))) {
-		return EST_ERR_BUSY;
+	result = est_motor_pair_run_speeds_for_time(left_port, signed_speed,
+		right_port, signed_speed, duration_magnitude, stop_mode);
+	if (result != EST_OK) {
+		return result;
 	}
 	drive_operation = EST_DRIVE_OPERATION_TIME;
 	drive_target_value = duration_ms;
@@ -511,19 +556,11 @@ est_result_t est_drive_steer_for(est_motor_port_t left_port,
 		}
 		drive_operation = EST_DRIVE_OPERATION_STEER_DEGREES;
 	} else {
-		result = require_tacho_motor(left_port);
+		result = est_motor_pair_run_speeds_for_time(left_port,
+			left_speed, right_port, right_speed,
+			(uint32_t)target_value, stop_mode);
 		if (result != EST_OK) {
 			return result;
-		}
-		result = require_tacho_motor(right_port);
-		if (result != EST_OK) {
-			return result;
-		}
-		if (!board_motor_start_pair_speed_for_time(est_system_millis(),
-		    (enum board_motor_port)left_port, left_speed,
-		    (enum board_motor_port)right_port, right_speed,
-		    (uint32_t)target_value, board_stop_from_est(stop_mode))) {
-			return EST_ERR_BUSY;
 		}
 		drive_operation = EST_DRIVE_OPERATION_STEER_TIME;
 	}
@@ -659,11 +696,7 @@ est_result_t est_drive_stop(est_stop_mode_t stop_mode)
 	if (stop_mode == EST_STOP_HOLD) {
 		return EST_ERR_NOT_SUPPORTED;
 	}
-	if (board_motor_stop_pair_position(board_stop_from_est(stop_mode)) ||
-	    board_motor_stop_pair_speed(board_stop_from_est(stop_mode))) {
-		return EST_OK;
-	}
-	return EST_ERR_STATE;
+	return est_motor_pair_stop(stop_mode);
 }
 
 est_result_t est_drive_get_status(est_drive_status_t *status)

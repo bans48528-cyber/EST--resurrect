@@ -176,11 +176,11 @@ USB/HID        MicroPython est 模块
 ## 6. MicroPython 接口映射
 
 - [x] `Motor`：状态、停止、开环功率、闭环速度、按时间、相对角度和角度清零均已调用单电机 C API（M0.99A-M1.01A）。
-- [ ] `MotorPair`/`DriveBase`：调用精确双电机 C API。
+- [x] `MotorPair`/`DriveBase`：M1.02A 已调用精确双电机 C API，并完成动作、对象停止、异常清理和电脑主动停止实机验收。
 - [x] 通用只读 `Sensor` 对象：端口、类型、状态、模式、值格式、有效性、错误和值（M0.98A）；颜色、触碰、超声、陀螺、声音、温度、红外便捷类型类仍待实现。
 - [x] 只读 `Buttons` 和 `Battery`（M0.98A）；`Display`、`LED`、`Audio` 和 `Storage` 仍待实现。
 - [x] M1.00A 已确认首批 `Motor` 运行方法在 Python 入口和 C 服务层均检查参数范围；后续新增接口继续遵守同一规则。
-- [ ] `wait=True` 通过轮询 C 状态等待完成，不能用 Python `sleep` 代替 C 计时。
+- [x] M1.02A 的双电机 `wait=True` 通过轮询 C 状态等待完成，并持续调用统一 VM hook；没有用 Python `sleep` 代替 C 计时。
 
 目标调用示例：
 
@@ -188,9 +188,12 @@ USB/HID        MicroPython est 模块
 motor = Motor("A")
 motor.run_time(speed=50, time=1000, stop=Stop.BRAKE)
 
-drive = DriveBase(left="A", right="B", wheel_diameter=56, axle_track=120)
-drive.straight(distance=500, speed=50)
-drive.turn(angle=90, speed=30)
+pair = MotorPair("A", "C")
+pair.run_angle(left_degrees=360, right_degrees=360, speed=50, wait=True)
+
+drive = DriveBase("A", "C")
+drive.straight_angle(degrees=360, speed=50, wait=True)
+drive.steer_angle(steering=50, degrees=360, speed=30, wait=True)
 
 gray = ColorSensor(1)
 if gray.reflection() < 30:
@@ -250,7 +253,7 @@ if gray.reflection() < 30:
 - [x] 开放 `Motor.run_power()`、`run_speed()`、`run_angle()` 和 `reset_angle()`（M1.00A；真实大型和中型马达通过）。
 - [x] 开放 C 层计时的 `Motor.run_time()`，并验证自动滑行、自动刹车、中途取消和异常清理（M1.01A）。
 - [x] 强制 GC 下验证单马达闭环持续运行、角度到位和安全停止（M1.00A）。
-- [ ] 在 `MotorPair` 开放后继续验证双电机同步和急停不受 GC 影响。
+- [x] M1.02A 已验证双电机同步、同型号限制、强制 GC、`wait=True`、完成状态、对象停止、电脑主动停止和异常清理。
 
 ### 阶段 F：外围完整化
 
@@ -283,6 +286,6 @@ if gray.reflection() < 30:
 18. [x] 建立 `Motor` 的只读状态与安全停止（M0.99A，A/C 大型、B 空、D 中型实机通过）。
 19. [x] 开放单马达功率、闭环速度和相对角度运行，并完成真实大型/中型马达、强制 GC、异常、超时和主动停止回归（M1.00A）。
 20. [x] 补齐单马达按时间运行及停止动作语义（M1.01A；A 大型和 D 中型实机通过）。
-21. [ ] 开放 `MotorPair`/底盘 MicroPython API，并验证双电机同步、强制 GC 和急停。
+21. [x] M1.02A 已开放 `MotorPair`/底盘 MicroPython API，并通过动作、对象停止、电脑主动停止和异常清理实机验收。
 
-M1.01A 已完成 MicroPython 最小执行链路、C 服务连续性、传感器/按键/电池只读 API，以及单马达状态、停止、功率、闭环速度、按时间和相对角度运行。下一步开放双马达/底盘；毫米直行诊断流程不直接作为最终用户 API。
+M1.02A 是当前实机基线，双马达/底盘接口、同型号配对、强制 GC、`wait=True`、完成状态和三条主动停止路径均已通过自动测试。下一步开放传感器便捷类型类、模式操作和重置；毫米直行诊断流程不直接作为最终用户 API。

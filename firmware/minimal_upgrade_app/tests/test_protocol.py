@@ -1403,6 +1403,75 @@ class MicroPythonIntegrationTests(unittest.TestCase):
         self.assertIn('assert est.Motor(\\"A\\").port() == \\"A\\"', runtime)
         self.assertNotIn("board_motor_", module)
 
+    def test_motor_pair_and_drive_base_python_api_use_precise_c_services(self) -> None:
+        module = (ROOT / "micropython_port" / "modest.c").read_text(
+            encoding="utf-8"
+        )
+        drive_header = (ROOT / "include" / "est_drive.h").read_text(
+            encoding="utf-8"
+        )
+        drive_source = (SOURCE_DIR / "est_drive.c").read_text(
+            encoding="utf-8"
+        )
+        script = (
+            ROOT.parents[1] / "tools" / "est_hid_sender" / "examples" /
+            "test_motor_pair_drive.py"
+        ).read_text(encoding="utf-8")
+        stop_script = (
+            ROOT.parents[1] / "tools" / "est_hid_sender" / "examples" /
+            "stop_motor_pair.py"
+        ).read_text(encoding="utf-8")
+        exception_script = (
+            ROOT.parents[1] / "tools" / "est_hid_sender" / "examples" /
+            "motor_pair_exception.py"
+        ).read_text(encoding="utf-8")
+        host_stop_script = (
+            ROOT.parents[1] / "tools" / "est_hid_sender" / "examples" /
+            "motor_pair_until_stopped.py"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("est_motor_pair_run_speeds_for_time", drive_header)
+        self.assertIn("left_type != right_type", drive_source)
+        self.assertIn("require_matching_tacho_motors", drive_source)
+        self.assertIn("position_stopped = board_motor_stop_pair_position", drive_source)
+        self.assertIn("speed_stopped = board_motor_stop_pair_speed", drive_source)
+        for public_call in (
+            "est_motor_pair_run_angles",
+            "est_motor_pair_run_speeds",
+            "est_motor_pair_run_speeds_for_time",
+            "est_motor_pair_stop",
+            "est_drive_run_degrees",
+            "est_drive_run_time",
+            "est_drive_start_steer",
+            "est_drive_steer_for",
+            "est_micropython_vm_hook",
+        ):
+            self.assertIn(public_call, module)
+        for python_name in (
+            "MP_QSTR_MotorPair",
+            "MP_QSTR_DriveBase",
+            "MP_QSTR_run_speed",
+            "MP_QSTR_run_time",
+            "MP_QSTR_run_angle",
+            "MP_QSTR_straight_angle",
+            "MP_QSTR_straight_time",
+            "MP_QSTR_steer",
+            "MP_QSTR_steer_angle",
+            "MP_QSTR_steer_time",
+            "MP_QSTR_wait",
+        ):
+            self.assertIn(python_name, module)
+        self.assertIn('est.MotorPair("A", "C")', script)
+        self.assertIn('est.DriveBase("A", "C")', script)
+        self.assertIn('est.MotorPair("A", "D")', script)
+        self.assertIn("left_speed=80", script)
+        self.assertIn("est.force_gc()", script)
+        self.assertIn("wait=True", script)
+        self.assertIn("pair.stop(pair.STOP_BRAKE)", stop_script)
+        self.assertIn("raise RuntimeError", exception_script)
+        self.assertIn("while True:", host_stop_script)
+        self.assertNotIn("board_motor_", module)
+
     def test_ram_program_exit_always_stops_motors_and_failures_cleanup(self) -> None:
         runtime = (ROOT / "micropython_port" / "est_micropython.c").read_text(
             encoding="utf-8"

@@ -4,7 +4,9 @@
 
 ## 当前结论
 
-当前设备运行 `M1.01A`，官方 MicroPython `v1.29.0` 已经真实集成、启动并执行电脑上传的 Python 源码；统一 C 服务 tick、传感器/按键/电池只读 API，以及单马达状态、停止、开环功率、闭环速度、相对角度和按时间运行均已完成实机验证。
+当前设备运行 `M1.02A`，官方 MicroPython `v1.29.0` 已经真实集成、启动并执行电脑上传的 Python 源码；统一 C 服务 tick、传感器/按键/电池只读 API、单马达 API，以及双马达/底盘首轮自动实机测试均已完成。
+
+`M1.02A` 新增 `MotorPair`、`DriveBase`、同型号配对限制和双电机 `wait=True`。A/C 双大型两次完整自动测试均通过，用户确认肉眼未见问题；对象停止、电脑主动停止和异常清理也已完成实机验收。测试脚本位于 `tools/est_hid_sender/examples`。
 
 - APP 起点仍为 `0x08010000`，现有 `03.00B` Bootloader 和 `APP=` 升级格式不变。
 - 应用协议为 `1.15`；`0x23` 查询解释器健康，`0x24` 管理 RAM Python 程序。
@@ -39,8 +41,15 @@
 | M1.01A D 口中型定时 | 25% 正反转各 800 ms，分别自动滑行和自动刹车；脚本 1610 ms 返回 800800 |
 | M1.01A 取消与异常 | 5 秒任务在 400 ms 主动取消；运行中故意异常在 403 ms 得到 flags=0x05，超过原 5 秒截止点后仍为 coast/power 0 |
 | M1.01A 解释器指标 | 堆总量 48384 字节，剩余 47696 字节，启动 12 ms，最大 GC 停顿 599 us，自检值 96 |
+| M1.02A 双电机 API | A/C 双大型完成 80/40% 定时速度、80% 同步 `720°/720°`、-80% 定时直行和 `+50` 定量转向；A/D 大型/中型混合配对在动作前明确拒绝 |
+| M1.02A GC 与同步 | 同步角度期间完成 7334 次强制 GC，最大同步误差 11°；完整脚本 5445 ms、state=completed、error=none |
+| M1.02A 重复测试 | 第二次完整脚本 5670 ms，7318 次强制 GC，最大同步误差 28°；state=completed、error=none，用户确认肉眼未见问题 |
+| M1.02A 对象停止 | 完成 `+360°/+360°` 后启动 80% 持续速度，运行 800 ms 调用 `MotorPair.stop(BRAKE)`；脚本内运行状态及 A/C 功率归零断言通过，整体 1781 ms 完成 |
+| M1.02A 异常清理 | A/C 以 60% 持续运行 500 ms 后故意抛出异常；504 ms 进入 exception，flags=0x07，随后 A-D 全部 coast/power 0 |
+| M1.02A 电脑主动停止 | A/C 以 60% 持续运行时由电脑发送 `python-stop`；952 ms 进入 stopped，flags=0x07，随后 A-D 全部 coast/power 0 |
+| M1.02A 结束状态 | A-D 均为 coast/power 0；四路传感器 streaming；解释器 state=passed、堆剩余 46928 字节、最大 GC 停顿 601 us；RAM 程序已清空 |
 
-M0.95A 已完成正常执行、异常和硬超时，但 Python VM 运行时没有轮询 USB，电脑主动停止会写入超时。M0.96A 修复 USB 主动停止，M0.97A 建立统一 C 服务 tick，M0.98A 开放正式只读传感器、按键和电池 API，M0.99A 开放马达状态与安全停止，M1.00A 开放首批单马达运行方法，M1.01A 再补齐 C 层单马达计时。因此后续开发和恢复应使用 M1.01A，不应回退到 M0.95A。
+M0.95A 已完成正常执行、异常和硬超时，但 Python VM 运行时没有轮询 USB，电脑主动停止会写入超时。M0.96A 修复 USB 主动停止，M0.97A 建立统一 C 服务 tick，M0.98A 开放正式只读传感器、按键和电池 API，M0.99A 开放马达状态与安全停止，M1.00A 开放首批单马达运行方法，M1.01A 补齐 C 层单马达计时，M1.02A 开放双马达/底盘。因此后续开发和恢复应使用 M1.02A，不应回退到 M0.95A。
 
 ## 使用命令
 
@@ -54,6 +63,7 @@ python tools/est_hid_sender/est_hid_sender.py python-run --file tools/est_hid_se
 python tools/est_hid_sender/est_hid_sender.py python-run --file tools/est_hid_sender/examples/run_medium_motor.py --timeout-ms 8000
 python tools/est_hid_sender/est_hid_sender.py python-run --file tools/est_hid_sender/examples/run_timed_motor.py --timeout-ms 6000
 python tools/est_hid_sender/est_hid_sender.py python-run --file tools/est_hid_sender/examples/run_timed_medium_motor.py --timeout-ms 5000
+python tools/est_hid_sender/est_hid_sender.py python-run --file tools/est_hid_sender/examples/test_motor_pair_drive.py --timeout-ms 10000
 python tools/est_hid_sender/est_hid_sender.py python-program-status
 python tools/est_hid_sender/est_hid_sender.py python-stop
 python tools/est_hid_sender/est_hid_sender.py python-clear
@@ -63,7 +73,7 @@ python tools/est_hid_sender/est_hid_sender.py python-clear
 
 ## 当前限制
 
-- `Sensor`、`buttons`、`battery` 和 `Motor` 已开放的接口是正式 API；各传感器便捷类型类、模式切换和重置仍未开放。
+- `Sensor`、`buttons`、`battery`、`Motor`、`MotorPair` 和 `DriveBase` 已完成对应阶段的实机自动验证，包括双电机对象停止、电脑主动停止和异常清理。各传感器便捷类型类、模式切换和重置仍未开放。
 - `Motor` 已支持 `run_power()`、`run_speed()`、`run_time()`、`run_angle()`、`reset_angle()` 和 `stop()`。`HOLD` 以及角度完成后的 `STOP_BRAKE` 仍未实现，并会明确抛出不支持异常。
 - `run_time()` 接受 `1..600000 ms`，但当前 RAM 程序本身的硬执行上限为 10000 ms；需要在脚本内等待完成，脚本直接返回会触发统一清理并停止马达。
 - 用户脚本执行期间，电机闭环、传感器解析、按键、电池、背光、音频维护、协议超时、USB 与看门狗都持续运行；LCD 页面刷新仍在主循环，忙循环期间暂不刷新。
@@ -73,12 +83,13 @@ python tools/est_hid_sender/est_hid_sender.py python-clear
 
 ## 下一步
 
-1. 开放 `MotorPair` 和底盘动作 MicroPython API，并在强制 GC 下验证同步、急停和完成状态。
-2. 随后开放传感器便捷类型类和模式操作。
-3. 设计 LCD 刷新与 VM 并行方案，再开放 `Display`、`LED` 和背光用户 API。
-4. 设计用户程序持久化和启动策略；在该策略完成前继续使用 RAM 上传，避免把不稳定脚本写入 Flash 自动运行。
+1. 开放传感器便捷类型类、模式操作和重置，并逐类完成实机回归。
+2. 设计 LCD 刷新与 VM 并行方案，再开放 `Display`、`LED` 和背光用户 API。
+3. 设计用户程序持久化和启动策略；在该策略完成前继续使用 RAM 上传，避免把不稳定脚本写入 Flash 自动运行。
 
 ## 构建与发布
+
+M1.01A 上一实机基线：
 
 - 发布包：`firmware/releases/M1.01A/est_minimal_upgrade_app_M1.01A.upgrade.bin`
 - manifest：`firmware/releases/M1.01A/est_minimal_upgrade_app_M1.01A.manifest.json`
@@ -86,3 +97,11 @@ python tools/est_hid_sender/est_hid_sender.py python-clear
 - 固件测试：78 项通过。
 - HID 工具测试：112 项通过。
 - ARM GCC 12.2.1 `-Werror`、向量表、包头、固定 256 KiB 长度和 manifest 校验通过。
+
+M1.02A 当前实机包：
+
+- 发布包：`firmware/releases/M1.02A/est_minimal_upgrade_app_M1.02A.upgrade.bin`
+- manifest：`firmware/releases/M1.02A/est_minimal_upgrade_app_M1.02A.manifest.json`
+- SHA-256：`f203a73428054c151fc92a1b25374484c851ab96f3d5702f2e3269dcbebe2610`
+- 固件测试：79 项通过；HID 工具测试：112 项通过。
+- ARM GCC 12.2.1 `-Werror`、向量表、`APP=` 包头、固定 256 KiB 长度和 manifest 校验通过；双电机动作、对象停止、异常清理和电脑主动停止均已实机通过。
