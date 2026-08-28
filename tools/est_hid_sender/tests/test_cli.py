@@ -54,6 +54,46 @@ class CliTests(unittest.TestCase):
         self.assertIn("input_1=state:streaming model:EST/EV3-color", text)
         self.assertIn("input_3=state:streaming model:EST-temperature", text)
 
+    def test_micropython_status_prints_runtime_metrics(self) -> None:
+        output = io.StringIO()
+        transport = FakeTransport()
+        with mock.patch.object(cli.HidTransport, "open", return_value=transport):
+            with contextlib.redirect_stdout(output):
+                self.assertEqual(cli.main(["micropython-status"]), 0)
+        text = output.getvalue()
+        self.assertIn("state=passed", text)
+        self.assertIn("heap_total_bytes=49152", text)
+        self.assertIn("heap_free_bytes=41824", text)
+        self.assertIn("maximum_gc_pause_us=184", text)
+        self.assertIn("self_test_value=96", text)
+
+    def test_python_run_uploads_source_and_prints_result(self) -> None:
+        source = b"import est\nest._program_result(12345)\n"
+        transport = FakeTransport()
+        with tempfile.TemporaryDirectory() as temp:
+            source_path = Path(temp) / "program.py"
+            source_path.write_bytes(source)
+            output = io.StringIO()
+            with mock.patch.object(cli.HidTransport, "open", return_value=transport):
+                with contextlib.redirect_stdout(output):
+                    self.assertEqual(
+                        cli.main(
+                            [
+                                "python-run",
+                                "--file",
+                                str(source_path),
+                                "--timeout-ms",
+                                "2000",
+                            ]
+                        ),
+                        0,
+                    )
+        text = output.getvalue()
+        self.assertEqual(bytes(transport.python_received), source)
+        self.assertIn("state=completed", text)
+        self.assertIn(f"received={len(source)}/{len(source)}", text)
+        self.assertIn("result_value=12345", text)
+
     def test_flash_id_identifies_w25q64(self) -> None:
         output = io.StringIO()
         transport = FakeTransport(jedec_id=bytes.fromhex("EF4017"))

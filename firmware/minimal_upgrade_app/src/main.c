@@ -13,6 +13,7 @@
 #include "est_buttons.h"
 #include "est_display.h"
 #include "est_led.h"
+#include "est_micropython.h"
 #include "est_system.h"
 #include "platform.h"
 #include "update_protocol.h"
@@ -359,6 +360,7 @@ static void append_status_text(char output[STATUS_DISPLAY_LINE_SIZE],
 
 static void format_status_line(const est_battery_status_t *battery,
 	bool audio_test_attempted, bool audio_test_succeeded,
+	const est_micropython_status_t *micropython,
 	char output[STATUS_DISPLAY_LINE_SIZE])
 {
 	char percent[6];
@@ -387,6 +389,14 @@ static void format_status_line(const est_battery_status_t *battery,
 		audio_status = "DONE";
 	}
 	append_status_text(output, &output_index, audio_status);
+	append_status_text(output, &output_index, " PY:");
+	if (micropython->state == EST_MICROPYTHON_PASSED) {
+		append_status_text(output, &output_index, "OK");
+	} else if (micropython->state == EST_MICROPYTHON_STARTING) {
+		append_status_text(output, &output_index, "RUN");
+	} else {
+		append_status_text(output, &output_index, "ERR");
+	}
 }
 
 int main(void)
@@ -429,6 +439,7 @@ int main(void)
 	(void)est_display_text(36U, 54U, app_version_text, 3U);
 	est_display_refresh();
 #endif
+	est_micropython_init();
 	last_key_mask = est_buttons_pressed_mask();
 
 	while (1) {
@@ -484,6 +495,7 @@ int main(void)
 			uint8_t index;
 			bool display_changed;
 			est_battery_status_t battery = {0};
+			est_micropython_status_t micropython = {0};
 
 			last_display_ms = now_ms;
 			for (index = 0U; index < BOARD_SENSOR_PORT_COUNT; index++) {
@@ -522,8 +534,9 @@ int main(void)
 			}
 			active_sensor_kinds = sensor_kinds;
 			(void)est_battery_get_status(&battery);
+			(void)est_micropython_get_status(&micropython);
 			format_status_line(&battery, audio_test_attempted,
-				audio_test_succeeded, status_line);
+				audio_test_succeeded, &micropython, status_line);
 			display_changed = !display_initialized ||
 				displayed_mode != selected_sensor_mode ||
 				displayed_sensor_kinds != sensor_kinds;
@@ -561,8 +574,10 @@ int main(void)
 				EST_LED_BLUE : EST_LED_OFF);
 		}
 		update_protocol_tick(now_ms);
+		est_micropython_tick();
 		if (usb_hid_power_off_requested() ||
 		    update_protocol_power_off_due(now_ms)) {
+			est_micropython_deinit();
 			est_system_power_off();
 		}
 	}

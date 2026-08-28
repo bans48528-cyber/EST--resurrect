@@ -654,7 +654,7 @@ class BoardModuleLayoutTests(unittest.TestCase):
         header = (ROOT / "include" / "board_motor.h").read_text(encoding="utf-8")
         config = (ROOT / "include" / "app_config.h").read_text(encoding="utf-8")
         self.assertIn("MOTOR_POSITION_COMMAND          0x1BU", config)
-        self.assertIn("DEVICE_PROTOCOL_MINOR           13U", config)
+        self.assertIn("DEVICE_PROTOCOL_MINOR           15U", config)
         self.assertIn("MOTOR_LARGE_COUNTS_PER_SPEED 12800U", motor)
         self.assertIn("MOTOR_MEDIUM_COUNTS_PER_SPEED 8100U", motor)
         self.assertIn("medium_samples[4] = {2U, 4U, 8U, 16U}", motor)
@@ -1127,6 +1127,127 @@ class BoardModuleLayoutTests(unittest.TestCase):
         ):
             self.assertIn(handler, sensor)
         self.assertIn("while (runtime->rx_tail != runtime->rx_head)", sensor)
+
+
+class MicroPythonIntegrationTests(unittest.TestCase):
+    def test_micropython_is_pinned_and_built_as_a_separate_library(self) -> None:
+        makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+        port_makefile = (ROOT / "micropython_port" / "Makefile").read_text(
+            encoding="utf-8"
+        )
+        gitmodules = (ROOT.parents[1] / ".gitmodules").read_text(encoding="utf-8")
+
+        self.assertIn("third_party/micropython", gitmodules)
+        self.assertIn("https://github.com/micropython/micropython.git", gitmodules)
+        self.assertIn("micropython-lib", makefile)
+        self.assertIn("libest_micropython.a", makefile)
+        self.assertIn("py/mkenv.mk", port_makefile)
+        self.assertIn("-mfloat-abi=hard", port_makefile)
+
+    def test_startup_self_test_is_bounded_and_never_starts_a_motor(self) -> None:
+        runtime = (ROOT / "micropython_port" / "est_micropython.c").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("EST_MICROPYTHON_HEAP_SIZE (48U * 1024U)", runtime)
+        self.assertIn("for i in range(96)", runtime)
+        self.assertIn("assert est.drive_mix(50, 40) == (40, 20)", runtime)
+        self.assertIn("assert est.force_gc() >= 0", runtime)
+        self.assertNotIn("est_motor_run", runtime)
+        self.assertNotIn("est_drive_start", runtime)
+
+    def test_vm_exception_cleanup_and_gc_metrics_are_recorded(self) -> None:
+        runtime = (ROOT / "micropython_port" / "est_micropython.c").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("nlr_push(&nlr)", runtime)
+        self.assertIn("EST_MICROPYTHON_EXCEPTION", runtime)
+        self.assertIn("(void)est_system_cleanup();", runtime)
+        self.assertIn("gc_helper_collect_regs_and_stack();", runtime)
+        self.assertIn("micropython_status.maximum_gc_pause_us", runtime)
+
+    def test_est_module_uses_public_service_apis(self) -> None:
+        module = (ROOT / "micropython_port" / "modest.c").read_text(
+            encoding="utf-8"
+        )
+        for service_call in (
+            "est_system_millis()",
+            "est_motor_get_type",
+            "est_motor_stop_all",
+            "est_drive_mix_steering",
+            "est_sensor_get_status",
+        ):
+            self.assertIn(service_call, module)
+        self.assertIn("MP_REGISTER_MODULE(MP_QSTR_est, mp_module_est)", module)
+        self.assertNotIn("board_motor_", module)
+        self.assertNotIn("board_sensor_", module)
+
+    def test_vm_starts_after_interrupts_and_deinitializes_before_poweroff(self) -> None:
+        main = (SOURCE_DIR / "main.c").read_text(encoding="utf-8")
+        self.assertLess(
+            main.index("platform_enable_interrupts();"),
+            main.index("est_micropython_init();"),
+        )
+        self.assertLess(
+            main.index("est_micropython_deinit();"),
+            main.index("est_system_power_off();"),
+        )
+        self.assertIn('append_status_text(output, &output_index, " PY:");', main)
+
+    def test_protocol_exposes_micropython_health_status(self) -> None:
+        config = (ROOT / "include" / "app_config.h").read_text(encoding="utf-8")
+        protocol = (SOURCE_DIR / "update_protocol.c").read_text(encoding="utf-8")
+        self.assertIn("MICROPYTHON_STATUS_COMMAND      0x23U", config)
+        self.assertIn("DEVICE_PROTOCOL_MINOR           15U", config)
+        self.assertIn("DEVICE_CAPABILITY_MICROPYTHON", config)
+        self.assertIn("MICROPYTHON_STATUS_PAYLOAD_LENGTH 28U", protocol)
+        self.assertIn("queue_micropython_status", protocol)
+        self.assertIn("status.maximum_gc_pause_us", protocol)
+        self.assertIn("status.self_test_value", protocol)
+
+    def test_ram_python_program_is_crc_checked_bounded_and_interruptible(self) -> None:
+        config = (ROOT / "include" / "app_config.h").read_text(encoding="utf-8")
+        header = (ROOT / "include" / "est_micropython.h").read_text(
+            encoding="utf-8"
+        )
+        runtime = (ROOT / "micropython_port" / "est_micropython.c").read_text(
+            encoding="utf-8"
+        )
+        port = (ROOT / "micropython_port" / "mpconfigport.h").read_text(
+            encoding="utf-8"
+        )
+        protocol = (SOURCE_DIR / "update_protocol.c").read_text(encoding="utf-8")
+        main = (SOURCE_DIR / "main.c").read_text(encoding="utf-8")
+
+        self.assertIn("PYTHON_PROGRAM_COMMAND          0x24U", config)
+        self.assertIn("DEVICE_CAPABILITY_PYTHON_PROGRAM", config)
+        self.assertIn("EST_MICROPYTHON_PROGRAM_MAX_SIZE 8192U", header)
+        self.assertIn("crc32_bytes", runtime)
+        self.assertIn("program_deadline_ms", runtime)
+        self.assertIn("program_stop_requested", runtime)
+        self.assertIn("mp_raise_msg(&mp_type_RuntimeError", runtime)
+        self.assertIn("usb_hid_poll();", runtime)
+        self.assertIn("est_micropython_program_is_executing", protocol)
+        self.assertIn("logical_frame[2] != PYTHON_PROGRAM_COMMAND", protocol)
+        self.assertIn("MICROPY_VM_HOOK_LOOP est_micropython_vm_hook();", port)
+        self.assertIn("PYTHON_PROGRAM_STATUS_PAYLOAD_LENGTH 32U", protocol)
+        self.assertIn("est_micropython_program_write", protocol)
+        self.assertIn("est_micropython_tick();", main)
+        self.assertLess(
+            main.index("update_protocol_tick(now_ms);"),
+            main.index("est_micropython_tick();"),
+        )
+
+    def test_ram_program_exit_always_stops_motors_and_failures_cleanup(self) -> None:
+        runtime = (ROOT / "micropython_port" / "est_micropython.c").read_text(
+            encoding="utf-8"
+        )
+        tick = runtime.split("void est_micropython_tick(void)", 1)[1].split(
+            "bool est_micropython_get_status", 1
+        )[0]
+        self.assertGreaterEqual(tick.count("est_motor_stop_all(EST_STOP_COAST)"), 2)
+        self.assertIn("program_cleanup_after_failure();", tick)
+        self.assertIn("(void)est_system_cleanup();", runtime)
+        self.assertIn("restart_sensors();", runtime)
 
 
 if __name__ == "__main__":

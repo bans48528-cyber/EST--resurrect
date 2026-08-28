@@ -1,6 +1,8 @@
 PROJECT := est_minimal_upgrade_app
 BUILD_DIR ?= build
 OPENCM3_DIR := third_party/libopencm3
+MICROPYTHON_DIR := third_party/micropython
+MICROPYTHON_PORT_DIR := micropython_port
 APP_VERSION ?= M0.01A
 
 PREFIX ?= arm-none-eabi
@@ -36,8 +38,9 @@ PACKAGE := $(BUILD_DIR)/$(PROJECT).upgrade.bin
 APP_PACKAGE := $(BUILD_DIR)/$(PROJECT).app.bin
 MANIFEST := $(BUILD_DIR)/$(PROJECT).manifest.json
 LIBOPENCM3 := $(OPENCM3_DIR)/lib/libopencm3_stm32f4.a
+LIBMICROPYTHON := $(BUILD_DIR)/micropython/libest_micropython.a
 
-.PHONY: all clean lib test verify verification-pair FORCE
+.PHONY: all clean lib micropython-lib test verify verification-pair FORCE
 
 all: $(ELF) $(BIN) $(HEX) $(LST) $(PACKAGE) verify
 
@@ -49,9 +52,9 @@ $(BUILD_DIR)/obj/app_version.o: FORCE
 
 FORCE:
 
-$(ELF): $(OBJECTS) $(LIBOPENCM3) memory.ld
+$(ELF): $(OBJECTS) $(LIBOPENCM3) micropython-lib memory.ld
 	@$(MKDIR_P) $(dir $@)
-	$(CC) $(OBJECTS) $(LDFLAGS) $(LDLIBS) -o $@
+	$(CC) $(OBJECTS) $(LIBMICROPYTHON) $(LDFLAGS) $(LDLIBS) -o $@
 	$(SIZE) $@
 
 $(BIN): $(ELF)
@@ -78,6 +81,13 @@ $(LIBOPENCM3):
 
 lib:
 	$(MAKE) -C $(OPENCM3_DIR) TARGETS=stm32/f4
+
+micropython-lib:
+	@test -f $(MICROPYTHON_DIR)/py/py.mk || \
+		(echo "MicroPython submodule missing; run git submodule update --init" && false)
+	$(MAKE) -C $(MICROPYTHON_PORT_DIR) \
+		TOP=../$(MICROPYTHON_DIR) BUILD=../$(BUILD_DIR)/micropython \
+		CROSS_COMPILE=$(PREFIX)- PYTHON=$(PYTHON) SHELL=$(SHELL)
 
 test:
 	$(PYTHON) -m unittest discover -s tests -v

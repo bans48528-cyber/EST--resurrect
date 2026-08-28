@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import binascii
 import sys
 import tempfile
 import unittest
@@ -28,6 +29,13 @@ from est_hid_sender.protocol import (  # noqa: E402
     build_drive_straight_frame,
     build_drive_run_frame,
     build_device_status_frame,
+    build_micropython_status_frame,
+    build_python_program_begin_frame,
+    build_python_program_chunk_frame,
+    build_python_program_clear_frame,
+    build_python_program_run_frame,
+    build_python_program_status_frame,
+    build_python_program_stop_frame,
     build_flash_id_frame,
     build_flash_scan_frame,
     build_flash_test_frame,
@@ -54,6 +62,8 @@ from est_hid_sender.protocol import (  # noqa: E402
     parse_drive_straight_response,
     parse_drive_run_response,
     parse_device_status_response,
+    parse_micropython_status_response,
+    parse_python_program_response,
     parse_input_sensor_response,
     parse_flash_id_response,
     parse_flash_scan_response,
@@ -523,6 +533,54 @@ def build_device_status_result() -> bytes:
     return bytes(frame)
 
 
+def build_micropython_status_result() -> bytes:
+    payload = bytearray((1, 2, 0x0B, 0))
+    payload += (49152).to_bytes(4, "little")
+    payload += (7328).to_bytes(4, "little")
+    payload += (41824).to_bytes(4, "little")
+    payload += (37).to_bytes(4, "little")
+    payload += (184).to_bytes(4, "little")
+    payload += (2).to_bytes(2, "little")
+    payload += (96).to_bytes(2, "little")
+    frame = bytearray((0x68, 0x21, 0x23))
+    frame += len(payload).to_bytes(2, "little")
+    frame += payload
+    frame.append(checksum(frame))
+    frame.append(0x16)
+    return bytes(frame)
+
+
+def build_python_program_result(
+    result: int = 1,
+    state: int = 2,
+    error: int = 0,
+    flags: int = 1,
+    expected_length: int = 24,
+    received_length: int = 24,
+    run_count: int = 0,
+    expected_crc32: int = 0x12345678,
+    actual_crc32: int = 0x12345678,
+    duration_ms: int = 0,
+    timeout_ms: int = 0,
+    result_value: int = 0,
+) -> bytes:
+    payload = bytearray((1, result, state, error, flags, 0))
+    payload += expected_length.to_bytes(2, "little")
+    payload += received_length.to_bytes(2, "little")
+    payload += run_count.to_bytes(2, "little")
+    payload += expected_crc32.to_bytes(4, "little")
+    payload += actual_crc32.to_bytes(4, "little")
+    payload += duration_ms.to_bytes(4, "little")
+    payload += timeout_ms.to_bytes(4, "little")
+    payload += result_value.to_bytes(4, "little", signed=True)
+    frame = bytearray((0x68, 0x21, 0x24))
+    frame += len(payload).to_bytes(2, "little")
+    frame += payload
+    frame.append(checksum(frame))
+    frame.append(0x16)
+    return bytes(frame)
+
+
 class ProtocolTests(unittest.TestCase):
     def test_heartbeat_frame_preserves_legacy_frame_format(self) -> None:
         frame = build_heartbeat_frame()
@@ -942,6 +1000,65 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(status.sensors[0].sensor_type, 0x1D)
         self.assertEqual(status.sensors[2].value, 235)
 
+    def test_micropython_status_returns_heap_and_gc_metrics(self) -> None:
+        self.assertEqual(
+            build_micropython_status_frame(),
+            bytes((0x68, 0x11, 0x23, 0x00, 0x00, 0x9C, 0x16)),
+        )
+        status = parse_micropython_status_response(
+            build_micropython_status_result()
+        )
+        self.assertIsNotNone(status)
+        self.assertEqual(status.state, 2)
+        self.assertEqual(status.flags, 0x0B)
+        self.assertEqual(status.heap_total_bytes, 49152)
+        self.assertEqual(status.heap_free_bytes, 41824)
+        self.assertEqual(status.startup_duration_ms, 37)
+        self.assertEqual(status.maximum_gc_pause_us, 184)
+        self.assertEqual(status.gc_count, 2)
+        self.assertEqual(status.self_test_value, 96)
+
+    def test_python_program_frames_and_status_round_trip(self) -> None:
+        source = b"import est\nest._program_result(12345)\n"
+        crc32 = binascii.crc32(source) & 0xFFFFFFFF
+        self.assertEqual(
+            build_python_program_begin_frame(len(source), crc32),
+            build_frame(
+                0x24,
+                bytes((1,)) + len(source).to_bytes(2, "little")
+                + crc32.to_bytes(4, "little"),
+            ),
+        )
+        self.assertEqual(
+            build_python_program_chunk_frame(0, source),
+            build_frame(0x24, bytes((2, 0, 0)) + source),
+        )
+        self.assertEqual(
+            build_python_program_run_frame(2000),
+            build_frame(0x24, bytes((3,)) + (2000).to_bytes(4, "little")),
+        )
+        self.assertEqual(build_python_program_status_frame(), build_frame(0x24, b"\x00"))
+        self.assertEqual(build_python_program_stop_frame(), build_frame(0x24, b"\x04"))
+        self.assertEqual(build_python_program_clear_frame(), build_frame(0x24, b"\x05"))
+        status = parse_python_program_response(
+            build_python_program_result(
+                state=5,
+                flags=3,
+                expected_length=len(source),
+                received_length=len(source),
+                expected_crc32=crc32,
+                actual_crc32=crc32,
+                duration_ms=7,
+                timeout_ms=2000,
+                run_count=1,
+                result_value=12345,
+            )
+        )
+        self.assertIsNotNone(status)
+        self.assertEqual(status.state, 5)
+        self.assertEqual(status.result_value, 12345)
+        self.assertEqual(status.actual_crc32, crc32)
+
     def test_motor_type_query_parses_all_four_output_ports(self) -> None:
         self.assertEqual(build_motor_type_frame(), build_frame(0x1A))
         self.assertEqual(build_motor_type_frame(1, 1), build_frame(0x1A, bytes((1, 1))))
@@ -1068,6 +1185,18 @@ class FakeTransport:
         self.sensor_type = sensor_type
         self.sensor_mode = 0
         self.sensor_value = sensor_value
+        self.python_state = 0
+        self.python_error = 0
+        self.python_flags = 0
+        self.python_expected_length = 0
+        self.python_received = bytearray()
+        self.python_expected_crc32 = 0
+        self.python_actual_crc32 = 0
+        self.python_run_count = 0
+        self.python_duration_ms = 0
+        self.python_timeout_ms = 0
+        self.python_result_value = 0
+        self.python_stop_pending = False
 
     def __enter__(self) -> "FakeTransport":
         return self
@@ -1077,6 +1206,9 @@ class FakeTransport:
 
     def write_payload(self, payload: bytes) -> None:
         self.payloads.append(payload)
+        if payload[0:3] == b"\x68\x11\x24":
+            self._handle_python_program(payload)
+            return
         total = int.from_bytes(payload[5:7], "little")
         index = int.from_bytes(payload[7:9], "little")
         self.acks.append(build_ack(total, index, self.ack_flag))
@@ -1700,6 +1832,12 @@ class FakeTransport:
         if report[0:3] == b"\x68\x11\x19":
             self.acks.append(build_device_status_result())
             return
+        if report[0:3] == b"\x68\x11\x23":
+            self.acks.append(build_micropython_status_result())
+            return
+        if report[0:3] == b"\x68\x11\x24":
+            self._handle_python_program(report)
+            return
         if report[0:3] == b"\x68\x11\x1A":
             self.acks.append(build_motor_type_result())
             return
@@ -1707,6 +1845,83 @@ class FakeTransport:
             total = int.from_bytes(report[5:7], "little")
             index = int.from_bytes(report[7:9], "little")
             self.acks.append(build_ack(total, index, self.ack_flag))
+
+    def _handle_python_program(self, frame: bytes) -> None:
+        action = frame[5]
+        result = 1
+        if action == 0 and self.python_stop_pending:
+            self.python_flags = (self.python_flags & ~0x08) | 0x04
+            self.python_run_count += 1
+            self.python_duration_ms = 1000
+            self.python_stop_pending = False
+        elif action == 1:
+            self.python_expected_length = int.from_bytes(frame[6:8], "little")
+            self.python_expected_crc32 = int.from_bytes(frame[8:12], "little")
+            self.python_received = bytearray()
+            self.python_actual_crc32 = 0
+            self.python_state = 1
+            self.python_flags = 0
+            self.python_run_count = 0
+        elif action == 2:
+            data_length = int.from_bytes(frame[3:5], "little")
+            offset = int.from_bytes(frame[6:8], "little")
+            chunk = frame[8 : 5 + data_length]
+            if offset != len(self.python_received):
+                result = 0
+            else:
+                self.python_received += chunk
+                if len(self.python_received) == self.python_expected_length:
+                    self.python_actual_crc32 = (
+                        binascii.crc32(self.python_received) & 0xFFFFFFFF
+                    )
+                    if self.python_actual_crc32 == self.python_expected_crc32:
+                        self.python_state = 2
+                        self.python_flags = 1
+                    else:
+                        self.python_state = 9
+                        self.python_error = 2
+                        result = 0
+        elif action == 3:
+            self.python_timeout_ms = int.from_bytes(frame[6:10], "little")
+            self.python_state = 5
+            self.python_run_count += 1
+            self.python_duration_ms = 7
+            self.python_result_value = 12345
+            self.python_flags |= 2
+        elif action == 4:
+            self.python_state = 7
+            self.python_error = 4
+            self.python_stop_pending = (self.python_flags & 0x08) != 0
+        elif action == 5:
+            self.python_state = 0
+            self.python_error = 0
+            self.python_flags = 0
+            self.python_expected_length = 0
+            self.python_received = bytearray()
+            self.python_expected_crc32 = 0
+            self.python_actual_crc32 = 0
+            self.python_run_count = 0
+            self.python_duration_ms = 0
+            self.python_timeout_ms = 0
+            self.python_result_value = 0
+        elif action != 0:
+            result = 0
+        self.acks.append(
+            build_python_program_result(
+                result=result,
+                state=self.python_state,
+                error=self.python_error,
+                flags=self.python_flags,
+                expected_length=self.python_expected_length,
+                received_length=len(self.python_received),
+                run_count=self.python_run_count,
+                expected_crc32=self.python_expected_crc32,
+                actual_crc32=self.python_actual_crc32,
+                duration_ms=self.python_duration_ms,
+                timeout_ms=self.python_timeout_ms,
+                result_value=self.python_result_value,
+            )
+        )
 
     def read_report(self, timeout_ms: int = 250) -> bytes | None:
         if self.acks:
@@ -1732,6 +1947,36 @@ class UpdaterTests(unittest.TestCase):
         self.assertEqual(status.battery_level, 4)
         self.assertEqual(len(status.motors), 4)
         self.assertEqual(len(status.sensors), 4)
+
+    def test_reads_micropython_runtime_status(self) -> None:
+        status = FirmwareUpdater(FakeTransport()).read_micropython_status()
+        self.assertEqual(status.state, 2)
+        self.assertEqual(status.heap_used_bytes, 7328)
+        self.assertEqual(status.maximum_gc_pause_us, 184)
+
+    def test_uploads_and_runs_crc_checked_python_program(self) -> None:
+        source = b"import est\nest._program_result(12345)\n"
+        transport = FakeTransport()
+        status = FirmwareUpdater(transport).run_python_program(source, timeout_ms=2000)
+        self.assertEqual(status.state, 5)
+        self.assertEqual(status.result_value, 12345)
+        self.assertEqual(status.run_count, 1)
+        self.assertEqual(bytes(transport.python_received), source)
+        self.assertEqual(status.actual_crc32, binascii.crc32(source) & 0xFFFFFFFF)
+
+    def test_stops_and_clears_ram_python_program(self) -> None:
+        transport = FakeTransport()
+        updater = FirmwareUpdater(transport)
+        updater.upload_python_program(b"x = 1\n")
+        transport.python_state = 4
+        transport.python_flags = 0x09
+        stopped = updater.stop_python_program()
+        self.assertEqual(stopped.state, 7)
+        self.assertEqual(stopped.flags, 0x05)
+        self.assertEqual(stopped.run_count, 1)
+        cleared = updater.clear_python_program()
+        self.assertEqual(cleared.state, 0)
+        self.assertEqual(cleared.expected_length, 0)
 
     def test_reads_large_and_medium_motor_identification(self) -> None:
         result = FirmwareUpdater(FakeTransport()).read_motor_types()

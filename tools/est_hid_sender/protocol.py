@@ -31,6 +31,17 @@ from .constants import (
     KEY_STATUS_COMMAND,
     LEGACY_REPORT_SIZE,
     MAX_PAYLOAD,
+    MICROPYTHON_STATUS_COMMAND,
+    PYTHON_PROGRAM_ACTION_BEGIN,
+    PYTHON_PROGRAM_ACTION_CHUNK,
+    PYTHON_PROGRAM_ACTION_CLEAR,
+    PYTHON_PROGRAM_ACTION_RUN,
+    PYTHON_PROGRAM_ACTION_STATUS,
+    PYTHON_PROGRAM_ACTION_STOP,
+    PYTHON_PROGRAM_COMMAND,
+    PYTHON_PROGRAM_MAX_SIZE,
+    PYTHON_PROGRAM_MAX_TIMEOUT_MS,
+    PYTHON_PROGRAM_MIN_TIMEOUT_MS,
     MOTOR_CONTROL_ACTION_SET_POWER,
     MOTOR_CONTROL_COMMAND,
     MOTOR_DUAL_TEST_COMMAND,
@@ -317,6 +328,37 @@ class DeviceStatus:
     sensors: tuple[DeviceSensorStatus, ...]
 
 
+@dataclass(frozen=True)
+class MicroPythonStatus:
+    schema_version: int
+    state: int
+    flags: int
+    heap_total_bytes: int
+    heap_used_bytes: int
+    heap_free_bytes: int
+    startup_duration_ms: int
+    maximum_gc_pause_us: int
+    gc_count: int
+    self_test_value: int
+
+
+@dataclass(frozen=True)
+class PythonProgramStatus:
+    schema_version: int
+    result: int
+    state: int
+    error: int
+    flags: int
+    expected_length: int
+    received_length: int
+    run_count: int
+    expected_crc32: int
+    actual_crc32: int
+    duration_ms: int
+    timeout_ms: int
+    result_value: int
+
+
 def checksum(data: bytes | bytearray) -> int:
     return sum(data) & 0xFF
 
@@ -352,6 +394,52 @@ def build_key_status_frame() -> bytes:
 
 def build_device_status_frame() -> bytes:
     return build_frame(DEVICE_STATUS_COMMAND)
+
+
+def build_micropython_status_frame() -> bytes:
+    return build_frame(MICROPYTHON_STATUS_COMMAND)
+
+
+def build_python_program_status_frame() -> bytes:
+    return build_frame(PYTHON_PROGRAM_COMMAND, bytes((PYTHON_PROGRAM_ACTION_STATUS,)))
+
+
+def build_python_program_begin_frame(length: int, crc32: int) -> bytes:
+    if not 1 <= length <= PYTHON_PROGRAM_MAX_SIZE:
+        raise ValueError("Python program length must be 1..8192 bytes")
+    if not 0 <= crc32 <= 0xFFFFFFFF:
+        raise ValueError("Python program CRC32 must fit uint32")
+    payload = bytes((PYTHON_PROGRAM_ACTION_BEGIN,))
+    payload += length.to_bytes(2, "little")
+    payload += crc32.to_bytes(4, "little")
+    return build_frame(PYTHON_PROGRAM_COMMAND, payload)
+
+
+def build_python_program_chunk_frame(offset: int, chunk: bytes) -> bytes:
+    if not 0 <= offset < PYTHON_PROGRAM_MAX_SIZE:
+        raise ValueError("Python program offset must be 0..8191")
+    if not chunk or len(chunk) > 1000:
+        raise ValueError("Python program chunk must be 1..1000 bytes")
+    if offset + len(chunk) > PYTHON_PROGRAM_MAX_SIZE:
+        raise ValueError("Python program chunk exceeds 8192 bytes")
+    payload = bytes((PYTHON_PROGRAM_ACTION_CHUNK,))
+    payload += offset.to_bytes(2, "little") + chunk
+    return build_frame(PYTHON_PROGRAM_COMMAND, payload)
+
+
+def build_python_program_run_frame(timeout_ms: int) -> bytes:
+    if not PYTHON_PROGRAM_MIN_TIMEOUT_MS <= timeout_ms <= PYTHON_PROGRAM_MAX_TIMEOUT_MS:
+        raise ValueError("Python program timeout must be 100..10000 ms")
+    payload = bytes((PYTHON_PROGRAM_ACTION_RUN,)) + timeout_ms.to_bytes(4, "little")
+    return build_frame(PYTHON_PROGRAM_COMMAND, payload)
+
+
+def build_python_program_stop_frame() -> bytes:
+    return build_frame(PYTHON_PROGRAM_COMMAND, bytes((PYTHON_PROGRAM_ACTION_STOP,)))
+
+
+def build_python_program_clear_frame() -> bytes:
+    return build_frame(PYTHON_PROGRAM_COMMAND, bytes((PYTHON_PROGRAM_ACTION_CLEAR,)))
 
 
 def build_flash_id_frame() -> bytes:
@@ -1435,6 +1523,73 @@ def parse_device_status_response(report: bytes) -> DeviceStatus | None:
         uptime_ms=int.from_bytes(payload[20:24], "little"),
         motors=tuple(motors),
         sensors=tuple(sensors),
+    )
+
+
+def parse_micropython_status_response(report: bytes) -> MicroPythonStatus | None:
+    payload_length = 28
+    checksum_index = 5 + payload_length
+    end_index = checksum_index + 1
+    if len(report) <= end_index:
+        return None
+    if report[0] != FRAME_START:
+        return None
+    if report[1] != DEVICE_DIRECTION or report[2] != MICROPYTHON_STATUS_COMMAND:
+        return None
+    if report[3:5] != payload_length.to_bytes(2, "little"):
+        return None
+    if report[end_index] != FRAME_END:
+        return None
+    if checksum(report[:checksum_index]) != report[checksum_index]:
+        return None
+
+    payload = report[5:checksum_index]
+    return MicroPythonStatus(
+        schema_version=payload[0],
+        state=payload[1],
+        flags=payload[2],
+        heap_total_bytes=int.from_bytes(payload[4:8], "little"),
+        heap_used_bytes=int.from_bytes(payload[8:12], "little"),
+        heap_free_bytes=int.from_bytes(payload[12:16], "little"),
+        startup_duration_ms=int.from_bytes(payload[16:20], "little"),
+        maximum_gc_pause_us=int.from_bytes(payload[20:24], "little"),
+        gc_count=int.from_bytes(payload[24:26], "little"),
+        self_test_value=int.from_bytes(payload[26:28], "little"),
+    )
+
+
+def parse_python_program_response(report: bytes) -> PythonProgramStatus | None:
+    payload_length = 32
+    checksum_index = 5 + payload_length
+    end_index = checksum_index + 1
+    if len(report) <= end_index:
+        return None
+    if report[0] != FRAME_START:
+        return None
+    if report[1] != DEVICE_DIRECTION or report[2] != PYTHON_PROGRAM_COMMAND:
+        return None
+    if report[3:5] != payload_length.to_bytes(2, "little"):
+        return None
+    if report[end_index] != FRAME_END:
+        return None
+    if checksum(report[:checksum_index]) != report[checksum_index]:
+        return None
+
+    payload = report[5:checksum_index]
+    return PythonProgramStatus(
+        schema_version=payload[0],
+        result=payload[1],
+        state=payload[2],
+        error=payload[3],
+        flags=payload[4],
+        expected_length=int.from_bytes(payload[6:8], "little"),
+        received_length=int.from_bytes(payload[8:10], "little"),
+        run_count=int.from_bytes(payload[10:12], "little"),
+        expected_crc32=int.from_bytes(payload[12:16], "little"),
+        actual_crc32=int.from_bytes(payload[16:20], "little"),
+        duration_ms=int.from_bytes(payload[20:24], "little"),
+        timeout_ms=int.from_bytes(payload[24:28], "little"),
+        result_value=int.from_bytes(payload[28:32], "little", signed=True),
     )
 
 

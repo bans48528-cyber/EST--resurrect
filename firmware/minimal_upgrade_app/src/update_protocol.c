@@ -11,6 +11,7 @@
 #include "est_battery.h"
 #include "est_buttons.h"
 #include "est_drive.h"
+#include "est_micropython.h"
 #include "est_motor.h"
 #include "est_sensor.h"
 #include "est_system.h"
@@ -22,6 +23,8 @@
 #define DEVICE_STATUS_MOTOR_OFFSET 24U
 #define DEVICE_STATUS_SENSOR_OFFSET 48U
 #define DEVICE_STATUS_PORT_ENTRY_LENGTH 6U
+#define MICROPYTHON_STATUS_PAYLOAD_LENGTH 28U
+#define PYTHON_PROGRAM_STATUS_PAYLOAD_LENGTH 32U
 
 enum update_ack_flag {
 	UPDATE_ACK_FAILURE = 0x00,
@@ -58,6 +61,14 @@ static int32_t read_i32_le(const uint8_t *bytes)
 		((uint32_t)bytes[3] << 24U);
 
 	return (int32_t)value;
+}
+
+static uint32_t read_u32_le(const uint8_t *bytes)
+{
+	return (uint32_t)bytes[0] |
+		((uint32_t)bytes[1] << 8U) |
+		((uint32_t)bytes[2] << 16U) |
+		((uint32_t)bytes[3] << 24U);
 }
 
 static void write_i32_le(uint8_t *bytes, int32_t value)
@@ -109,6 +120,7 @@ static bool report_starts_logical_frame(const uint8_t *report, size_t length)
 	    report[2] == FLASH_TEST_COMMAND || report[2] == FLASH_STATUS_COMMAND ||
 	    report[2] == FLASH_MODE_PROBE_COMMAND ||
 	    report[2] == DEVICE_STATUS_COMMAND ||
+	    report[2] == MICROPYTHON_STATUS_COMMAND ||
 	    report[2] == MOTOR_TYPE_COMMAND) {
 		return data_length == 0U;
 	}
@@ -144,6 +156,9 @@ static bool report_starts_logical_frame(const uint8_t *report, size_t length)
 	}
 	if (report[2] == DRIVE_STEER_FOR_COMMAND) {
 		return data_length == 1U || data_length == 11U;
+	}
+	if (report[2] == PYTHON_PROGRAM_COMMAND) {
+		return data_length >= 1U && data_length <= 1010U;
 	}
 	if (report[2] == INPUT_SENSOR_COMMAND) {
 		return data_length == 2U || data_length == 3U;
@@ -706,7 +721,9 @@ static void queue_device_status(uint32_t now_ms)
 		DEVICE_CAPABILITY_DRIVE_STRAIGHT |
 		DEVICE_CAPABILITY_DRIVE_RUN |
 		DEVICE_CAPABILITY_DRIVE_STEER |
-		DEVICE_CAPABILITY_DRIVE_STEER_FOR;
+		DEVICE_CAPABILITY_DRIVE_STEER_FOR |
+		DEVICE_CAPABILITY_MICROPYTHON |
+		DEVICE_CAPABILITY_PYTHON_PROGRAM;
 
 	(void)est_battery_get_status(&battery);
 	report[0] = FRAME_START_BYTE;
@@ -753,6 +770,104 @@ static void queue_device_status(uint32_t now_ms)
 		5U + DEVICE_STATUS_PAYLOAD_LENGTH);
 	report[6U + DEVICE_STATUS_PAYLOAD_LENGTH] = FRAME_END_BYTE;
 	(void)usb_hid_queue_report(report, false);
+}
+
+static void queue_micropython_status(void)
+{
+	est_micropython_status_t status = {0};
+	uint8_t report[USB_HID_REPORT_SIZE] = {0};
+	uint8_t *payload = &report[5];
+
+	(void)est_micropython_get_status(&status);
+	report[0] = FRAME_START_BYTE;
+	report[1] = DEVICE_FRAME_DIRECTION;
+	report[2] = MICROPYTHON_STATUS_COMMAND;
+	report[3] = MICROPYTHON_STATUS_PAYLOAD_LENGTH;
+	report[4] = 0U;
+	payload[0] = 1U;
+	payload[1] = (uint8_t)status.state;
+	payload[2] = status.flags;
+	payload[3] = 0U;
+	write_u32_le(&payload[4], status.heap_total_bytes);
+	write_u32_le(&payload[8], status.heap_used_bytes);
+	write_u32_le(&payload[12], status.heap_free_bytes);
+	write_u32_le(&payload[16], status.startup_duration_ms);
+	write_u32_le(&payload[20], status.maximum_gc_pause_us);
+	write_u16_le(&payload[24], status.gc_count);
+	write_u16_le(&payload[26], status.self_test_value);
+	report[5U + MICROPYTHON_STATUS_PAYLOAD_LENGTH] = checksum(report,
+		5U + MICROPYTHON_STATUS_PAYLOAD_LENGTH);
+	report[6U + MICROPYTHON_STATUS_PAYLOAD_LENGTH] = FRAME_END_BYTE;
+	(void)usb_hid_queue_report(report, false);
+}
+
+static void queue_python_program_status(uint8_t result)
+{
+	est_micropython_program_status_t status = {0};
+	uint8_t report[USB_HID_REPORT_SIZE] = {0};
+	uint8_t *payload = &report[5];
+
+	(void)est_micropython_program_get_status(&status);
+	report[0] = FRAME_START_BYTE;
+	report[1] = DEVICE_FRAME_DIRECTION;
+	report[2] = PYTHON_PROGRAM_COMMAND;
+	report[3] = PYTHON_PROGRAM_STATUS_PAYLOAD_LENGTH;
+	report[4] = 0U;
+	payload[0] = 1U;
+	payload[1] = result;
+	payload[2] = (uint8_t)status.state;
+	payload[3] = (uint8_t)status.error;
+	payload[4] = status.flags;
+	payload[5] = 0U;
+	write_u16_le(&payload[6], status.expected_length);
+	write_u16_le(&payload[8], status.received_length);
+	write_u16_le(&payload[10], status.run_count);
+	write_u32_le(&payload[12], status.expected_crc32);
+	write_u32_le(&payload[16], status.actual_crc32);
+	write_u32_le(&payload[20], status.duration_ms);
+	write_u32_le(&payload[24], status.timeout_ms);
+	write_i32_le(&payload[28], status.result_value);
+	report[5U + PYTHON_PROGRAM_STATUS_PAYLOAD_LENGTH] = checksum(report,
+		5U + PYTHON_PROGRAM_STATUS_PAYLOAD_LENGTH);
+	report[6U + PYTHON_PROGRAM_STATUS_PAYLOAD_LENGTH] = FRAME_END_BYTE;
+	(void)usb_hid_queue_report(report, false);
+}
+
+static void handle_python_program(const uint8_t *data, uint16_t data_length)
+{
+	est_result_t operation_result = EST_OK;
+	uint8_t result = 1U;
+
+	if (data[0] == PYTHON_PROGRAM_ACTION_STATUS && data_length == 1U) {
+		/* Status is available during upload and execution. */
+	} else if (data[0] == PYTHON_PROGRAM_ACTION_BEGIN &&
+		   data_length == 7U) {
+		operation_result = est_micropython_program_begin(
+			read_u16_le(&data[1]), read_u32_le(&data[3]));
+	} else if (data[0] == PYTHON_PROGRAM_ACTION_CHUNK &&
+		   data_length >= 4U) {
+		operation_result = est_micropython_program_write(
+			read_u16_le(&data[1]), &data[3],
+			(uint16_t)(data_length - 3U));
+	} else if (data[0] == PYTHON_PROGRAM_ACTION_RUN &&
+		   data_length == 5U) {
+		operation_result = est_micropython_program_run(
+			read_u32_le(&data[1]));
+	} else if (data[0] == PYTHON_PROGRAM_ACTION_STOP &&
+		   data_length == 1U) {
+		operation_result = est_micropython_program_stop();
+	} else if (data[0] == PYTHON_PROGRAM_ACTION_CLEAR &&
+		   data_length == 1U) {
+		operation_result = est_micropython_program_clear();
+	} else {
+		operation_result = EST_ERR_INVALID_ARGUMENT;
+	}
+	if (operation_result == EST_ERR_BUSY) {
+		result = 2U;
+	} else if (operation_result != EST_OK) {
+		result = 0U;
+	}
+	queue_python_program_status(result);
 }
 
 static uint8_t apply_motor_test_action(uint8_t action, uint32_t now_ms,
@@ -1290,6 +1405,10 @@ static void handle_logical_frame(uint32_t now_ms)
 		}
 		return;
 	}
+	if (est_micropython_program_is_executing() &&
+	    logical_frame[2] != PYTHON_PROGRAM_COMMAND) {
+		return;
+	}
 
 	if (logical_frame[2] == HEARTBEAT_COMMAND && data_length == 0U) {
 		queue_heartbeat();
@@ -1324,6 +1443,12 @@ static void handle_logical_frame(uint32_t now_ms)
 		handle_input_sensor(&logical_frame[5], data_length);
 	} else if (logical_frame[2] == DEVICE_STATUS_COMMAND && data_length == 0U) {
 		queue_device_status(now_ms);
+	} else if (logical_frame[2] == MICROPYTHON_STATUS_COMMAND &&
+		   data_length == 0U) {
+		queue_micropython_status();
+	} else if (logical_frame[2] == PYTHON_PROGRAM_COMMAND &&
+		   data_length >= 1U && data_length <= 1010U) {
+		handle_python_program(&logical_frame[5], data_length);
 	} else if (logical_frame[2] == MOTOR_TYPE_COMMAND &&
 		   (data_length == 0U || data_length == 2U)) {
 		handle_motor_type(&logical_frame[5], data_length, now_ms);

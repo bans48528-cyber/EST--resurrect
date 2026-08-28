@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import binascii
 import math
 import time
 from collections.abc import Callable
@@ -59,11 +60,14 @@ from .constants import (
     MOTOR_TEST_ACTION_STOP,
     MOTOR_TEST_TIMEOUT_SECONDS,
     PACKET_ACK_TIMEOUT_SECONDS,
+    PYTHON_PROGRAM_CHUNK_SIZE,
+    PYTHON_PROGRAM_FLAG_TIMEOUT_ARMED,
 )
 from .errors import (
     AckRejectedError,
     AckTimeoutError,
     DiagnosticTimeoutError,
+    EstUpdaterError,
     HeartbeatTimeoutError,
 )
 from .protocol import (
@@ -72,6 +76,13 @@ from .protocol import (
     build_drive_steer_frame,
     build_drive_steer_for_frame,
     build_device_status_frame,
+    build_micropython_status_frame,
+    build_python_program_begin_frame,
+    build_python_program_chunk_frame,
+    build_python_program_clear_frame,
+    build_python_program_run_frame,
+    build_python_program_status_frame,
+    build_python_program_stop_frame,
     build_heartbeat_frame,
     build_input_sensor_frame,
     build_flash_id_frame,
@@ -97,6 +108,8 @@ from .protocol import (
     parse_drive_steer_response,
     parse_drive_steer_for_response,
     parse_device_status_response,
+    parse_micropython_status_response,
+    parse_python_program_response,
     parse_input_sensor_response,
     parse_flash_id_response,
     parse_flash_scan_response,
@@ -132,6 +145,8 @@ from .protocol import (
     MotorTypeResult,
     InputSensorResult,
     DeviceStatus,
+    MicroPythonStatus,
+    PythonProgramStatus,
     DriveStraightResult,
     DriveRunResult,
     DriveSteerForResult,
@@ -211,6 +226,107 @@ class FirmwareUpdater:
         raise DiagnosticTimeoutError(
             "设备没有返回整机状态；请确认固件支持 device-status 命令"
         )
+
+    def read_micropython_status(self) -> MicroPythonStatus:
+        report = build_micropython_status_frame().ljust(LEGACY_REPORT_SIZE, b"\x00")
+        self.transport.write_report(report)
+        deadline = time.monotonic() + DEVICE_STATUS_TIMEOUT_SECONDS
+        while time.monotonic() < deadline:
+            response = self.transport.read_report()
+            if not response:
+                continue
+            status = parse_micropython_status_response(response)
+            if status is not None:
+                return status
+        raise DiagnosticTimeoutError(
+            "设备没有返回 MicroPython 状态；请确认固件支持 micropython-status 命令"
+        )
+
+    def read_python_program_status(self) -> PythonProgramStatus:
+        return self._python_program_action(build_python_program_status_frame())
+
+    def upload_python_program(self, source: bytes) -> PythonProgramStatus:
+        if not source:
+            raise ValueError("Python program must not be empty")
+        if b"\x00" in source:
+            raise ValueError("Python program must not contain NUL bytes")
+        crc32 = binascii.crc32(source) & 0xFFFFFFFF
+        status = self._python_program_action(
+            build_python_program_begin_frame(len(source), crc32)
+        )
+        self._require_python_program_success(status, "begin upload")
+        for offset in range(0, len(source), PYTHON_PROGRAM_CHUNK_SIZE):
+            chunk = source[offset : offset + PYTHON_PROGRAM_CHUNK_SIZE]
+            status = self._python_program_action(
+                build_python_program_chunk_frame(offset, chunk)
+            )
+            self._require_python_program_success(status, "upload chunk")
+        if status.state != 2 or status.received_length != len(source):
+            raise EstUpdaterError("设备未把 RAM 程序标记为 ready")
+        if status.actual_crc32 != crc32:
+            raise EstUpdaterError("设备返回的 RAM 程序 CRC32 不匹配")
+        return status
+
+    def run_python_program(
+        self, source: bytes, timeout_ms: int = 2000
+    ) -> PythonProgramStatus:
+        self.upload_python_program(source)
+        status = self._python_program_action(
+            build_python_program_run_frame(timeout_ms)
+        )
+        self._require_python_program_success(status, "queue run")
+        deadline = time.monotonic() + timeout_ms / 1000.0 + 2.0
+        while time.monotonic() < deadline:
+            status = self.read_python_program_status()
+            if self._python_program_finished(status):
+                return status
+            time.sleep(0.02)
+        raise DiagnosticTimeoutError("RAM 中的 Python 程序没有返回最终状态")
+
+    def stop_python_program(self) -> PythonProgramStatus:
+        status = self._python_program_action(build_python_program_stop_frame())
+        self._require_python_program_success(status, "stop program")
+        deadline = time.monotonic() + DEVICE_STATUS_TIMEOUT_SECONDS
+        while time.monotonic() < deadline:
+            if self._python_program_finished(status):
+                return status
+            time.sleep(0.02)
+            status = self.read_python_program_status()
+        raise DiagnosticTimeoutError("RAM 中的 Python 程序未完成停止清理")
+
+    def clear_python_program(self) -> PythonProgramStatus:
+        status = self._python_program_action(build_python_program_clear_frame())
+        self._require_python_program_success(status, "clear program")
+        return status
+
+    def _python_program_action(self, frame: bytes) -> PythonProgramStatus:
+        self._write_frame(frame)
+        deadline = time.monotonic() + DEVICE_STATUS_TIMEOUT_SECONDS
+        while time.monotonic() < deadline:
+            response = self.transport.read_report()
+            if not response:
+                continue
+            status = parse_python_program_response(response)
+            if status is not None:
+                return status
+        raise DiagnosticTimeoutError(
+            "设备没有返回 RAM Python 程序状态；请确认固件支持 0x24 命令"
+        )
+
+    @staticmethod
+    def _require_python_program_success(
+        status: PythonProgramStatus, operation: str
+    ) -> None:
+        if status.result == 2:
+            raise EstUpdaterError(f"RAM Python 程序忙：{operation}")
+        if status.result != 1:
+            raise EstUpdaterError(f"RAM Python 程序请求被拒绝：{operation}")
+
+    @staticmethod
+    def _python_program_finished(status: PythonProgramStatus) -> bool:
+        if status.state == 7:
+            return (status.flags & PYTHON_PROGRAM_FLAG_TIMEOUT_ARMED) == 0
+        return status.state in (5, 6, 8, 9)
 
     def read_flash_id(self) -> bytes:
         report = build_flash_id_frame().ljust(LEGACY_REPORT_SIZE, b"\x00")

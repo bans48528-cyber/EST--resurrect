@@ -1,0 +1,28 @@
+#ifndef MICROPY_INCLUDED_EST_MPCONFIGPORT_H
+#define MICROPY_INCLUDED_EST_MPCONFIGPORT_H
+
+#include <alloca.h>
+#include <stdint.h>
+
+#define MICROPY_CONFIG_ROM_LEVEL (MICROPY_CONFIG_ROM_LEVEL_MINIMUM)
+#define MICROPY_ENABLE_COMPILER (1)
+#define MICROPY_ENABLE_GC (1)
+#define MICROPY_PY_GC (1)
+#define MICROPY_MODULE_FROZEN_MPY (0)
+#define MICROPY_ENABLE_EXTERNAL_IMPORT (0)
+#define MICROPY_ENABLE_SCHEDULER (0)
+#define MICROPY_HELPER_REPL (0)
+#define MICROPY_ALLOC_PATH_MAX (64)
+#define MICROPY_ALLOC_PARSE_CHUNK_INIT (16)
+
+void est_micropython_vm_hook(void);
+#define MICROPY_VM_HOOK_LOOP est_micropython_vm_hook();
+
+#define MICROPY_HW_BOARD_NAME "EST 3.0"
+#define MICROPY_HW_MCU_NAME "STM32F429"
+
+typedef long mp_off_t;
+
+#define MP_STATE_PORT MP_STATE_VM
+
+#endif

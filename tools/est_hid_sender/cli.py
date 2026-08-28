@@ -13,6 +13,8 @@ from .constants import (
     DEVICE_CAPABILITY_DRIVE_STEER_FOR,
     DEVICE_CAPABILITY_INPUT_SENSOR,
     DEVICE_CAPABILITY_KEYS,
+    DEVICE_CAPABILITY_MICROPYTHON,
+    DEVICE_CAPABILITY_PYTHON_PROGRAM,
     DEVICE_CAPABILITY_MOTOR_CONTROL,
     DEVICE_CAPABILITY_MOTOR_PAIR_POSITION,
     DEVICE_CAPABILITY_MOTOR_PAIR_SPEED,
@@ -39,6 +41,31 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "device-status", help="一次读取版本、电量、按键、四个马达和四个输入口"
     )
     add_device_options(device_status)
+
+    micropython_status = commands.add_parser(
+        "micropython-status", help="只读查看 MicroPython 自检、堆和 GC 指标"
+    )
+    add_device_options(micropython_status)
+
+    python_program_status = commands.add_parser(
+        "python-program-status", help="只读查看 RAM Python 程序状态"
+    )
+    add_device_options(python_program_status)
+
+    python_run = commands.add_parser(
+        "python-run", help="上传 Python 源码到 RAM 并运行一次"
+    )
+    add_device_options(python_run)
+    python_run.add_argument("--file", type=Path, required=True, help="Python 源文件")
+    python_run.add_argument(
+        "--timeout-ms", type=int, default=2000, help="硬执行上限，默认 2000 ms"
+    )
+
+    python_stop = commands.add_parser("python-stop", help="停止当前 RAM Python 程序")
+    add_device_options(python_stop)
+
+    python_clear = commands.add_parser("python-clear", help="清除 RAM Python 程序")
+    add_device_options(python_clear)
 
     keys = commands.add_parser("keys", help="查看六个按键的状态")
     add_device_options(keys)
@@ -575,6 +602,8 @@ DEVICE_CAPABILITY_NAMES = (
     (DEVICE_CAPABILITY_DRIVE_RUN, "drive-run"),
     (DEVICE_CAPABILITY_DRIVE_STEER, "drive-steer"),
     (DEVICE_CAPABILITY_DRIVE_STEER_FOR, "drive-steer-for"),
+    (DEVICE_CAPABILITY_MICROPYTHON, "micropython"),
+    (DEVICE_CAPABILITY_PYTHON_PROGRAM, "python-program"),
 )
 
 
@@ -660,6 +689,111 @@ def run_device_status(args: argparse.Namespace) -> int:
                 f"value:{device_sensor_value_text(sensor)}",
                 flush=True,
             )
+    return 0
+
+
+def run_micropython_status(args: argparse.Namespace) -> int:
+    state_names = {
+        0: "not-started",
+        1: "starting",
+        2: "passed",
+        3: "exception",
+        4: "self-test-failed",
+    }
+    with open_transport(args) as transport:
+        print(f"device={transport.path}", flush=True)
+        print(f"report input={transport.input_len} output={transport.output_len}", flush=True)
+        status = FirmwareUpdater(transport).read_micropython_status()
+        print(f"schema={status.schema_version}", flush=True)
+        print(f"state={state_names.get(status.state, 'unknown')}", flush=True)
+        print(f"flags=0x{status.flags:02X}", flush=True)
+        print(f"heap_total_bytes={status.heap_total_bytes}", flush=True)
+        print(f"heap_used_bytes={status.heap_used_bytes}", flush=True)
+        print(f"heap_free_bytes={status.heap_free_bytes}", flush=True)
+        print(f"startup_duration_ms={status.startup_duration_ms}", flush=True)
+        print(f"maximum_gc_pause_us={status.maximum_gc_pause_us}", flush=True)
+        print(f"gc_count={status.gc_count}", flush=True)
+        print(f"self_test_value={status.self_test_value}", flush=True)
+        return 0 if status.state == 2 else 1
+
+
+PYTHON_PROGRAM_STATES = {
+    0: "empty",
+    1: "receiving",
+    2: "ready",
+    3: "queued",
+    4: "running",
+    5: "completed",
+    6: "exception",
+    7: "stopped",
+    8: "timed-out",
+    9: "invalid",
+}
+
+PYTHON_PROGRAM_ERRORS = {
+    0: "none",
+    1: "invalid-request",
+    2: "crc",
+    3: "python-exception",
+    4: "stopped",
+    5: "timeout",
+    6: "internal",
+}
+
+
+def print_python_program_status(status: object) -> None:
+    print(f"schema={status.schema_version}", flush=True)
+    print(f"request_result={status.result}", flush=True)
+    print(f"state={PYTHON_PROGRAM_STATES.get(status.state, 'unknown')}", flush=True)
+    print(f"error={PYTHON_PROGRAM_ERRORS.get(status.error, 'unknown')}", flush=True)
+    print(f"flags=0x{status.flags:02X}", flush=True)
+    print(f"received={status.received_length}/{status.expected_length}", flush=True)
+    print(f"run_count={status.run_count}", flush=True)
+    print(f"expected_crc32={status.expected_crc32:08x}", flush=True)
+    print(f"actual_crc32={status.actual_crc32:08x}", flush=True)
+    print(f"duration_ms={status.duration_ms}", flush=True)
+    print(f"timeout_ms={status.timeout_ms}", flush=True)
+    print(f"result_value={status.result_value}", flush=True)
+
+
+def run_python_program_status(args: argparse.Namespace) -> int:
+    with open_transport(args) as transport:
+        print(f"device={transport.path}", flush=True)
+        status = FirmwareUpdater(transport).read_python_program_status()
+        print_python_program_status(status)
+    return 0
+
+
+def run_python_program(args: argparse.Namespace) -> int:
+    source = args.file.read_bytes()
+    with open_transport(args) as transport:
+        print(f"device={transport.path}", flush=True)
+        print(f"source={args.file}", flush=True)
+        print(f"source_bytes={len(source)}", flush=True)
+        status = FirmwareUpdater(transport).run_python_program(
+            source, timeout_ms=args.timeout_ms
+        )
+        print_python_program_status(status)
+        if status.state != 5:
+            raise EstUpdaterError(
+                f"RAM Python 程序结束状态为 {PYTHON_PROGRAM_STATES.get(status.state, 'unknown')}"
+            )
+    return 0
+
+
+def run_python_stop(args: argparse.Namespace) -> int:
+    with open_transport(args) as transport:
+        print(f"device={transport.path}", flush=True)
+        status = FirmwareUpdater(transport).stop_python_program()
+        print_python_program_status(status)
+    return 0
+
+
+def run_python_clear(args: argparse.Namespace) -> int:
+    with open_transport(args) as transport:
+        print(f"device={transport.path}", flush=True)
+        status = FirmwareUpdater(transport).clear_python_program()
+        print_python_program_status(status)
     return 0
 
 
@@ -2205,6 +2339,16 @@ def main(argv: list[str] | None = None) -> int:
             return run_ping(args)
         if args.mode == "device-status":
             return run_device_status(args)
+        if args.mode == "micropython-status":
+            return run_micropython_status(args)
+        if args.mode == "python-program-status":
+            return run_python_program_status(args)
+        if args.mode == "python-run":
+            return run_python_program(args)
+        if args.mode == "python-stop":
+            return run_python_stop(args)
+        if args.mode == "python-clear":
+            return run_python_clear(args)
         if args.mode == "keys":
             return run_keys(args)
         if args.mode == "flash-id":

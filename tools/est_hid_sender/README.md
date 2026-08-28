@@ -20,6 +20,26 @@ python tools/est_hid_sender/est_hid_sender.py device-status
 
 输出包括固件与应用协议版本、支持功能、电量、按键、A-D 马达状态和 1-4 号输入口状态。该命令只读，不会让马达转动，也不会改变传感器模式。精确帧定义见 `docs/EST_USB应用协议_V1.md`。
 
+`M0.94A` 起可只读检查 MicroPython 启动自检、堆和 GC 指标：
+
+```powershell
+python tools/est_hid_sender/est_hid_sender.py micropython-status
+```
+
+成功状态应为 `passed`，自检值为 `96`；该命令不会执行用户脚本或启动马达。
+
+`M0.95A` 起可把最多 8 KiB 的 Python 源码上传到 RAM 并运行；应使用修复了运行中主动停止的 `M0.96A` 或更新版本：
+
+```powershell
+python tools/est_hid_sender/est_hid_sender.py python-run `
+  --file tools/est_hid_sender/examples/compute_result.py --timeout-ms 2000
+python tools/est_hid_sender/est_hid_sender.py python-program-status
+python tools/est_hid_sender/est_hid_sender.py python-stop
+python tools/est_hid_sender/est_hid_sender.py python-clear
+```
+
+上传过程按顺序分块并核对 CRC32。`--timeout-ms` 范围为 100-10000 ms；正常完成、Python 异常、主动停止或硬超时都会停止全部马达。异常清理会重启四路传感器，UART 传感器可能短暂同步约 2 秒。当前 `est` 模块只提供最小验证接口，RAM 脚本还不能启动马达；`examples` 中的三段脚本分别用于计算结果、异常清理和死循环超时测试。
+
 只读检测外部 Flash 型号（不会擦除或写入）：
 
 ```powershell
