@@ -513,6 +513,14 @@ EV3 Classroom 1.5.2 缓存中的 `TravelGuideBuilder.steeringToSpeeds()` 已给�
 - 事件帽积木需要轻量调度器，不能简单生成多个无法并发的顶层死循环；
 - Python 异常、停止和软重启路径必须进入 C 层安全清理。
 
+### 16.5 M0.98A 已冻结的只读底层契约
+
+- `est.Sensor(port)` 接受 `1..4`，提供 `port()`、`type()`、`state()`、`mode()`、`value_format()`、`valid()`、`error()`、`value()` 和 `status()`；`value()` 使用 `est_sensor` 已统一的有符号数和单位，未连接、同步中、陈旧或无有效值时抛出明确异常。
+- `Sensor.status()` 固定返回 `(error, type, state, mode, value_format, valid, value)`；传感器类型和状态常量由 `est.Sensor.TYPE_*`、`est.Sensor.STATE_*` 提供。
+- `est.buttons.value()` 固定返回六位按键掩码；`BACK/LEFT/UP/DOWN/RIGHT/CENTER` 分别为 `1/2/4/8/16/32`，`pressed(button)` 只接受一个单键常量。
+- `est.battery.status()` 固定返回 `(result, valid, level, percent, low, adc_raw, sample_mv)`；普通积木优先使用 `valid()`、`level()`、`percent()` 和 `low()`。
+- 上述接口是类型便捷类和 `est_runtime` 的底层依据；代码生成器仍按第 17 章生成 `rt.color(port)` 等高层调用，不直接展开状态元组。
+
 ## 17. 全部积木的 MicroPython 代码生成映射
 
 本节定义建议的 V1 代码生成契约，当前尚不表示这些 `est`/`est_runtime` 接口已经全部实现。建议生成程序统一使用：

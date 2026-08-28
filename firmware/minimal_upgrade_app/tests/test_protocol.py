@@ -1269,6 +1269,37 @@ class MicroPythonIntegrationTests(unittest.TestCase):
         self.assertIn("est_runtime_tick(now_ms);", runtime)
         self.assertIn("MP_QSTR__runtime_ticks", module)
 
+    def test_formal_read_only_python_api_wraps_public_services(self) -> None:
+        module = (ROOT / "micropython_port" / "modest.c").read_text(
+            encoding="utf-8"
+        )
+        script = (
+            ROOT.parents[1] / "tools" / "est_hid_sender" / "examples" /
+            "read_services.py"
+        ).read_text(encoding="utf-8")
+
+        for public_api in (
+            "est_sensor_get_status",
+            "est_buttons_pressed_mask",
+            "est_button_is_pressed",
+            "est_battery_get_status",
+        ):
+            self.assertIn(public_api, module)
+        for python_name in (
+            "MP_QSTR_Sensor",
+            "MP_QSTR_buttons",
+            "MP_QSTR_battery",
+            "MP_QSTR_pressed",
+            "MP_QSTR_percent",
+        ):
+            self.assertIn(python_name, module)
+        self.assertIn("est.Sensor(port)", script)
+        self.assertIn("est.buttons.pressed(button)", script)
+        self.assertIn("est.battery.percent()", script)
+        self.assertNotIn("board_sensor_", module)
+        self.assertNotIn("board_keys_", module)
+        self.assertNotIn("board_battery_", module)
+
     def test_ram_program_exit_always_stops_motors_and_failures_cleanup(self) -> None:
         runtime = (ROOT / "micropython_port" / "est_micropython.c").read_text(
             encoding="utf-8"

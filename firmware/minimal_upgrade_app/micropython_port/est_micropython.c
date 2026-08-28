@@ -55,6 +55,9 @@ static const char self_test_script[] =
 	"assert est.drive_mix(50, 40) == (40, 20)\n"
 	"assert est.motor_type(0) in (0, 4, 5, 255)\n"
 	"assert len(est.sensor(1)) == 6\n"
+	"assert est.Sensor(1).port() == 1\n"
+	"assert 0 <= est.buttons.value() <= 63\n"
+	"assert est.battery.valid() in (True, False)\n"
 	"assert est.force_gc() >= 0\n"
 	"est._self_test_complete(len(items))\n";
 
