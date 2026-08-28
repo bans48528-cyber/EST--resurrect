@@ -54,6 +54,7 @@ static const char self_test_script[] =
 	"assert len(items) == 96\n"
 	"assert est.drive_mix(50, 40) == (40, 20)\n"
 	"assert est.motor_type(0) in (0, 4, 5, 255)\n"
+	"assert est.Motor(\"A\").port() == \"A\"\n"
 	"assert len(est.sensor(1)) == 6\n"
 	"assert est.Sensor(1).port() == 1\n"
 	"assert 0 <= est.buttons.value() <= 63\n"

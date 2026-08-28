@@ -2,6 +2,7 @@
 
 #include "py/gc.h"
 #include "py/obj.h"
+#include "py/objstr.h"
 #include "py/runtime.h"
 
 #include "est_battery.h"
@@ -50,6 +51,217 @@ static mp_obj_t modest_stop_all(void)
 	return mp_obj_new_int((mp_int_t)est_motor_stop_all(EST_STOP_COAST));
 }
 static MP_DEFINE_CONST_FUN_OBJ_0(modest_stop_all_obj, modest_stop_all);
+
+typedef struct {
+	mp_obj_base_t base;
+	est_motor_port_t port;
+} modest_motor_instance_t;
+
+static void modest_raise_motor_error(est_result_t error)
+{
+	switch (error) {
+	case EST_ERR_BUSY:
+		mp_raise_msg(&mp_type_RuntimeError,
+			MP_ERROR_TEXT("motor busy"));
+	case EST_ERR_NOT_SUPPORTED:
+		mp_raise_msg(&mp_type_RuntimeError,
+			MP_ERROR_TEXT("motor operation unsupported"));
+	default:
+		mp_raise_msg(&mp_type_RuntimeError,
+			MP_ERROR_TEXT("motor operation failed"));
+	}
+}
+
+static void modest_motor_read(mp_obj_t self_object,
+	est_motor_status_t *status)
+{
+	modest_motor_instance_t *self = MP_OBJ_TO_PTR(self_object);
+	est_result_t result = est_motor_get_status(self->port, status);
+
+	if (result != EST_OK) {
+		modest_raise_motor_error(result);
+	}
+}
+
+static mp_obj_t modest_motor_make_new(const mp_obj_type_t *type,
+	size_t argument_count, size_t keyword_count, const mp_obj_t *arguments)
+{
+	size_t port_length;
+	const char *port_name;
+	modest_motor_instance_t *self;
+
+	mp_arg_check_num(argument_count, keyword_count, 1U, 1U, false);
+	port_name = mp_obj_str_get_data(arguments[0], &port_length);
+	if (port_length != 1U || port_name[0] < 'A' || port_name[0] > 'D') {
+		mp_raise_ValueError(MP_ERROR_TEXT("motor port must be A..D"));
+	}
+	self = mp_obj_malloc(modest_motor_instance_t, type);
+	self->port = (est_motor_port_t)(port_name[0] - 'A');
+	return MP_OBJ_FROM_PTR(self);
+}
+
+static mp_obj_t modest_motor_port(mp_obj_t self_object)
+{
+	modest_motor_instance_t *self = MP_OBJ_TO_PTR(self_object);
+	char port_name = (char)('A' + self->port);
+
+	return mp_obj_new_str(&port_name, 1U);
+}
+static MP_DEFINE_CONST_FUN_OBJ_1(modest_motor_port_obj, modest_motor_port);
+
+static mp_obj_t modest_motor_type_value(mp_obj_t self_object)
+{
+	est_motor_status_t status = {0};
+
+	modest_motor_read(self_object, &status);
+	return mp_obj_new_int((mp_int_t)status.type);
+}
+static MP_DEFINE_CONST_FUN_OBJ_1(
+	modest_motor_type_value_obj, modest_motor_type_value);
+
+static mp_obj_t modest_motor_state(mp_obj_t self_object)
+{
+	est_motor_status_t status = {0};
+
+	modest_motor_read(self_object, &status);
+	return mp_obj_new_int((mp_int_t)status.state);
+}
+static MP_DEFINE_CONST_FUN_OBJ_1(modest_motor_state_obj, modest_motor_state);
+
+static mp_obj_t modest_motor_stop_mode(mp_obj_t self_object)
+{
+	est_motor_status_t status = {0};
+
+	modest_motor_read(self_object, &status);
+	return mp_obj_new_int((mp_int_t)status.stop_mode);
+}
+static MP_DEFINE_CONST_FUN_OBJ_1(
+	modest_motor_stop_mode_obj, modest_motor_stop_mode);
+
+static mp_obj_t modest_motor_power(mp_obj_t self_object)
+{
+	est_motor_status_t status = {0};
+
+	modest_motor_read(self_object, &status);
+	return mp_obj_new_int((mp_int_t)status.power_percent);
+}
+static MP_DEFINE_CONST_FUN_OBJ_1(modest_motor_power_obj, modest_motor_power);
+
+static mp_obj_t modest_motor_target_speed(mp_obj_t self_object)
+{
+	est_motor_status_t status = {0};
+
+	modest_motor_read(self_object, &status);
+	return mp_obj_new_int((mp_int_t)status.target_speed_percent);
+}
+static MP_DEFINE_CONST_FUN_OBJ_1(
+	modest_motor_target_speed_obj, modest_motor_target_speed);
+
+static mp_obj_t modest_motor_speed(mp_obj_t self_object)
+{
+	est_motor_status_t status = {0};
+
+	modest_motor_read(self_object, &status);
+	return mp_obj_new_int((mp_int_t)status.actual_speed_percent);
+}
+static MP_DEFINE_CONST_FUN_OBJ_1(modest_motor_speed_obj, modest_motor_speed);
+
+static mp_obj_t modest_motor_angle(mp_obj_t self_object)
+{
+	est_motor_status_t status = {0};
+
+	modest_motor_read(self_object, &status);
+	return mp_obj_new_int((mp_int_t)status.angle_degrees);
+}
+static MP_DEFINE_CONST_FUN_OBJ_1(modest_motor_angle_obj, modest_motor_angle);
+
+static mp_obj_t modest_motor_error(mp_obj_t self_object)
+{
+	est_motor_status_t status = {0};
+
+	modest_motor_read(self_object, &status);
+	return mp_obj_new_int((mp_int_t)status.error);
+}
+static MP_DEFINE_CONST_FUN_OBJ_1(modest_motor_error_obj, modest_motor_error);
+
+static mp_obj_t modest_motor_status(mp_obj_t self_object)
+{
+	est_motor_status_t status = {0};
+	mp_obj_t values[8];
+
+	modest_motor_read(self_object, &status);
+	values[0] = mp_obj_new_int((mp_int_t)status.error);
+	values[1] = mp_obj_new_int((mp_int_t)status.type);
+	values[2] = mp_obj_new_int((mp_int_t)status.state);
+	values[3] = mp_obj_new_int((mp_int_t)status.stop_mode);
+	values[4] = mp_obj_new_int((mp_int_t)status.power_percent);
+	values[5] = mp_obj_new_int((mp_int_t)status.target_speed_percent);
+	values[6] = mp_obj_new_int((mp_int_t)status.actual_speed_percent);
+	values[7] = mp_obj_new_int((mp_int_t)status.angle_degrees);
+	return mp_obj_new_tuple(8U, values);
+}
+static MP_DEFINE_CONST_FUN_OBJ_1(modest_motor_status_obj, modest_motor_status);
+
+static mp_obj_t modest_motor_stop(size_t argument_count,
+	const mp_obj_t *arguments)
+{
+	modest_motor_instance_t *self = MP_OBJ_TO_PTR(arguments[0]);
+	est_stop_mode_t stop_mode = EST_STOP_COAST;
+	est_result_t result;
+
+	if (argument_count == 2U) {
+		int32_t requested_mode = require_integer_range(arguments[1],
+			EST_STOP_COAST, EST_STOP_BRAKE,
+			MP_ERROR_TEXT("stop mode must be COAST or BRAKE"));
+
+		stop_mode = (est_stop_mode_t)requested_mode;
+	}
+	result = est_motor_stop(self->port, stop_mode);
+	if (result != EST_OK) {
+		modest_raise_motor_error(result);
+	}
+	return mp_const_none;
+}
+static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(
+	modest_motor_stop_obj, 1, 2, modest_motor_stop);
+
+static const mp_rom_map_elem_t modest_motor_locals_table[] = {
+	{MP_ROM_QSTR(MP_QSTR_port), MP_ROM_PTR(&modest_motor_port_obj)},
+	{MP_ROM_QSTR(MP_QSTR_type), MP_ROM_PTR(&modest_motor_type_value_obj)},
+	{MP_ROM_QSTR(MP_QSTR_state), MP_ROM_PTR(&modest_motor_state_obj)},
+	{MP_ROM_QSTR(MP_QSTR_stop_mode),
+		MP_ROM_PTR(&modest_motor_stop_mode_obj)},
+	{MP_ROM_QSTR(MP_QSTR_power), MP_ROM_PTR(&modest_motor_power_obj)},
+	{MP_ROM_QSTR(MP_QSTR_target_speed),
+		MP_ROM_PTR(&modest_motor_target_speed_obj)},
+	{MP_ROM_QSTR(MP_QSTR_speed), MP_ROM_PTR(&modest_motor_speed_obj)},
+	{MP_ROM_QSTR(MP_QSTR_angle), MP_ROM_PTR(&modest_motor_angle_obj)},
+	{MP_ROM_QSTR(MP_QSTR_error), MP_ROM_PTR(&modest_motor_error_obj)},
+	{MP_ROM_QSTR(MP_QSTR_status), MP_ROM_PTR(&modest_motor_status_obj)},
+	{MP_ROM_QSTR(MP_QSTR_stop), MP_ROM_PTR(&modest_motor_stop_obj)},
+	{MP_ROM_QSTR(MP_QSTR_TYPE_NONE), MP_ROM_INT(EST_MOTOR_TYPE_NONE)},
+	{MP_ROM_QSTR(MP_QSTR_TYPE_LARGE), MP_ROM_INT(EST_MOTOR_TYPE_LARGE)},
+	{MP_ROM_QSTR(MP_QSTR_TYPE_MEDIUM), MP_ROM_INT(EST_MOTOR_TYPE_MEDIUM)},
+	{MP_ROM_QSTR(MP_QSTR_TYPE_UNKNOWN),
+		MP_ROM_INT(EST_MOTOR_TYPE_UNKNOWN)},
+	{MP_ROM_QSTR(MP_QSTR_STATE_IDLE), MP_ROM_INT(EST_MOTOR_IDLE)},
+	{MP_ROM_QSTR(MP_QSTR_STATE_POWER), MP_ROM_INT(EST_MOTOR_POWER)},
+	{MP_ROM_QSTR(MP_QSTR_STATE_SPEED), MP_ROM_INT(EST_MOTOR_SPEED)},
+	{MP_ROM_QSTR(MP_QSTR_STATE_POSITION), MP_ROM_INT(EST_MOTOR_POSITION)},
+	{MP_ROM_QSTR(MP_QSTR_STATE_TIMED), MP_ROM_INT(EST_MOTOR_TIMED)},
+	{MP_ROM_QSTR(MP_QSTR_STATE_HOLDING), MP_ROM_INT(EST_MOTOR_HOLDING)},
+	{MP_ROM_QSTR(MP_QSTR_STATE_FAULT), MP_ROM_INT(EST_MOTOR_FAULT)},
+	{MP_ROM_QSTR(MP_QSTR_STOP_COAST), MP_ROM_INT(EST_STOP_COAST)},
+	{MP_ROM_QSTR(MP_QSTR_STOP_BRAKE), MP_ROM_INT(EST_STOP_BRAKE)},
+};
+static MP_DEFINE_CONST_DICT(modest_motor_locals, modest_motor_locals_table);
+
+static MP_DEFINE_CONST_OBJ_TYPE(
+	modest_motor_class,
+	MP_QSTR_Motor,
+	MP_TYPE_FLAG_NONE,
+	make_new, modest_motor_make_new,
+	locals_dict, &modest_motor_locals);
 
 static mp_obj_t modest_drive_mix(mp_obj_t steering_object,
 	mp_obj_t speed_object)
@@ -461,6 +673,7 @@ static const mp_rom_map_elem_t modest_module_globals_table[] = {
 	{MP_ROM_QSTR(MP_QSTR_millis), MP_ROM_PTR(&modest_millis_obj)},
 	{MP_ROM_QSTR(MP_QSTR_motor_type), MP_ROM_PTR(&modest_motor_type_obj)},
 	{MP_ROM_QSTR(MP_QSTR_stop_all), MP_ROM_PTR(&modest_stop_all_obj)},
+	{MP_ROM_QSTR(MP_QSTR_Motor), MP_ROM_PTR(&modest_motor_class)},
 	{MP_ROM_QSTR(MP_QSTR_drive_mix), MP_ROM_PTR(&modest_drive_mix_obj)},
 	{MP_ROM_QSTR(MP_QSTR_sensor), MP_ROM_PTR(&modest_sensor_obj)},
 	{MP_ROM_QSTR(MP_QSTR_Sensor), MP_ROM_PTR(&modest_sensor_type)},

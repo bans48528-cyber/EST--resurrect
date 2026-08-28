@@ -1300,6 +1300,47 @@ class MicroPythonIntegrationTests(unittest.TestCase):
         self.assertNotIn("board_keys_", module)
         self.assertNotIn("board_battery_", module)
 
+    def test_motor_python_api_is_read_only_except_for_safe_stop(self) -> None:
+        module = (ROOT / "micropython_port" / "modest.c").read_text(
+            encoding="utf-8"
+        )
+        runtime = (ROOT / "micropython_port" / "est_micropython.c").read_text(
+            encoding="utf-8"
+        )
+        script = (
+            ROOT.parents[1] / "tools" / "est_hid_sender" / "examples" /
+            "read_motors.py"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("MP_QSTR_Motor", module)
+        self.assertIn("est_motor_get_status", module)
+        self.assertIn("est_motor_stop(self->port, stop_mode)", module)
+        for method in (
+            "MP_QSTR_port",
+            "MP_QSTR_type",
+            "MP_QSTR_state",
+            "MP_QSTR_power",
+            "MP_QSTR_target_speed",
+            "MP_QSTR_speed",
+            "MP_QSTR_angle",
+            "MP_QSTR_status",
+            "MP_QSTR_stop",
+        ):
+            self.assertIn(method, module)
+        for forbidden_call in (
+            "est_motor_set_power",
+            "est_motor_run_speed",
+            "est_motor_run_time",
+            "est_motor_run_angle",
+            "est_motor_reset_angle",
+        ):
+            self.assertNotIn(forbidden_call, module)
+        self.assertIn('est.Motor("A")', script)
+        self.assertIn("motor.stop()", script)
+        self.assertIn("motor.stop(motor.STOP_BRAKE)", script)
+        self.assertIn('assert est.Motor(\\"A\\").port() == \\"A\\"', runtime)
+        self.assertNotIn("board_motor_", module)
+
     def test_ram_program_exit_always_stops_motors_and_failures_cleanup(self) -> None:
         runtime = (ROOT / "micropython_port" / "est_micropython.c").read_text(
             encoding="utf-8"
