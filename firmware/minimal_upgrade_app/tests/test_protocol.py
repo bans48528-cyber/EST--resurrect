@@ -660,7 +660,7 @@ class BoardModuleLayoutTests(unittest.TestCase):
         header = (ROOT / "include" / "board_motor.h").read_text(encoding="utf-8")
         config = (ROOT / "include" / "app_config.h").read_text(encoding="utf-8")
         self.assertIn("MOTOR_POSITION_COMMAND          0x1BU", config)
-        self.assertIn("DEVICE_PROTOCOL_MINOR           15U", config)
+        self.assertIn("DEVICE_PROTOCOL_MINOR           19U", config)
         self.assertIn("MOTOR_LARGE_COUNTS_PER_SPEED 12800U", motor)
         self.assertIn("MOTOR_MEDIUM_COUNTS_PER_SPEED 8100U", motor)
         self.assertIn("medium_samples[4] = {2U, 4U, 8U, 16U}", motor)
@@ -1205,7 +1205,7 @@ class MicroPythonIntegrationTests(unittest.TestCase):
         config = (ROOT / "include" / "app_config.h").read_text(encoding="utf-8")
         protocol = (SOURCE_DIR / "update_protocol.c").read_text(encoding="utf-8")
         self.assertIn("MICROPYTHON_STATUS_COMMAND      0x23U", config)
-        self.assertIn("DEVICE_PROTOCOL_MINOR           15U", config)
+        self.assertIn("DEVICE_PROTOCOL_MINOR           19U", config)
         self.assertIn("DEVICE_CAPABILITY_MICROPYTHON", config)
         self.assertIn("MICROPYTHON_STATUS_PAYLOAD_LENGTH 28U", protocol)
         self.assertIn("queue_micropython_status", protocol)
@@ -1244,6 +1244,40 @@ class MicroPythonIntegrationTests(unittest.TestCase):
             main.index("est_runtime_tick(now_ms);"),
             main.index("est_micropython_tick();"),
         )
+
+    def test_persistent_program_store_has_named_logical_slots_and_dual_banks(self) -> None:
+        config = (ROOT / "include" / "app_config.h").read_text(encoding="utf-8")
+        header = (ROOT / "include" / "est_program_store.h").read_text(
+            encoding="utf-8"
+        )
+        store = (SOURCE_DIR / "est_program_store.c").read_text(encoding="utf-8")
+        protocol = (SOURCE_DIR / "update_protocol.c").read_text(encoding="utf-8")
+
+        self.assertIn("PERSISTENT_PROGRAM_COMMAND      0x25U", config)
+        self.assertIn("DEVICE_CAPABILITY_PERSISTENT_PROGRAM", config)
+        self.assertIn("EST_PROGRAM_STORE_PROGRAM_SLOT_COUNT 8U", header)
+        self.assertIn("EST_PROGRAM_STORE_REGION_START 0x01FD0000U", header)
+        self.assertIn("EST_PROGRAM_STORE_REGION_SIZE 196608U", header)
+        self.assertIn("EST_PROGRAM_STORE_PROGRAM_SLOT_SIZE 24576U", header)
+        self.assertIn("EST_PROGRAM_STORE_BANK_SIZE 12288U", header)
+        self.assertIn("EST_PROGRAM_STORE_NAME_MAX_BYTES 31U", header)
+        self.assertIn("board_flash_sector_is_erased_4byte", store)
+        self.assertNotIn("board_flash_test_empty_sector_4byte", store)
+        self.assertIn("PERSISTENT_PROGRAM_STATUS_PAYLOAD_LENGTH 76U", protocol)
+        self.assertIn("PERSISTENT_PROGRAM_STATUS_SCHEMA_VERSION 3U", protocol)
+        self.assertIn(
+            "payload[0] = PERSISTENT_PROGRAM_STATUS_SCHEMA_VERSION;", protocol
+        )
+        self.assertIn("queue_persistent_program_status", protocol)
+        self.assertIn("EST_PROGRAM_STORE_COMMIT_MARKER", store)
+        self.assertIn("EST_PROGRAM_STORE_FORMAT_VERSION 2U", store)
+        self.assertIn("inspect_legacy_bank", store)
+        self.assertIn("program_slot_address", store)
+        self.assertIn("est_program_store_save", store)
+        self.assertIn("est_program_store_load", store)
+        self.assertIn("est_program_store_clear", store)
+        self.assertIn("board_flash_program_4byte", store)
+        self.assertIn("board_flash_erase_sector_4byte", store)
 
     def test_runtime_service_tick_is_shared_by_main_and_vm(self) -> None:
         service = (SOURCE_DIR / "est_runtime.c").read_text(encoding="utf-8")

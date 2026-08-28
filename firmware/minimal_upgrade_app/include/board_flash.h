@@ -2,6 +2,7 @@
 #define BOARD_FLASH_H
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 struct board_flash_identity {
@@ -44,6 +45,10 @@ struct board_flash_identity board_flash_read_identity(void);
 struct board_flash_status board_flash_read_status(void);
 struct board_flash_mode_probe board_flash_probe_modes(void);
 bool board_flash_sector_is_erased_4byte(uint32_t address);
+bool board_flash_read_4byte(uint32_t address, uint8_t *buffer, size_t length);
+bool board_flash_program_4byte(uint32_t address, const uint8_t *data,
+	size_t length);
+bool board_flash_erase_sector_4byte(uint32_t address);
 enum board_flash_test_result board_flash_test_empty_sector_4byte(uint32_t address);
 
 #endif

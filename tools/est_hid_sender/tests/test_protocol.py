@@ -36,6 +36,10 @@ from est_hid_sender.protocol import (  # noqa: E402
     build_python_program_run_frame,
     build_python_program_status_frame,
     build_python_program_stop_frame,
+    build_persistent_program_status_frame,
+    build_persistent_program_save_frame,
+    build_persistent_program_load_frame,
+    build_persistent_program_clear_frame,
     build_flash_id_frame,
     build_flash_scan_frame,
     build_flash_test_frame,
@@ -64,6 +68,7 @@ from est_hid_sender.protocol import (  # noqa: E402
     parse_device_status_response,
     parse_micropython_status_response,
     parse_python_program_response,
+    parse_persistent_program_response,
     parse_input_sensor_response,
     parse_flash_id_response,
     parse_flash_scan_response,
@@ -581,6 +586,62 @@ def build_python_program_result(
     return bytes(frame)
 
 
+def build_persistent_program_result(
+    result: int = 1,
+    state: int = 2,
+    flags: int = 0x17,
+    erased_sector_mask: int = 0x3F,
+    active_slot: int = 0xFF,
+    generation: int = 0,
+    source_length: int = 0,
+    record_type: int = 0,
+    last_error: int = 0,
+    source_crc32: int = 0,
+    program_slot_id: int = 0,
+    program_slot_count: int = 8,
+    program_name: str = "",
+) -> bytes:
+    occupied_sector_mask = (~erased_sector_mask) & 0x3F
+    name_bytes = program_name.encode("utf-8")
+    if len(name_bytes) > 31:
+        raise ValueError("test program name is too long")
+    payload = bytearray(76)
+    payload[0:8] = bytes(
+        (
+            3,
+            result,
+            state,
+            flags,
+            program_slot_id,
+            program_slot_count,
+            active_slot,
+            record_type,
+        )
+    )
+    payload[8:12] = generation.to_bytes(4, "little")
+    payload[12:14] = source_length.to_bytes(2, "little")
+    payload[14] = len(name_bytes)
+    payload[15] = last_error
+    payload[16:20] = source_crc32.to_bytes(4, "little")
+    region_start = 33554432 - ((program_slot_id + 1) * 24576)
+    payload[20:24] = region_start.to_bytes(4, "little")
+    payload[24:28] = (24576).to_bytes(4, "little")
+    payload[28:32] = (12288).to_bytes(4, "little")
+    payload[32:36] = (33554432).to_bytes(4, "little")
+    payload[36:39] = bytes.fromhex("EF4019")
+    payload[39] = erased_sector_mask
+    payload[40] = occupied_sector_mask
+    payload[41 : 41 + len(name_bytes)] = name_bytes
+    payload[72] = 2
+    payload[73] = 3
+    frame = bytearray((0x68, 0x21, 0x25))
+    frame += len(payload).to_bytes(2, "little")
+    frame += payload
+    frame.append(checksum(frame))
+    frame.append(0x16)
+    return bytes(frame)
+
+
 class ProtocolTests(unittest.TestCase):
     def test_heartbeat_frame_preserves_legacy_frame_format(self) -> None:
         frame = build_heartbeat_frame()
@@ -1059,6 +1120,50 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(status.result_value, 12345)
         self.assertEqual(status.actual_crc32, crc32)
 
+    def test_persistent_program_status_round_trip(self) -> None:
+        self.assertEqual(
+            build_persistent_program_status_frame(), build_frame(0x25, b"\x00")
+        )
+        self.assertEqual(build_persistent_program_save_frame(), build_frame(0x25, b"\x01"))
+        self.assertEqual(build_persistent_program_load_frame(), build_frame(0x25, b"\x02"))
+        self.assertEqual(build_persistent_program_clear_frame(), build_frame(0x25, b"\x03"))
+        self.assertEqual(
+            build_persistent_program_status_frame(3),
+            build_frame(0x25, b"\x00\x03"),
+        )
+        self.assertEqual(
+            build_persistent_program_save_frame(3, "巡线"),
+            build_frame(0x25, b"\x01\x03\x06" + "巡线".encode("utf-8")),
+        )
+        self.assertEqual(
+            build_persistent_program_load_frame(3), build_frame(0x25, b"\x02\x03")
+        )
+        self.assertEqual(
+            build_persistent_program_clear_frame(3), build_frame(0x25, b"\x03\x03")
+        )
+        status = parse_persistent_program_response(
+            build_persistent_program_result(program_slot_id=3, program_name="巡线")
+        )
+        self.assertIsNotNone(status)
+        self.assertEqual(status.schema_version, 3)
+        self.assertEqual(status.state, 2)
+        self.assertEqual(status.flags, 0x17)
+        self.assertEqual(status.erased_sector_mask, 0x3F)
+        self.assertEqual(status.occupied_sector_mask, 0)
+        self.assertEqual(status.region_start, 0x01FE8000)
+        self.assertEqual(status.region_size, 24576)
+        self.assertEqual(status.slot_size, 12288)
+        self.assertEqual(status.jedec_id, bytes.fromhex("EF4019"))
+        self.assertEqual(status.active_slot, 0xFF)
+        self.assertEqual(status.generation, 0)
+        self.assertEqual(status.program_slot_id, 3)
+        self.assertEqual(status.program_slot_count, 8)
+        self.assertEqual(status.program_name, "巡线")
+        with self.assertRaisesRegex(ValueError, "0..7"):
+            build_persistent_program_status_frame(8)
+        with self.assertRaisesRegex(ValueError, "1..31"):
+            build_persistent_program_save_frame(0, "x" * 32)
+
     def test_motor_type_query_parses_all_four_output_ports(self) -> None:
         self.assertEqual(build_motor_type_frame(), build_frame(0x1A))
         self.assertEqual(build_motor_type_frame(1, 1), build_frame(0x1A, bytes((1, 1))))
@@ -1112,6 +1217,7 @@ class FakeTransport:
         flash_mode_probe: bytes = bytes((0x00, 0x02, 0x00, 0x60, 0x61, 0x60)),
         sensor_type: int = 0x1D,
         sensor_value: int = 42,
+        persistent_erased_mask: int = 0x3F,
     ) -> None:
         self.input_len = 1025
         self.output_len = output_len
@@ -1185,6 +1291,17 @@ class FakeTransport:
         self.sensor_type = sensor_type
         self.sensor_mode = 0
         self.sensor_value = sensor_value
+        self.persistent_slots = [
+            {
+                "erased_mask": persistent_erased_mask if slot_id == 0 else 0x3F,
+                "source": b"",
+                "name": "",
+                "generation": 0,
+                "active_bank": 0xFF,
+                "record_type": 0,
+            }
+            for slot_id in range(8)
+        ]
         self.python_state = 0
         self.python_error = 0
         self.python_flags = 0
@@ -1838,6 +1955,9 @@ class FakeTransport:
         if report[0:3] == b"\x68\x11\x24":
             self._handle_python_program(report)
             return
+        if report[0:3] == b"\x68\x11\x25":
+            self._handle_persistent_program(report)
+            return
         if report[0:3] == b"\x68\x11\x1A":
             self.acks.append(build_motor_type_result())
             return
@@ -1923,6 +2043,103 @@ class FakeTransport:
             )
         )
 
+    def _handle_persistent_program(self, frame: bytes) -> None:
+        action = frame[5]
+        payload_length = int.from_bytes(frame[3:5], "little")
+        program_slot_id = frame[6] if payload_length >= 2 else 0
+        result = 1
+        error = 0
+        if program_slot_id >= len(self.persistent_slots):
+            result = 0
+            error = 9
+            program_slot_id = 0
+        slot = self.persistent_slots[program_slot_id]
+        occupied = slot["erased_mask"] != 0x3F and slot["generation"] == 0
+        if result == 1 and action == 1:
+            if occupied:
+                result = 0
+                error = 2
+            elif not self.python_received or (self.python_flags & 1) == 0:
+                result = 0
+                error = 3
+            else:
+                name = "Program 0"
+                if payload_length >= 4:
+                    name_length = frame[7]
+                    name = bytes(frame[8 : 8 + name_length]).decode("utf-8")
+                slot["source"] = bytes(self.python_received)
+                slot["name"] = name
+                slot["generation"] += 1
+                slot["active_bank"] = (
+                    0
+                    if slot["active_bank"] == 0xFF
+                    else slot["active_bank"] ^ 1
+                )
+                slot["record_type"] = 1
+                sector = slot["active_bank"] * 3
+                slot["erased_mask"] &= ~(1 << sector)
+        elif result == 1 and action == 2:
+            if not slot["source"]:
+                result = 0
+                error = 8
+            else:
+                self.python_received = bytearray(slot["source"])
+                self.python_expected_length = len(slot["source"])
+                self.python_expected_crc32 = (
+                    binascii.crc32(slot["source"]) & 0xFFFFFFFF
+                )
+                self.python_actual_crc32 = self.python_expected_crc32
+                self.python_state = 2
+                self.python_error = 0
+                self.python_flags = 1
+        elif result == 1 and action == 3:
+            if slot["source"]:
+                slot["generation"] += 1
+                slot["active_bank"] ^= 1
+                slot["source"] = b""
+                slot["name"] = ""
+                slot["record_type"] = 2
+                sector = slot["active_bank"] * 3
+                slot["erased_mask"] &= ~(1 << sector)
+        elif result == 1 and action != 0:
+            result = 0
+            error = 6
+
+        if occupied:
+            state = 1
+            flags = 0x13
+            error = error or 2
+        elif slot["source"]:
+            state = 3
+            flags = 0x73
+        elif slot["record_type"] == 2:
+            state = 2
+            flags = 0x53
+        else:
+            state = 2
+            flags = 0x17
+        source_crc32 = (
+            binascii.crc32(slot["source"]) & 0xFFFFFFFF
+            if slot["source"]
+            else 0
+        )
+        self.acks.append(
+            build_persistent_program_result(
+                result=result,
+                state=state,
+                flags=flags,
+                erased_sector_mask=slot["erased_mask"],
+                active_slot=slot["active_bank"],
+                generation=slot["generation"],
+                source_length=len(slot["source"]),
+                record_type=slot["record_type"],
+                last_error=error,
+                source_crc32=source_crc32,
+                program_slot_id=program_slot_id,
+                program_name=slot["name"],
+            )
+        )
+
     def read_report(self, timeout_ms: int = 250) -> bytes | None:
         if self.acks:
             return self.acks.pop(0)
@@ -1977,6 +2194,68 @@ class UpdaterTests(unittest.TestCase):
         cleared = updater.clear_python_program()
         self.assertEqual(cleared.state, 0)
         self.assertEqual(cleared.expected_length, 0)
+
+    def test_reads_persistent_program_storage_status(self) -> None:
+        status = FirmwareUpdater(FakeTransport()).read_persistent_program_status()
+        self.assertEqual(status.state, 2)
+        self.assertEqual(status.erased_sector_mask, 0x3F)
+        self.assertEqual(status.occupied_sector_mask, 0)
+
+        occupied = FirmwareUpdater(
+            FakeTransport(persistent_erased_mask=0x1F)
+        ).read_persistent_program_status()
+        self.assertEqual(occupied.state, 1)
+        self.assertEqual(occupied.occupied_sector_mask, 0x20)
+
+    def test_saves_loads_runs_and_clears_persistent_program(self) -> None:
+        source = b"import est\nest._program_result(12345)\n"
+        updater = FirmwareUpdater(FakeTransport())
+        saved = updater.save_persistent_program(source)
+        self.assertEqual(saved.state, 3)
+        self.assertEqual(saved.generation, 1)
+        self.assertEqual(saved.source_length, len(source))
+        self.assertEqual(saved.record_type, 1)
+        self.assertEqual(saved.program_name, "Program 0")
+
+        updater.clear_python_program()
+        loaded = updater.load_persistent_program()
+        self.assertEqual(loaded.state, 3)
+        self.assertEqual(updater.read_python_program_status().state, 2)
+        completed = updater.run_persistent_program(timeout_ms=2000)
+        self.assertEqual(completed.state, 5)
+        self.assertEqual(completed.result_value, 12345)
+
+        cleared = updater.clear_persistent_program()
+        self.assertEqual(cleared.state, 2)
+        self.assertEqual(cleared.record_type, 2)
+        self.assertEqual(cleared.generation, 2)
+
+    def test_named_program_slots_are_listed_and_loaded_independently(self) -> None:
+        source_two = b"import est\nest._program_result(2002)\n"
+        source_five = b"import est\nest._program_result(5005)\n"
+        transport = FakeTransport()
+        updater = FirmwareUpdater(transport)
+
+        saved_two = updater.save_persistent_program(source_two, 2, "巡线")
+        saved_five = updater.save_persistent_program(source_five, 5, "机械臂")
+        self.assertEqual((saved_two.program_slot_id, saved_two.program_name), (2, "巡线"))
+        self.assertEqual((saved_five.program_slot_id, saved_five.program_name), (5, "机械臂"))
+
+        statuses = updater.list_persistent_programs()
+        self.assertEqual(len(statuses), 8)
+        self.assertEqual(statuses[2].source_length, len(source_two))
+        self.assertEqual(statuses[5].source_length, len(source_five))
+
+        updater.clear_python_program()
+        updater.load_persistent_program(2)
+        self.assertEqual(bytes(transport.python_received), source_two)
+        updater.clear_python_program()
+        updater.load_persistent_program(5)
+        self.assertEqual(bytes(transport.python_received), source_five)
+
+        updater.clear_persistent_program(2)
+        self.assertEqual(updater.read_persistent_program_status(2).record_type, 2)
+        self.assertEqual(updater.read_persistent_program_status(5).program_name, "机械臂")
 
     def test_reads_large_and_medium_motor_identification(self) -> None:
         result = FirmwareUpdater(FakeTransport()).read_motor_types()

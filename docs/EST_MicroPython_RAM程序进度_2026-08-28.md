@@ -4,12 +4,12 @@
 
 ## 当前结论
 
-当前设备运行 `M1.05A`，官方 MicroPython `v1.29.0` 已经真实集成、启动并执行电脑上传的 Python 源码；统一 C 服务 tick、传感器/按键/电池 API、单马达 API、双马达/底盘 API、类型化传感器，以及显示/双色灯/背光 API 的自动实机测试均已完成。
+当前设备运行 `M1.09A`，官方 MicroPython `v1.29.0` 已经真实集成、启动并执行电脑上传的 Python 源码；统一 C 服务 tick、传感器/按键/电池 API、单马达 API、双马达/底盘 API、类型化传感器，以及显示/双色灯/背光 API 的自动实机测试均已完成。RAM 通道的历史结论保留在本文，当前 8 个命名持久化槽位的进度见 `docs/EST_MicroPython_多槽持久化进度_2026-08-28.md`。
 
 `M1.05A` 新增 `est.display`、`est.led` 和 `est.backlight`；LCD 刷新会在小传输块之间执行 VM hook。测试图、三种灯态和背光 20%/0%/100% 完成三轮真机脚本，用户确认没有问题；测试脚本位于 `tools/est_hid_sender/examples/test_display_led_backlight.py`。
 
 - APP 起点仍为 `0x08010000`，现有 `03.00B` Bootloader 和 `APP=` 升级格式不变。
-- 应用协议为 `1.15`；`0x23` 查询解释器健康，`0x24` 管理 RAM Python 程序。
+- 当前应用协议为 `1.19`；`0x23` 查询解释器健康，`0x24` 管理 RAM Python 程序，`0x25` 管理命名持久化槽位。
 - Python 堆为 48384 字节；M0.94A 冷启动实测剩余 45728 字节，启动 10 ms，最大 GC 停顿 593 us，自检值 96。
 - RAM 源码最大 8192 字节，只在本次开机有效；分块必须连续，并由设备核对 CRC32。
 - 单次硬执行上限为 100-10000 ms。
@@ -112,10 +112,18 @@ M1.02A 上一实机基线：
 - HID 工具测试：112 项通过。
 - ARM GCC 12.2.1 `-Werror`、向量表、包头、固定 256 KiB 长度和 manifest 校验通过。
 
-M1.05A 当前实机包：
+M1.05A 显示与灯光阶段包：
 
 - 发布包：`firmware/releases/M1.05A/est_minimal_upgrade_app_M1.05A.upgrade.bin`
 - manifest：`firmware/releases/M1.05A/est_minimal_upgrade_app_M1.05A.manifest.json`
 - SHA-256：`bf41afdd7df8af9bd24801dfab2679333abde864b69399572889e2343bd64455`
 - 固件测试：81 项通过；HID 工具测试：112 项通过。
 - ARM GCC 12.2.1 `-Werror`、向量表、`APP=` 包头、固定 256 KiB 长度和 manifest 校验通过；显示、双色灯和背光三轮真机脚本均已通过。
+
+M1.09A 当前实机包：
+
+- 发布包：`firmware/releases/M1.09A/est_minimal_upgrade_app_M1.09A.upgrade.bin`
+- manifest：`firmware/releases/M1.09A/est_minimal_upgrade_app_M1.09A.manifest.json`
+- SHA-256：`bda17136eb5b2aa80d03abd32460899dfddee5a9653b2eec482bbbf1bf1f4425`
+- 固件测试：82 项通过；HID 工具测试：118 项通过。
+- 8 个命名持久化槽位的独立操作和完整关机重启保持均已通过；验收后测试程序已删除。

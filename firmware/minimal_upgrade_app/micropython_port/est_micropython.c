@@ -349,6 +349,25 @@ est_result_t est_micropython_program_write(uint16_t offset,
 	return EST_OK;
 }
 
+est_result_t est_micropython_program_read(uint16_t offset, uint8_t *data,
+	uint16_t length)
+{
+	if (data == NULL || length == 0U) {
+		return EST_ERR_INVALID_ARGUMENT;
+	}
+	if (program_executing || program_run_requested) {
+		return EST_ERR_BUSY;
+	}
+	if ((program_status.flags & EST_MICROPYTHON_PROGRAM_FLAG_VALID) == 0U) {
+		return EST_ERR_STATE;
+	}
+	if ((uint32_t)offset + length > program_status.expected_length) {
+		return EST_ERR_INVALID_ARGUMENT;
+	}
+	memcpy(data, &program_source[offset], length);
+	return EST_OK;
+}
+
 est_result_t est_micropython_program_run(uint32_t timeout_ms)
 {
 	if ((program_status.flags & EST_MICROPYTHON_PROGRAM_FLAG_VALID) == 0U) {

@@ -38,7 +38,20 @@ python tools/est_hid_sender/est_hid_sender.py python-stop
 python tools/est_hid_sender/est_hid_sender.py python-clear
 ```
 
-上传过程按顺序分块并核对 CRC32。`--timeout-ms` 范围为 100-10000 ms；正常完成、Python 异常、主动停止或硬超时都会停止全部马达。异常清理会重启四路传感器，UART 传感器可能短暂同步约 2 秒。当前 `est` 模块只提供最小验证接口，RAM 脚本还不能启动马达；`examples` 中的三段脚本分别用于计算结果、异常清理和死循环超时测试。
+上传过程按顺序分块并核对 CRC32。`--timeout-ms` 范围为 100-10000 ms；正常完成、Python 异常、主动停止或硬超时都会停止全部马达。异常清理会重启四路传感器，UART 传感器可能短暂同步约 2 秒。当前 `est` 模块已经开放单/双马达、底盘、类型化传感器、按键、电池、屏幕、双色灯和背光 API；`examples` 包含计算、异常、超时和硬件接口测试脚本。
+
+`M1.09A` 起可管理 8 个命名持久化程序槽位，槽位 ID 为 `0..7`：
+
+```powershell
+python tools/est_hid_sender/est_hid_sender.py python-saved-list
+python tools/est_hid_sender/est_hid_sender.py python-saved-status --slot 2
+python tools/est_hid_sender/est_hid_sender.py python-save `
+  --slot 2 --name "巡线" --file tools/est_hid_sender/examples/compute_result.py
+python tools/est_hid_sender/est_hid_sender.py python-run-saved --slot 2
+python tools/est_hid_sender/est_hid_sender.py python-saved-clear --slot 2
+```
+
+程序名称必须是 `1..31` 个 UTF-8 字节；中文通常占 3 字节，限制不是 31 个中文字符。省略 `--name` 时使用源文件名（不含扩展名）。`python-saved-list` 和 `python-saved-status` 只读；`python-save` 先将源码上传并校验到 RAM，再写入指定逻辑槽位；`python-saved-clear` 只删除指定槽位。每个逻辑槽位内部的 `active_bank=0/1` 是断电恢复机制，不是另一个程序 ID。固件目前不会开机自动运行程序。
 
 只读检测外部 Flash 型号（不会擦除或写入）：
 

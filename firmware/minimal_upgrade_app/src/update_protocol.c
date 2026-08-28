@@ -13,6 +13,7 @@
 #include "est_drive.h"
 #include "est_micropython.h"
 #include "est_motor.h"
+#include "est_program_store.h"
 #include "est_sensor.h"
 #include "est_system.h"
 #include "update_protocol.h"
@@ -25,6 +26,8 @@
 #define DEVICE_STATUS_PORT_ENTRY_LENGTH 6U
 #define MICROPYTHON_STATUS_PAYLOAD_LENGTH 28U
 #define PYTHON_PROGRAM_STATUS_PAYLOAD_LENGTH 32U
+#define PERSISTENT_PROGRAM_STATUS_PAYLOAD_LENGTH 76U
+#define PERSISTENT_PROGRAM_STATUS_SCHEMA_VERSION 3U
 
 enum update_ack_flag {
 	UPDATE_ACK_FAILURE = 0x00,
@@ -159,6 +162,9 @@ static bool report_starts_logical_frame(const uint8_t *report, size_t length)
 	}
 	if (report[2] == PYTHON_PROGRAM_COMMAND) {
 		return data_length >= 1U && data_length <= 1010U;
+	}
+	if (report[2] == PERSISTENT_PROGRAM_COMMAND) {
+		return data_length >= 1U && data_length <= 34U;
 	}
 	if (report[2] == INPUT_SENSOR_COMMAND) {
 		return data_length == 2U || data_length == 3U;
@@ -723,7 +729,8 @@ static void queue_device_status(uint32_t now_ms)
 		DEVICE_CAPABILITY_DRIVE_STEER |
 		DEVICE_CAPABILITY_DRIVE_STEER_FOR |
 		DEVICE_CAPABILITY_MICROPYTHON |
-		DEVICE_CAPABILITY_PYTHON_PROGRAM;
+		DEVICE_CAPABILITY_PYTHON_PROGRAM |
+		DEVICE_CAPABILITY_PERSISTENT_PROGRAM;
 
 	(void)est_battery_get_status(&battery);
 	report[0] = FRAME_START_BYTE;
@@ -868,6 +875,131 @@ static void handle_python_program(const uint8_t *data, uint16_t data_length)
 		result = 0U;
 	}
 	queue_python_program_status(result);
+}
+
+static void queue_persistent_program_status(uint8_t result,
+	uint8_t program_slot_id, est_program_store_error_t response_error)
+{
+	est_program_store_status_t status = {0};
+	uint8_t report[USB_HID_REPORT_SIZE] = {0};
+	uint8_t *payload = &report[5];
+	uint32_t program_region_start = 0U;
+
+	if (!est_program_store_get_slot_status(program_slot_id, &status)) {
+		status.program_slot_id = program_slot_id;
+		status.active_bank = 0xFFU;
+		result = 0U;
+		if (response_error == EST_PROGRAM_STORE_ERROR_NONE) {
+			response_error = EST_PROGRAM_STORE_ERROR_INVALID_SLOT;
+		}
+	} else {
+		program_region_start = EST_PROGRAM_STORE_FLASH_SIZE -
+			(((uint32_t)program_slot_id + 1U) *
+			 EST_PROGRAM_STORE_PROGRAM_SLOT_SIZE);
+	}
+	report[0] = FRAME_START_BYTE;
+	report[1] = DEVICE_FRAME_DIRECTION;
+	report[2] = PERSISTENT_PROGRAM_COMMAND;
+	report[3] = PERSISTENT_PROGRAM_STATUS_PAYLOAD_LENGTH;
+	report[4] = 0U;
+	payload[0] = PERSISTENT_PROGRAM_STATUS_SCHEMA_VERSION;
+	payload[1] = result;
+	payload[2] = (uint8_t)status.state;
+	payload[3] = status.flags;
+	payload[4] = status.program_slot_id;
+	payload[5] = EST_PROGRAM_STORE_PROGRAM_SLOT_COUNT;
+	payload[6] = status.active_bank;
+	payload[7] = (uint8_t)status.record_type;
+	write_u32_le(&payload[8], status.generation);
+	write_u16_le(&payload[12], status.source_length);
+	payload[14] = status.name_length;
+	payload[15] = response_error != EST_PROGRAM_STORE_ERROR_NONE ?
+		(uint8_t)response_error : (uint8_t)status.last_error;
+	write_u32_le(&payload[16], status.source_crc32);
+	write_u32_le(&payload[20], program_region_start);
+	write_u32_le(&payload[24], EST_PROGRAM_STORE_PROGRAM_SLOT_SIZE);
+	write_u32_le(&payload[28], EST_PROGRAM_STORE_BANK_SIZE);
+	write_u32_le(&payload[32], EST_PROGRAM_STORE_FLASH_SIZE);
+	payload[36] = status.identity.manufacturer;
+	payload[37] = status.identity.memory_type;
+	payload[38] = status.identity.capacity;
+	payload[39] = status.erased_sector_mask;
+	payload[40] = status.occupied_sector_mask;
+	memcpy(&payload[41], status.name, EST_PROGRAM_STORE_NAME_MAX_BYTES);
+	payload[72] = EST_PROGRAM_STORE_BANK_COUNT;
+	payload[73] = EST_PROGRAM_STORE_SECTORS_PER_BANK;
+	report[5U + PERSISTENT_PROGRAM_STATUS_PAYLOAD_LENGTH] = checksum(report,
+		5U + PERSISTENT_PROGRAM_STATUS_PAYLOAD_LENGTH);
+	report[6U + PERSISTENT_PROGRAM_STATUS_PAYLOAD_LENGTH] = FRAME_END_BYTE;
+	(void)usb_hid_queue_report(report, false);
+}
+
+static void handle_persistent_program(const uint8_t *data,
+	uint16_t data_length)
+{
+	est_result_t operation_result = EST_OK;
+	est_program_store_error_t response_error = EST_PROGRAM_STORE_ERROR_NONE;
+	uint8_t program_slot_id = 0U;
+	uint8_t result = 1U;
+	const uint8_t *name = NULL;
+	uint8_t name_length = 0U;
+
+	if (data_length == 0U) {
+		operation_result = EST_ERR_INVALID_ARGUMENT;
+	} else if (data_length >= 2U) {
+		program_slot_id = data[1];
+	}
+	if (operation_result == EST_OK &&
+	    program_slot_id >= EST_PROGRAM_STORE_PROGRAM_SLOT_COUNT) {
+		operation_result = EST_ERR_INVALID_ARGUMENT;
+		response_error = EST_PROGRAM_STORE_ERROR_INVALID_SLOT;
+	} else if (data[0] == PERSISTENT_PROGRAM_ACTION_STATUS) {
+		if (data_length != 1U && data_length != 2U) {
+			operation_result = EST_ERR_INVALID_ARGUMENT;
+		}
+	} else if (data[0] == PERSISTENT_PROGRAM_ACTION_SAVE) {
+		if (data_length == 1U) {
+			static const uint8_t legacy_name[] = "Program 0";
+
+			name = legacy_name;
+			name_length = sizeof(legacy_name) - 1U;
+		} else if (data_length >= 4U && data[2] > 0U &&
+			   data[2] <= EST_PROGRAM_STORE_NAME_MAX_BYTES &&
+			   data_length == (uint16_t)(3U + data[2])) {
+			name_length = data[2];
+			name = &data[3];
+		} else {
+			operation_result = EST_ERR_INVALID_ARGUMENT;
+			response_error = EST_PROGRAM_STORE_ERROR_INVALID_NAME;
+		}
+		if (operation_result == EST_OK) {
+			operation_result = est_program_store_save(program_slot_id,
+				name, name_length);
+			if (operation_result == EST_ERR_INVALID_ARGUMENT) {
+				response_error = EST_PROGRAM_STORE_ERROR_INVALID_NAME;
+			}
+		}
+	} else if (data[0] == PERSISTENT_PROGRAM_ACTION_LOAD) {
+		if (data_length != 1U && data_length != 2U) {
+			operation_result = EST_ERR_INVALID_ARGUMENT;
+		} else {
+			operation_result = est_program_store_load(program_slot_id);
+		}
+	} else if (data[0] == PERSISTENT_PROGRAM_ACTION_CLEAR) {
+		if (data_length != 1U && data_length != 2U) {
+			operation_result = EST_ERR_INVALID_ARGUMENT;
+		} else {
+			operation_result = est_program_store_clear(program_slot_id);
+		}
+	} else {
+		operation_result = EST_ERR_INVALID_ARGUMENT;
+	}
+	if (operation_result == EST_ERR_BUSY) {
+		result = 2U;
+	} else if (operation_result != EST_OK) {
+		result = 0U;
+	}
+	queue_persistent_program_status(result, program_slot_id, response_error);
 }
 
 static uint8_t apply_motor_test_action(uint8_t action, uint32_t now_ms,
@@ -1449,6 +1581,9 @@ static void handle_logical_frame(uint32_t now_ms)
 	} else if (logical_frame[2] == PYTHON_PROGRAM_COMMAND &&
 		   data_length >= 1U && data_length <= 1010U) {
 		handle_python_program(&logical_frame[5], data_length);
+	} else if (logical_frame[2] == PERSISTENT_PROGRAM_COMMAND &&
+		   data_length >= 1U && data_length <= 34U) {
+		handle_persistent_program(&logical_frame[5], data_length);
 	} else if (logical_frame[2] == MOTOR_TYPE_COMMAND &&
 		   (data_length == 0U || data_length == 2U)) {
 		handle_motor_type(&logical_frame[5], data_length, now_ms);

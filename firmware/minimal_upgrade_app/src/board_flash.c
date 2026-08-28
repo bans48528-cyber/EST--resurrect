@@ -6,6 +6,7 @@
 #include <libopencm3/stm32/spi.h>
 
 #include "board_flash.h"
+#include "watchdog.h"
 
 #define FLASH_CHIP_SELECT_PORT GPIOA
 #define FLASH_CHIP_SELECT_PIN GPIO15
@@ -30,6 +31,8 @@
 #define READ_STATUS_3_COMMAND 0x15U
 
 #define FLASH_SECTOR_SIZE 4096U
+#define FLASH_PAGE_SIZE 256U
+#define FLASH_CAPACITY_BYTES 33554432U
 #define FLASH_TEST_PATTERN_SIZE 32U
 #define FLASH_BUSY_POLL_LIMIT 2000000U
 
@@ -103,6 +106,9 @@ static bool wait_ready(void)
 	uint8_t status;
 
 	for (poll = 0U; poll < FLASH_BUSY_POLL_LIMIT; poll++) {
+		if ((poll & 0xFFU) == 0U) {
+			watchdog_kick();
+		}
 		select_flash();
 		(void)transfer_byte(READ_STATUS_COMMAND);
 		status = transfer_byte(0xFFU);
@@ -162,6 +168,7 @@ static bool sector_is_erased_in_4byte_mode(uint32_t address)
 	size_t index;
 
 	for (offset = 0U; offset < FLASH_SECTOR_SIZE; offset += sizeof(buffer)) {
+		watchdog_kick();
 		read_data_in_4byte_mode(address + offset, buffer, sizeof(buffer));
 		for (index = 0U; index < sizeof(buffer); index++) {
 			if (buffer[index] != 0xFFU) {
@@ -170,6 +177,12 @@ static bool sector_is_erased_in_4byte_mode(uint32_t address)
 		}
 	}
 	return true;
+}
+
+static bool range_is_valid(uint32_t address, size_t length)
+{
+	return length > 0U && address < FLASH_CAPACITY_BYTES &&
+		length <= (size_t)(FLASH_CAPACITY_BYTES - address);
 }
 
 void board_flash_init(void)
@@ -249,6 +262,7 @@ bool board_flash_sector_is_erased_4byte(uint32_t address)
 	size_t index;
 
 	for (offset = 0U; offset < FLASH_SECTOR_SIZE; offset += sizeof(buffer)) {
+		watchdog_kick();
 		read_data_4byte(address + offset, buffer, sizeof(buffer));
 		for (index = 0U; index < sizeof(buffer); index++) {
 			if (buffer[index] != 0xFFU) {
@@ -257,6 +271,82 @@ bool board_flash_sector_is_erased_4byte(uint32_t address)
 		}
 	}
 	return true;
+}
+
+bool board_flash_read_4byte(uint32_t address, uint8_t *buffer, size_t length)
+{
+	if (buffer == NULL || !range_is_valid(address, length)) {
+		return false;
+	}
+	read_data_4byte(address, buffer, length);
+	return true;
+}
+
+bool board_flash_program_4byte(uint32_t address, const uint8_t *data,
+	size_t length)
+{
+	bool success = false;
+	bool mode_change_attempted = false;
+
+	if (data == NULL || !range_is_valid(address, length)) {
+		return false;
+	}
+	send_command(ENTER_4BYTE_MODE_COMMAND);
+	mode_change_attempted = true;
+	if ((read_status_register(READ_STATUS_3_COMMAND) & 0x01U) == 0U) {
+		goto cleanup;
+	}
+	while (length > 0U) {
+		size_t page_remaining = FLASH_PAGE_SIZE -
+			(size_t)(address & (FLASH_PAGE_SIZE - 1U));
+		size_t chunk_length = length < page_remaining ? length : page_remaining;
+
+		if (!write_enable_latched() ||
+		    !page_program_in_4byte_mode(address, data, chunk_length)) {
+			goto cleanup;
+		}
+		address += (uint32_t)chunk_length;
+		data += chunk_length;
+		length -= chunk_length;
+	}
+	success = true;
+
+cleanup:
+	if (mode_change_attempted) {
+		send_command(EXIT_4BYTE_MODE_COMMAND);
+		if ((read_status_register(READ_STATUS_3_COMMAND) & 0x01U) != 0U) {
+			success = false;
+		}
+	}
+	return success;
+}
+
+bool board_flash_erase_sector_4byte(uint32_t address)
+{
+	bool success = false;
+	bool mode_change_attempted = false;
+
+	if ((address & (FLASH_SECTOR_SIZE - 1U)) != 0U ||
+	    !range_is_valid(address, FLASH_SECTOR_SIZE)) {
+		return false;
+	}
+	send_command(ENTER_4BYTE_MODE_COMMAND);
+	mode_change_attempted = true;
+	if ((read_status_register(READ_STATUS_3_COMMAND) & 0x01U) == 0U ||
+	    !write_enable_latched() ||
+	    !erase_sector_in_4byte_mode(address)) {
+		goto cleanup;
+	}
+	success = true;
+
+cleanup:
+	if (mode_change_attempted) {
+		send_command(EXIT_4BYTE_MODE_COMMAND);
+		if ((read_status_register(READ_STATUS_3_COMMAND) & 0x01U) != 0U) {
+			success = false;
+		}
+	}
+	return success;
 }
 
 enum board_flash_test_result board_flash_test_empty_sector_4byte(uint32_t address)

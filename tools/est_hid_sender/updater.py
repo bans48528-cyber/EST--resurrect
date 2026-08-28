@@ -60,6 +60,7 @@ from .constants import (
     MOTOR_TEST_ACTION_STOP,
     MOTOR_TEST_TIMEOUT_SECONDS,
     PACKET_ACK_TIMEOUT_SECONDS,
+    PERSISTENT_PROGRAM_TIMEOUT_SECONDS,
     PYTHON_PROGRAM_CHUNK_SIZE,
     PYTHON_PROGRAM_FLAG_TIMEOUT_ARMED,
 )
@@ -83,6 +84,10 @@ from .protocol import (
     build_python_program_run_frame,
     build_python_program_status_frame,
     build_python_program_stop_frame,
+    build_persistent_program_status_frame,
+    build_persistent_program_save_frame,
+    build_persistent_program_load_frame,
+    build_persistent_program_clear_frame,
     build_heartbeat_frame,
     build_input_sensor_frame,
     build_flash_id_frame,
@@ -110,6 +115,7 @@ from .protocol import (
     parse_device_status_response,
     parse_micropython_status_response,
     parse_python_program_response,
+    parse_persistent_program_response,
     parse_input_sensor_response,
     parse_flash_id_response,
     parse_flash_scan_response,
@@ -147,6 +153,7 @@ from .protocol import (
     DeviceStatus,
     MicroPythonStatus,
     PythonProgramStatus,
+    PersistentProgramStatus,
     DriveStraightResult,
     DriveRunResult,
     DriveSteerForResult,
@@ -245,6 +252,85 @@ class FirmwareUpdater:
     def read_python_program_status(self) -> PythonProgramStatus:
         return self._python_program_action(build_python_program_status_frame())
 
+    def read_persistent_program_status(
+        self, program_slot_id: int = 0
+    ) -> PersistentProgramStatus:
+        return self._persistent_program_action(
+            build_persistent_program_status_frame(program_slot_id)
+        )
+
+    def list_persistent_programs(self) -> list[PersistentProgramStatus]:
+        first = self.read_persistent_program_status(0)
+        if first.schema_version < 3:
+            return [first]
+        statuses = [first]
+        for program_slot_id in range(1, first.program_slot_count):
+            statuses.append(self.read_persistent_program_status(program_slot_id))
+        return statuses
+
+    def save_persistent_program(
+        self,
+        source: bytes,
+        program_slot_id: int = 0,
+        program_name: str = "Program 0",
+    ) -> PersistentProgramStatus:
+        self.upload_python_program(source)
+        status = self._persistent_program_action(
+            build_persistent_program_save_frame(program_slot_id, program_name)
+        )
+        self._require_persistent_program_success(status, "save program")
+        return status
+
+    def load_persistent_program(
+        self, program_slot_id: int = 0
+    ) -> PersistentProgramStatus:
+        status = self._persistent_program_action(
+            build_persistent_program_load_frame(program_slot_id)
+        )
+        self._require_persistent_program_success(status, "load program")
+        return status
+
+    def clear_persistent_program(
+        self, program_slot_id: int = 0
+    ) -> PersistentProgramStatus:
+        status = self._persistent_program_action(
+            build_persistent_program_clear_frame(program_slot_id)
+        )
+        self._require_persistent_program_success(status, "clear saved program")
+        return status
+
+    def run_persistent_program(
+        self, timeout_ms: int = 2000, program_slot_id: int = 0
+    ) -> PythonProgramStatus:
+        self.load_persistent_program(program_slot_id)
+        return self._run_loaded_python_program(timeout_ms)
+
+    def _persistent_program_action(self, frame: bytes) -> PersistentProgramStatus:
+        report = frame.ljust(LEGACY_REPORT_SIZE, b"\x00")
+        self.transport.write_report(report)
+        deadline = time.monotonic() + PERSISTENT_PROGRAM_TIMEOUT_SECONDS
+        while time.monotonic() < deadline:
+            response = self.transport.read_report()
+            if not response:
+                continue
+            status = parse_persistent_program_response(response)
+            if status is not None:
+                return status
+        raise DiagnosticTimeoutError(
+            "设备没有返回持久化程序存储状态；请确认固件支持 0x25 命令"
+        )
+
+    @staticmethod
+    def _require_persistent_program_success(
+        status: PersistentProgramStatus, operation: str
+    ) -> None:
+        if status.result == 2:
+            raise EstUpdaterError(f"持久化程序存储忙：{operation}")
+        if status.result != 1:
+            raise EstUpdaterError(
+                f"持久化程序请求被拒绝：{operation}，error={status.last_error}"
+            )
+
     def upload_python_program(self, source: bytes) -> PythonProgramStatus:
         if not source:
             raise ValueError("Python program must not be empty")
@@ -271,6 +357,9 @@ class FirmwareUpdater:
         self, source: bytes, timeout_ms: int = 2000
     ) -> PythonProgramStatus:
         self.upload_python_program(source)
+        return self._run_loaded_python_program(timeout_ms)
+
+    def _run_loaded_python_program(self, timeout_ms: int) -> PythonProgramStatus:
         status = self._python_program_action(
             build_python_program_run_frame(timeout_ms)
         )

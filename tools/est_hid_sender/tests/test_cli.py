@@ -94,6 +94,67 @@ class CliTests(unittest.TestCase):
         self.assertIn(f"received={len(source)}/{len(source)}", text)
         self.assertIn("result_value=12345", text)
 
+    def test_python_saved_status_reports_read_only_empty_region(self) -> None:
+        output = io.StringIO()
+        transport = FakeTransport()
+        with mock.patch.object(cli.HidTransport, "open", return_value=transport):
+            with contextlib.redirect_stdout(output):
+                self.assertEqual(cli.main(["python-saved-status"]), 0)
+        text = output.getvalue()
+        self.assertIn("state=ready", text)
+        self.assertIn("jedec_id=EF4019", text)
+        self.assertIn("region_start=0x01FFA000", text)
+        self.assertIn("erased_sector_mask=0x3F", text)
+        self.assertIn("storage_writable=yes", text)
+
+    def test_python_save_run_saved_and_clear(self) -> None:
+        source = b"import est\nest._program_result(12345)\n"
+        transport = FakeTransport()
+        with tempfile.TemporaryDirectory() as temp:
+            source_path = Path(temp) / "saved.py"
+            source_path.write_bytes(source)
+            output = io.StringIO()
+            with mock.patch.object(cli.HidTransport, "open", return_value=transport):
+                with contextlib.redirect_stdout(output):
+                    self.assertEqual(
+                        cli.main(
+                            [
+                                "python-save",
+                                "--file",
+                                str(source_path),
+                                "--slot",
+                                "3",
+                                "--name",
+                                "巡线",
+                            ]
+                        ),
+                        0,
+                    )
+                    self.assertEqual(cli.main(["python-saved-list"]), 0)
+                    self.assertEqual(
+                        cli.main(
+                            [
+                                "python-run-saved",
+                                "--slot",
+                                "3",
+                                "--timeout-ms",
+                                "2000",
+                            ]
+                        ),
+                        0,
+                    )
+                    self.assertEqual(
+                        cli.main(["python-saved-clear", "--slot", "3"]), 0
+                    )
+        text = output.getvalue()
+        self.assertIn("state=saved", text)
+        self.assertIn("program_slot_id=3", text)
+        self.assertIn("program_name=巡线", text)
+        self.assertIn("slot=3 state=saved", text)
+        self.assertIn("record_type=program", text)
+        self.assertIn("result_value=12345", text)
+        self.assertIn("record_type=tombstone", text)
+
     def test_flash_id_identifies_w25q64(self) -> None:
         output = io.StringIO()
         transport = FakeTransport(jedec_id=bytes.fromhex("EF4017"))

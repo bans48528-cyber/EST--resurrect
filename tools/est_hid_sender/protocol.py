@@ -32,6 +32,13 @@ from .constants import (
     LEGACY_REPORT_SIZE,
     MAX_PAYLOAD,
     MICROPYTHON_STATUS_COMMAND,
+    PERSISTENT_PROGRAM_ACTION_STATUS,
+    PERSISTENT_PROGRAM_ACTION_SAVE,
+    PERSISTENT_PROGRAM_ACTION_LOAD,
+    PERSISTENT_PROGRAM_ACTION_CLEAR,
+    PERSISTENT_PROGRAM_COMMAND,
+    PERSISTENT_PROGRAM_NAME_MAX_BYTES,
+    PERSISTENT_PROGRAM_SLOT_COUNT,
     PYTHON_PROGRAM_ACTION_BEGIN,
     PYTHON_PROGRAM_ACTION_CHUNK,
     PYTHON_PROGRAM_ACTION_CLEAR,
@@ -359,6 +366,32 @@ class PythonProgramStatus:
     result_value: int
 
 
+@dataclass(frozen=True)
+class PersistentProgramStatus:
+    schema_version: int
+    result: int
+    state: int
+    flags: int
+    erased_sector_mask: int
+    occupied_sector_mask: int
+    slot_count: int
+    sectors_per_slot: int
+    region_start: int
+    region_size: int
+    slot_size: int
+    flash_size: int
+    jedec_id: bytes
+    active_slot: int
+    generation: int
+    source_length: int
+    record_type: int
+    last_error: int
+    source_crc32: int
+    program_slot_id: int
+    program_slot_count: int
+    program_name: str
+
+
 def checksum(data: bytes | bytearray) -> int:
     return sum(data) & 0xFF
 
@@ -440,6 +473,56 @@ def build_python_program_stop_frame() -> bytes:
 
 def build_python_program_clear_frame() -> bytes:
     return build_frame(PYTHON_PROGRAM_COMMAND, bytes((PYTHON_PROGRAM_ACTION_CLEAR,)))
+
+
+def _validate_persistent_program_slot(program_slot_id: int) -> None:
+    if not 0 <= program_slot_id < PERSISTENT_PROGRAM_SLOT_COUNT:
+        raise ValueError("Persistent program slot must be 0..7")
+
+
+def build_persistent_program_status_frame(program_slot_id: int = 0) -> bytes:
+    _validate_persistent_program_slot(program_slot_id)
+    payload = bytes((PERSISTENT_PROGRAM_ACTION_STATUS,))
+    if program_slot_id != 0:
+        payload += bytes((program_slot_id,))
+    return build_frame(PERSISTENT_PROGRAM_COMMAND, payload)
+
+
+def build_persistent_program_save_frame(
+    program_slot_id: int = 0, program_name: str | None = None
+) -> bytes:
+    _validate_persistent_program_slot(program_slot_id)
+    if program_name is None:
+        if program_slot_id != 0:
+            raise ValueError("A program name is required outside slot 0")
+        return build_frame(
+            PERSISTENT_PROGRAM_COMMAND, bytes((PERSISTENT_PROGRAM_ACTION_SAVE,))
+        )
+    encoded_name = program_name.encode("utf-8")
+    if not encoded_name or len(encoded_name) > PERSISTENT_PROGRAM_NAME_MAX_BYTES:
+        raise ValueError("Persistent program name must be 1..31 UTF-8 bytes")
+    if b"\x00" in encoded_name:
+        raise ValueError("Persistent program name must not contain NUL bytes")
+    payload = bytes(
+        (PERSISTENT_PROGRAM_ACTION_SAVE, program_slot_id, len(encoded_name))
+    ) + encoded_name
+    return build_frame(PERSISTENT_PROGRAM_COMMAND, payload)
+
+
+def build_persistent_program_load_frame(program_slot_id: int = 0) -> bytes:
+    _validate_persistent_program_slot(program_slot_id)
+    payload = bytes((PERSISTENT_PROGRAM_ACTION_LOAD,))
+    if program_slot_id != 0:
+        payload += bytes((program_slot_id,))
+    return build_frame(PERSISTENT_PROGRAM_COMMAND, payload)
+
+
+def build_persistent_program_clear_frame(program_slot_id: int = 0) -> bytes:
+    _validate_persistent_program_slot(program_slot_id)
+    payload = bytes((PERSISTENT_PROGRAM_ACTION_CLEAR,))
+    if program_slot_id != 0:
+        payload += bytes((program_slot_id,))
+    return build_frame(PERSISTENT_PROGRAM_COMMAND, payload)
 
 
 def build_flash_id_frame() -> bytes:
@@ -1590,6 +1673,88 @@ def parse_python_program_response(report: bytes) -> PythonProgramStatus | None:
         duration_ms=int.from_bytes(payload[20:24], "little"),
         timeout_ms=int.from_bytes(payload[24:28], "little"),
         result_value=int.from_bytes(payload[28:32], "little", signed=True),
+    )
+
+
+def parse_persistent_program_response(
+    report: bytes,
+) -> PersistentProgramStatus | None:
+    if len(report) < 5:
+        return None
+    payload_length = int.from_bytes(report[3:5], "little")
+    if payload_length not in (28, 40, 76):
+        return None
+    checksum_index = 5 + payload_length
+    end_index = checksum_index + 1
+    if len(report) <= end_index:
+        return None
+    if report[0] != FRAME_START:
+        return None
+    if report[1] != DEVICE_DIRECTION or report[2] != PERSISTENT_PROGRAM_COMMAND:
+        return None
+    if report[end_index] != FRAME_END:
+        return None
+    if checksum(report[:checksum_index]) != report[checksum_index]:
+        return None
+
+    payload = report[5:checksum_index]
+    if payload_length == 76:
+        name_length = min(payload[14], PERSISTENT_PROGRAM_NAME_MAX_BYTES)
+        return PersistentProgramStatus(
+            schema_version=payload[0],
+            result=payload[1],
+            state=payload[2],
+            flags=payload[3],
+            erased_sector_mask=payload[39],
+            occupied_sector_mask=payload[40],
+            slot_count=payload[72],
+            sectors_per_slot=payload[73],
+            region_start=int.from_bytes(payload[20:24], "little"),
+            region_size=int.from_bytes(payload[24:28], "little"),
+            slot_size=int.from_bytes(payload[28:32], "little"),
+            flash_size=int.from_bytes(payload[32:36], "little"),
+            jedec_id=bytes(payload[36:39]),
+            active_slot=payload[6],
+            generation=int.from_bytes(payload[8:12], "little"),
+            source_length=int.from_bytes(payload[12:14], "little"),
+            record_type=payload[7],
+            last_error=payload[15],
+            source_crc32=int.from_bytes(payload[16:20], "little"),
+            program_slot_id=payload[4],
+            program_slot_count=payload[5],
+            program_name=bytes(payload[41 : 41 + name_length]).decode(
+                "utf-8", errors="replace"
+            ),
+        )
+    return PersistentProgramStatus(
+        schema_version=payload[0],
+        result=payload[1],
+        state=payload[2],
+        flags=payload[3],
+        erased_sector_mask=payload[4],
+        occupied_sector_mask=payload[5],
+        slot_count=payload[6],
+        sectors_per_slot=payload[7],
+        region_start=int.from_bytes(payload[8:12], "little"),
+        region_size=int.from_bytes(payload[12:16], "little"),
+        slot_size=int.from_bytes(payload[16:20], "little"),
+        flash_size=int.from_bytes(payload[20:24], "little"),
+        jedec_id=bytes(payload[24:27]),
+        active_slot=payload[27] if payload_length == 40 else 0xFF,
+        generation=(
+            int.from_bytes(payload[28:32], "little") if payload_length == 40 else 0
+        ),
+        source_length=(
+            int.from_bytes(payload[32:34], "little") if payload_length == 40 else 0
+        ),
+        record_type=payload[34] if payload_length == 40 else 0,
+        last_error=payload[35] if payload_length == 40 else 0,
+        source_crc32=(
+            int.from_bytes(payload[36:40], "little") if payload_length == 40 else 0
+        ),
+        program_slot_id=0,
+        program_slot_count=1,
+        program_name="",
     )
 
 

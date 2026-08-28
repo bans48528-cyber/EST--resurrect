@@ -14,6 +14,8 @@ from .constants import (
     DEVICE_CAPABILITY_INPUT_SENSOR,
     DEVICE_CAPABILITY_KEYS,
     DEVICE_CAPABILITY_MICROPYTHON,
+    DEVICE_CAPABILITY_PERSISTENT_PROGRAM,
+    PERSISTENT_PROGRAM_SLOT_COUNT,
     DEVICE_CAPABILITY_PYTHON_PROGRAM,
     DEVICE_CAPABILITY_MOTOR_CONTROL,
     DEVICE_CAPABILITY_MOTOR_PAIR_POSITION,
@@ -51,6 +53,58 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "python-program-status", help="只读查看 RAM Python 程序状态"
     )
     add_device_options(python_program_status)
+
+    python_saved_status = commands.add_parser(
+        "python-saved-status", help="只读检查持久化程序候选存储区"
+    )
+    add_device_options(python_saved_status)
+    python_saved_status.add_argument(
+        "--slot", type=int, choices=range(PERSISTENT_PROGRAM_SLOT_COUNT), default=0
+    )
+
+    python_saved_list = commands.add_parser(
+        "python-saved-list", help="只读列出全部持久化程序槽"
+    )
+    add_device_options(python_saved_list)
+
+    python_save = commands.add_parser(
+        "python-save", help="上传 Python 源码并保存到外部 Flash"
+    )
+    add_device_options(python_save)
+    python_save.add_argument("--file", type=Path, required=True, help="Python 源文件")
+    python_save.add_argument(
+        "--slot", type=int, choices=range(PERSISTENT_PROGRAM_SLOT_COUNT), default=0
+    )
+    python_save.add_argument(
+        "--name", help="程序名称；默认使用源文件名，UTF-8 最多 31 字节"
+    )
+
+    python_load = commands.add_parser(
+        "python-load", help="把已保存程序加载到 RAM"
+    )
+    add_device_options(python_load)
+    python_load.add_argument(
+        "--slot", type=int, choices=range(PERSISTENT_PROGRAM_SLOT_COUNT), default=0
+    )
+
+    python_run_saved = commands.add_parser(
+        "python-run-saved", help="加载并运行已保存的 Python 程序"
+    )
+    add_device_options(python_run_saved)
+    python_run_saved.add_argument(
+        "--slot", type=int, choices=range(PERSISTENT_PROGRAM_SLOT_COUNT), default=0
+    )
+    python_run_saved.add_argument(
+        "--timeout-ms", type=int, default=2000, help="硬执行上限，默认 2000 ms"
+    )
+
+    python_saved_clear = commands.add_parser(
+        "python-saved-clear", help="删除已保存的 Python 程序"
+    )
+    add_device_options(python_saved_clear)
+    python_saved_clear.add_argument(
+        "--slot", type=int, choices=range(PERSISTENT_PROGRAM_SLOT_COUNT), default=0
+    )
 
     python_run = commands.add_parser(
         "python-run", help="上传 Python 源码到 RAM 并运行一次"
@@ -604,6 +658,7 @@ DEVICE_CAPABILITY_NAMES = (
     (DEVICE_CAPABILITY_DRIVE_STEER_FOR, "drive-steer-for"),
     (DEVICE_CAPABILITY_MICROPYTHON, "micropython"),
     (DEVICE_CAPABILITY_PYTHON_PROGRAM, "python-program"),
+    (DEVICE_CAPABILITY_PERSISTENT_PROGRAM, "persistent-program"),
 )
 
 
@@ -761,6 +816,147 @@ def run_python_program_status(args: argparse.Namespace) -> int:
         print(f"device={transport.path}", flush=True)
         status = FirmwareUpdater(transport).read_python_program_status()
         print_python_program_status(status)
+    return 0
+
+
+PERSISTENT_PROGRAM_STATES = {
+    0: "unsupported",
+    1: "occupied",
+    2: "ready",
+    3: "saved",
+}
+
+PERSISTENT_PROGRAM_RECORD_TYPES = {
+    0: "none",
+    1: "program",
+    2: "tombstone",
+}
+
+PERSISTENT_PROGRAM_ERRORS = {
+    0: "none",
+    1: "unsupported",
+    2: "foreign-data",
+    3: "no-ram-program",
+    4: "flash-io",
+    5: "verify",
+    6: "invalid-record",
+    7: "busy",
+    8: "no-saved-program",
+    9: "invalid-slot",
+    10: "invalid-name",
+}
+
+
+def print_persistent_program_status(status: object) -> None:
+    print(f"schema={status.schema_version}", flush=True)
+    print(f"request_result={status.result}", flush=True)
+    print(f"program_slot_id={status.program_slot_id}", flush=True)
+    print(f"program_slot_count={status.program_slot_count}", flush=True)
+    print(f"program_name={status.program_name}", flush=True)
+    print(
+        f"state={PERSISTENT_PROGRAM_STATES.get(status.state, 'unknown')}",
+        flush=True,
+    )
+    print(f"flags=0x{status.flags:02X}", flush=True)
+    print(f"jedec_id={status.jedec_id.hex().upper()}", flush=True)
+    print(f"flash_size={status.flash_size}", flush=True)
+    print(f"region_start=0x{status.region_start:08X}", flush=True)
+    print(f"region_size={status.region_size}", flush=True)
+    print(f"bank_count={status.slot_count}", flush=True)
+    print(f"bank_size={status.slot_size}", flush=True)
+    print(f"sectors_per_bank={status.sectors_per_slot}", flush=True)
+    print(f"erased_sector_mask=0x{status.erased_sector_mask:02X}", flush=True)
+    print(f"occupied_sector_mask=0x{status.occupied_sector_mask:02X}", flush=True)
+    active_bank = "none" if status.active_slot == 0xFF else str(status.active_slot)
+    print(f"active_bank={active_bank}", flush=True)
+    print(f"generation={status.generation}", flush=True)
+    print(f"source_length={status.source_length}", flush=True)
+    print(f"source_crc32={status.source_crc32:08x}", flush=True)
+    print(
+        f"record_type={PERSISTENT_PROGRAM_RECORD_TYPES.get(status.record_type, 'unknown')}",
+        flush=True,
+    )
+    print(
+        f"last_error={PERSISTENT_PROGRAM_ERRORS.get(status.last_error, 'unknown')}",
+        flush=True,
+    )
+    write_supported = (status.flags & 0x10) != 0
+    writable_state = status.state in (2, 3)
+    print(f"storage_writable={'yes' if write_supported and writable_state else 'no'}", flush=True)
+
+
+def run_python_saved_status(args: argparse.Namespace) -> int:
+    with open_transport(args) as transport:
+        print(f"device={transport.path}", flush=True)
+        status = FirmwareUpdater(transport).read_persistent_program_status(args.slot)
+        print_persistent_program_status(status)
+    return 0 if status.result == 1 else 1
+
+
+def run_python_saved_list(args: argparse.Namespace) -> int:
+    with open_transport(args) as transport:
+        print(f"device={transport.path}", flush=True)
+        statuses = FirmwareUpdater(transport).list_persistent_programs()
+        for status in statuses:
+            state = PERSISTENT_PROGRAM_STATES.get(status.state, "unknown")
+            record = PERSISTENT_PROGRAM_RECORD_TYPES.get(
+                status.record_type, "unknown"
+            )
+            print(
+                f"slot={status.program_slot_id} state={state} "
+                f"name={status.program_name!r} generation={status.generation} "
+                f"bytes={status.source_length} record={record} "
+                f"writable={'yes' if status.state in (2, 3) and (status.flags & 0x10) else 'no'}",
+                flush=True,
+            )
+    return 0 if all(status.result == 1 for status in statuses) else 1
+
+
+def run_python_save(args: argparse.Namespace) -> int:
+    source = args.file.read_bytes()
+    program_name = args.name if args.name is not None else args.file.stem
+    with open_transport(args) as transport:
+        print(f"device={transport.path}", flush=True)
+        print(f"source={args.file}", flush=True)
+        print(f"source_bytes={len(source)}", flush=True)
+        print(f"program_slot_id={args.slot}", flush=True)
+        print(f"program_name={program_name}", flush=True)
+        status = FirmwareUpdater(transport).save_persistent_program(
+            source, args.slot, program_name
+        )
+        print_persistent_program_status(status)
+    return 0
+
+
+def run_python_load(args: argparse.Namespace) -> int:
+    with open_transport(args) as transport:
+        print(f"device={transport.path}", flush=True)
+        updater = FirmwareUpdater(transport)
+        status = updater.load_persistent_program(args.slot)
+        print_persistent_program_status(status)
+        print_python_program_status(updater.read_python_program_status())
+    return 0
+
+
+def run_python_run_saved(args: argparse.Namespace) -> int:
+    with open_transport(args) as transport:
+        print(f"device={transport.path}", flush=True)
+        status = FirmwareUpdater(transport).run_persistent_program(
+            args.timeout_ms, args.slot
+        )
+        print_python_program_status(status)
+        if status.state != 5:
+            raise EstUpdaterError(
+                f"已保存 Python 程序结束状态为 {PYTHON_PROGRAM_STATES.get(status.state, 'unknown')}"
+            )
+    return 0
+
+
+def run_python_saved_clear(args: argparse.Namespace) -> int:
+    with open_transport(args) as transport:
+        print(f"device={transport.path}", flush=True)
+        status = FirmwareUpdater(transport).clear_persistent_program(args.slot)
+        print_persistent_program_status(status)
     return 0
 
 
@@ -2343,6 +2539,18 @@ def main(argv: list[str] | None = None) -> int:
             return run_micropython_status(args)
         if args.mode == "python-program-status":
             return run_python_program_status(args)
+        if args.mode == "python-saved-status":
+            return run_python_saved_status(args)
+        if args.mode == "python-saved-list":
+            return run_python_saved_list(args)
+        if args.mode == "python-save":
+            return run_python_save(args)
+        if args.mode == "python-load":
+            return run_python_load(args)
+        if args.mode == "python-run-saved":
+            return run_python_run_saved(args)
+        if args.mode == "python-saved-clear":
+            return run_python_saved_clear(args)
         if args.mode == "python-run":
             return run_python_program(args)
         if args.mode == "python-stop":
