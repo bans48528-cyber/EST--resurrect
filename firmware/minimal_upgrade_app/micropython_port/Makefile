@@ -2,6 +2,7 @@ include $(TOP)/py/mkenv.mk
 
 QSTR_DEFS = qstrdefsport.h
 MICROPY_ROM_TEXT_COMPRESSION ?= 1
+FROZEN_MANIFEST = manifest.py
 
 include $(TOP)/py/py.mk
 
@@ -27,7 +28,7 @@ SRC_C = \
 SRC_S = shared/runtime/gchelper_thumb2.s
 SRC_QSTR += modest.c
 
-OBJ += $(PY_CORE_O)
+OBJ += $(PY_O)
 OBJ += $(addprefix $(BUILD)/, $(SRC_C:.c=.o))
 OBJ += $(addprefix $(BUILD)/, $(SRC_S:.s=.o))
 

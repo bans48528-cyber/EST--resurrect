@@ -48,6 +48,8 @@ static uint32_t program_last_usb_poll_ms;
 
 static const char self_test_script[] =
 	"import est\n"
+	"import est_runtime\n"
+	"assert est_runtime.API_VERSION == 1\n"
 	"items = []\n"
 	"for i in range(96):\n"
 	"    items.append((i, i * i))\n"

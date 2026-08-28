@@ -25,7 +25,7 @@ CFLAGS := $(ARCH_FLAGS) -std=c11 -Os -g3 -Wall -Wextra -Werror \
 	-ffunction-sections -fdata-sections -fno-common
 LDFLAGS := $(ARCH_FLAGS) -Tmemory.ld -L$(OPENCM3_DIR)/lib -nostartfiles \
 	-Wl,--gc-sections -Wl,--cref -Wl,-Map=$(BUILD_DIR)/$(PROJECT).map
-LDLIBS := -lopencm3_stm32f4 -Wl,--start-group -lc -lgcc -lnosys -Wl,--end-group
+LDLIBS := -lopencm3_stm32f4 -Wl,--start-group -lc -lm -lgcc -lnosys -Wl,--end-group
 
 SOURCES := $(wildcard src/*.c)
 OBJECTS := $(patsubst src/%.c,$(BUILD_DIR)/obj/%.o,$(SOURCES))

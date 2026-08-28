@@ -1,0 +1,12 @@
+{
+  "version": "M1.10A",
+  "input": "est_minimal_upgrade_app.bin",
+  "raw_app_size": 205728,
+  "unpadded_package_size": 205732,
+  "upgrade_package_size": 262144,
+  "bootloader_stored_length": 262143,
+  "initial_msp": "0x2002D3B0",
+  "reset_handler": "0x08016FDD",
+  "header_ascii": "APP=",
+  "sha256": "835ba5342c5b91737f29e36fcd0d2c6af4afb998e8475cbc86ed93c86f16044e"
+}

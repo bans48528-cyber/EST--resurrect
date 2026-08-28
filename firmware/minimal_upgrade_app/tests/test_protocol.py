@@ -95,6 +95,28 @@ class ProtocolTests(unittest.TestCase):
 
 
 class BuildVerificationTests(unittest.TestCase):
+    def test_est_runtime_is_frozen_and_external_import_is_enabled(self) -> None:
+        port_dir = ROOT / "micropython_port"
+        makefile = (port_dir / "Makefile").read_text(encoding="utf-8")
+        config = (port_dir / "mpconfigport.h").read_text(encoding="utf-8")
+        manifest = (port_dir / "manifest.py").read_text(encoding="utf-8")
+        self.assertIn("FROZEN_MANIFEST = manifest.py", makefile)
+        self.assertIn("OBJ += $(PY_O)", makefile)
+        self.assertIn("#define MICROPY_ENABLE_EXTERNAL_IMPORT (1)", config)
+        self.assertIn(
+            "#define MICROPY_LONGINT_IMPL (MICROPY_LONGINT_IMPL_MPZ)",
+            config,
+        )
+        self.assertIn("#define MICROPY_PY_BUILTINS_FLOAT (1)", config)
+        self.assertIn("#define MICROPY_PY_BUILTINS_COMPLEX (0)", config)
+        self.assertIn(
+            "#define MICROPY_FLOAT_IMPL (MICROPY_FLOAT_IMPL_FLOAT)", config
+        )
+        self.assertIn("-lc -lm -lgcc", (ROOT / "Makefile").read_text(encoding="utf-8"))
+        self.assertNotIn("#define MICROPY_MODULE_FROZEN_MPY (0)", config)
+        self.assertIn('freeze("modules", "est_runtime.py")', manifest)
+        self.assertTrue((port_dir / "modules" / "est_runtime.py").is_file())
+
     def test_version_object_is_rebuilt_when_build_version_changes(self) -> None:
         makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
         self.assertIn("$(BUILD_DIR)/obj/app_version.o: FORCE", makefile)
@@ -660,7 +682,7 @@ class BoardModuleLayoutTests(unittest.TestCase):
         header = (ROOT / "include" / "board_motor.h").read_text(encoding="utf-8")
         config = (ROOT / "include" / "app_config.h").read_text(encoding="utf-8")
         self.assertIn("MOTOR_POSITION_COMMAND          0x1BU", config)
-        self.assertIn("DEVICE_PROTOCOL_MINOR           19U", config)
+        self.assertIn("DEVICE_PROTOCOL_MINOR           20U", config)
         self.assertIn("MOTOR_LARGE_COUNTS_PER_SPEED 12800U", motor)
         self.assertIn("MOTOR_MEDIUM_COUNTS_PER_SPEED 8100U", motor)
         self.assertIn("medium_samples[4] = {2U, 4U, 8U, 16U}", motor)
@@ -1159,6 +1181,8 @@ class MicroPythonIntegrationTests(unittest.TestCase):
         self.assertIn("EST_MICROPYTHON_HEAP_SIZE (48U * 1024U)", runtime)
         self.assertIn("for i in range(96)", runtime)
         self.assertIn("assert est.drive_mix(50, 40) == (40, 20)", runtime)
+        self.assertIn("import est_runtime", runtime)
+        self.assertIn("assert est_runtime.API_VERSION == 1", runtime)
         self.assertIn("assert est.force_gc() >= 0", runtime)
         self.assertNotIn("est_motor_run", runtime)
         self.assertNotIn("est_drive_start", runtime)
@@ -1205,8 +1229,10 @@ class MicroPythonIntegrationTests(unittest.TestCase):
         config = (ROOT / "include" / "app_config.h").read_text(encoding="utf-8")
         protocol = (SOURCE_DIR / "update_protocol.c").read_text(encoding="utf-8")
         self.assertIn("MICROPYTHON_STATUS_COMMAND      0x23U", config)
-        self.assertIn("DEVICE_PROTOCOL_MINOR           19U", config)
+        self.assertIn("DEVICE_PROTOCOL_MINOR           20U", config)
         self.assertIn("DEVICE_CAPABILITY_MICROPYTHON", config)
+        self.assertIn("DEVICE_CAPABILITY_FROZEN_EST_RUNTIME", config)
+        self.assertIn("DEVICE_CAPABILITY_FROZEN_EST_RUNTIME", protocol)
         self.assertIn("MICROPYTHON_STATUS_PAYLOAD_LENGTH 28U", protocol)
         self.assertIn("queue_micropython_status", protocol)
         self.assertIn("status.maximum_gc_pause_us", protocol)
