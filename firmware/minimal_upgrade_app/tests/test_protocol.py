@@ -158,7 +158,12 @@ class EstServiceApiTests(unittest.TestCase):
             self.assertIn(function, header)
             self.assertIn(function, source)
         self.assertIn("board_motor_start_speed(est_system_millis()", source)
+        self.assertIn("board_motor_start_speed_for_time(est_system_millis()", source)
         self.assertIn("board_motor_start_position(est_system_millis()", source)
+        self.assertIn("update_timed_speed_state(now_ms)", (
+            SOURCE_DIR / "board_motor.c"
+        ).read_text(encoding="utf-8"))
+        self.assertIn("EST_MOTOR_TIMED", source)
         self.assertIn("return EST_ERR_NOT_SUPPORTED;", source)
 
     def test_sensor_contract_wraps_the_verified_board_driver(self) -> None:
@@ -1327,6 +1332,22 @@ class MicroPythonIntegrationTests(unittest.TestCase):
             ROOT.parents[1] / "tools" / "est_hid_sender" / "examples" /
             "run_medium_motor.py"
         ).read_text(encoding="utf-8")
+        timed_script = (
+            ROOT.parents[1] / "tools" / "est_hid_sender" / "examples" /
+            "run_timed_motor.py"
+        ).read_text(encoding="utf-8")
+        timed_medium_script = (
+            ROOT.parents[1] / "tools" / "est_hid_sender" / "examples" /
+            "run_timed_medium_motor.py"
+        ).read_text(encoding="utf-8")
+        timed_cancel_script = (
+            ROOT.parents[1] / "tools" / "est_hid_sender" / "examples" /
+            "cancel_timed_motor.py"
+        ).read_text(encoding="utf-8")
+        timed_exception_script = (
+            ROOT.parents[1] / "tools" / "est_hid_sender" / "examples" /
+            "timed_motor_exception.py"
+        ).read_text(encoding="utf-8")
 
         self.assertIn("MP_QSTR_Motor", module)
         self.assertIn("est_motor_get_status", module)
@@ -1346,6 +1367,7 @@ class MicroPythonIntegrationTests(unittest.TestCase):
         for public_call in (
             "est_motor_set_power",
             "est_motor_run_speed",
+            "est_motor_run_time",
             "est_motor_run_angle",
             "est_motor_reset_angle",
         ):
@@ -1353,11 +1375,11 @@ class MicroPythonIntegrationTests(unittest.TestCase):
         for python_method in (
             "MP_QSTR_run_power",
             "MP_QSTR_run_speed",
+            "MP_QSTR_run_time",
             "MP_QSTR_run_angle",
             "MP_QSTR_reset_angle",
         ):
             self.assertIn(python_method, module)
-        self.assertNotIn("est_motor_run_time", module)
         self.assertIn('est.Motor("A")', read_script)
         self.assertIn("motor.stop()", read_script)
         self.assertIn("motor.stop(motor.STOP_BRAKE)", read_script)
@@ -1369,6 +1391,15 @@ class MicroPythonIntegrationTests(unittest.TestCase):
         self.assertIn("while True:", stop_script)
         self.assertIn('est.Motor("D")', medium_script)
         self.assertIn("degrees=-90", medium_script)
+        self.assertIn("duration_ms=1200", timed_script)
+        self.assertIn("motor.STATE_TIMED", timed_script)
+        self.assertIn("motor.STOP_BRAKE", timed_script)
+        self.assertIn("est.force_gc()", timed_script)
+        self.assertIn('est.Motor("D")', timed_medium_script)
+        self.assertIn("motor.run_time(800", timed_medium_script)
+        self.assertIn("motor.run_time(5000", timed_cancel_script)
+        self.assertIn("motor.stop()", timed_cancel_script)
+        self.assertIn("raise RuntimeError", timed_exception_script)
         self.assertIn('assert est.Motor(\\"A\\").port() == \\"A\\"', runtime)
         self.assertNotIn("board_motor_", module)
 

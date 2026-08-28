@@ -7,6 +7,8 @@
 #include "est_motor.h"
 #include "est_system.h"
 
+#define EST_MOTOR_MAX_DURATION_MS 600000U
+
 static bool est_motor_port_valid(est_motor_port_t port)
 {
 	return (uint32_t)port < (uint32_t)EST_MOTOR_PORT_COUNT;
@@ -125,14 +127,33 @@ est_result_t est_motor_run_speed(est_motor_port_t port,
 est_result_t est_motor_run_time(est_motor_port_t port,
 	int8_t speed_percent, uint32_t duration_ms, est_stop_mode_t stop_mode)
 {
+	est_result_t result;
+	int16_t magnitude = speed_percent;
+
 	if (!est_motor_port_valid(port)) {
 		return EST_ERR_INVALID_PORT;
 	}
-	if (speed_percent < -100 || speed_percent > 100 || speed_percent == 0 ||
-	    duration_ms == 0U || !stop_mode_valid(stop_mode)) {
+	if (magnitude < 0) {
+		magnitude = -magnitude;
+	}
+	if (magnitude < 10 || magnitude > 100 || duration_ms == 0U ||
+	    duration_ms > EST_MOTOR_MAX_DURATION_MS ||
+	    !stop_mode_valid(stop_mode)) {
 		return EST_ERR_INVALID_ARGUMENT;
 	}
-	return EST_ERR_NOT_SUPPORTED;
+	if (stop_mode == EST_STOP_HOLD) {
+		return EST_ERR_NOT_SUPPORTED;
+	}
+	result = require_tacho_motor(port);
+	if (result != EST_OK) {
+		return result;
+	}
+	if (!board_motor_start_speed_for_time(est_system_millis(),
+	    board_port_from_est(port), speed_percent, duration_ms,
+	    board_stop_from_est(stop_mode))) {
+		return EST_ERR_BUSY;
+	}
+	return EST_OK;
 }
 
 est_result_t est_motor_run_angle(est_motor_port_t port, int32_t degrees,
@@ -262,7 +283,8 @@ est_result_t est_motor_get_status(est_motor_port_t port,
 
 	(void)board_motor_speed_snapshot_for_port(board_port, &speed);
 	if (speed.state == BOARD_MOTOR_SPEED_RUNNING && speed.port == board_port) {
-		status->state = EST_MOTOR_SPEED;
+		status->state = speed.duration_ms == 0U ?
+			EST_MOTOR_SPEED : EST_MOTOR_TIMED;
 		status->target_speed_percent = speed.requested_speed_percent;
 	}
 	(void)board_motor_position_snapshot_for_port(board_port, &position);

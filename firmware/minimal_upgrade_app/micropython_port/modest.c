@@ -271,6 +271,50 @@ static mp_obj_t modest_motor_run_speed(mp_obj_t self_object,
 static MP_DEFINE_CONST_FUN_OBJ_2(
 	modest_motor_run_speed_obj, modest_motor_run_speed);
 
+static mp_obj_t modest_motor_run_time(size_t argument_count,
+	const mp_obj_t *positional_arguments, mp_map_t *keyword_arguments)
+{
+	modest_motor_instance_t *self = MP_OBJ_TO_PTR(positional_arguments[0]);
+	enum { ARG_duration_ms, ARG_speed, ARG_stop };
+	static const mp_arg_t allowed_arguments[] = {
+		{MP_QSTR_duration_ms, MP_ARG_REQUIRED | MP_ARG_INT, {.u_int = 0}},
+		{MP_QSTR_speed, MP_ARG_INT, {.u_int = 50}},
+		{MP_QSTR_stop, MP_ARG_INT, {.u_int = EST_STOP_COAST}},
+	};
+	mp_arg_val_t arguments[MP_ARRAY_SIZE(allowed_arguments)];
+	int32_t duration_ms;
+	int32_t speed;
+	int32_t stop_mode;
+	est_result_t result;
+
+	mp_arg_parse_all(argument_count - 1U, positional_arguments + 1,
+		keyword_arguments, MP_ARRAY_SIZE(allowed_arguments),
+		allowed_arguments, arguments);
+	duration_ms = (int32_t)arguments[ARG_duration_ms].u_int;
+	speed = (int32_t)arguments[ARG_speed].u_int;
+	stop_mode = (int32_t)arguments[ARG_stop].u_int;
+	if (duration_ms < 1 || duration_ms > 600000) {
+		mp_raise_ValueError(
+			MP_ERROR_TEXT("duration_ms must be 1..600000"));
+	}
+	if (speed < -100 || speed > 100 || (speed > -10 && speed < 10)) {
+		mp_raise_ValueError(
+			MP_ERROR_TEXT("speed must be -100..-10 or 10..100"));
+	}
+	if (stop_mode < EST_STOP_COAST || stop_mode > EST_STOP_HOLD) {
+		mp_raise_ValueError(
+			MP_ERROR_TEXT("stop mode must be COAST, BRAKE or HOLD"));
+	}
+	result = est_motor_run_time(self->port, (int8_t)speed,
+		(uint32_t)duration_ms, (est_stop_mode_t)stop_mode);
+	if (result != EST_OK) {
+		modest_raise_motor_error(result);
+	}
+	return mp_const_none;
+}
+static MP_DEFINE_CONST_FUN_OBJ_KW(
+	modest_motor_run_time_obj, 1, modest_motor_run_time);
+
 static mp_obj_t modest_motor_run_angle(size_t argument_count,
 	const mp_obj_t *positional_arguments, mp_map_t *keyword_arguments)
 {
@@ -345,6 +389,8 @@ static const mp_rom_map_elem_t modest_motor_locals_table[] = {
 		MP_ROM_PTR(&modest_motor_run_power_obj)},
 	{MP_ROM_QSTR(MP_QSTR_run_speed),
 		MP_ROM_PTR(&modest_motor_run_speed_obj)},
+	{MP_ROM_QSTR(MP_QSTR_run_time),
+		MP_ROM_PTR(&modest_motor_run_time_obj)},
 	{MP_ROM_QSTR(MP_QSTR_run_angle),
 		MP_ROM_PTR(&modest_motor_run_angle_obj)},
 	{MP_ROM_QSTR(MP_QSTR_reset_angle),

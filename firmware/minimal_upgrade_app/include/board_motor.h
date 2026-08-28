@@ -93,6 +93,8 @@ struct board_motor_speed_snapshot {
 	int8_t measured_speed_percent;
 	int8_t power_percent;
 	int32_t tacho_count;
+	uint32_t duration_ms;
+	uint32_t elapsed_ms;
 };
 
 enum board_motor_pair_speed_state {
@@ -200,6 +202,9 @@ struct board_motor_pair_position_snapshot
 	board_motor_pair_position_snapshot(void);
 bool board_motor_start_speed(uint32_t now_ms, enum board_motor_port port,
 	int8_t speed_percent);
+bool board_motor_start_speed_for_time(uint32_t now_ms,
+	enum board_motor_port port, int8_t speed_percent, uint32_t duration_ms,
+	enum board_motor_stop_mode stop_mode);
 bool board_motor_stop_speed(enum board_motor_port port,
 	enum board_motor_stop_mode stop_mode);
 bool board_motor_speed_snapshot_for_port(enum board_motor_port port,

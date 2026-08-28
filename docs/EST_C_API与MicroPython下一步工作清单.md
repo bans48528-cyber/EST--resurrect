@@ -27,7 +27,8 @@
 - M0.98A 新增正式只读 `est.Sensor(1..4)`、`est.buttons` 和 `est.battery`。四路已接传感器类型/状态/值、六键掩码与单键查询、电池百分比/档位/低电量以及非法端口异常均完成实机验收；统一 tick 回归保持 1001 次/秒。
 - M0.99A 新增正式 `est.Motor("A".."D")` 只读状态对象和逐端口安全停止。类型、状态、停止方式、功率、目标/实际速度、角度、错误及 8 项状态元组均包装 `est_motor_*`；A/C 大型、B 空、D 中型以及静止条件下四路 `BRAKE -> COAST` 已完成实机验收，脚本结束后四路功率为 0。
 - M1.00A 为 `Motor` 新增 `run_power()`、`run_speed()`、`run_angle()` 和 `reset_angle()`，并将参数错误、未连接、类型不匹配、忙和不支持映射为明确 Python 异常。A 口大型马达已通过强制 GC 下的持续闭环和 `+90°`，D 口中型马达已通过 `-90°`；正常结束、异常、硬超时和主动停止后 A-D 全部 coast/power 0。
-- `est_motor_run_time()` 和 `EST_STOP_HOLD` 仍明确返回 `EST_ERR_NOT_SUPPORTED`，不会静默降级。
+- M1.01A 实现 `est_motor_run_time()` 和 `Motor.run_time()`。四个端口各自保存开始时间、持续时间和完成停止方式，由 C 服务 tick 自动结束；A 大型、D 中型、强制 GC、coast、brake、中途取消和异常清理均已实机通过。
+- `EST_STOP_HOLD` 仍明确返回 `EST_ERR_NOT_SUPPORTED`，不会静默降级。
 - 已对照 EV3 Classroom 1.5.2：移动积木使用转向值 `-100～100` 或左右独立速度，不提供按轮径、轮距和机身角度换算的独立转向积木。M0.88A 已实现持续转向，M0.90A 已实现按圈/度/秒完成一次转向；原地旋转由转向值 `±100` 表达。
 
 ## 1. 目标
@@ -103,7 +104,7 @@ USB/HID        MicroPython est 模块
 - [x] `est_motor_get_type()`：读取大型/中型/无电机状态。
 - [x] `est_motor_set_power()`：开环功率控制。
 - [x] `est_motor_run_speed()`：持续速度闭环。
-- [ ] `est_motor_run_time()`：按时间运行，计时由 C 完成。
+- [x] `est_motor_run_time()`：按时间运行，计时由 C 完成（M1.01A；大型/中型、滑行/刹车、取消/异常通过）。
 - [x] `est_motor_run_angle()`：按相对角度运行；当前完成后回到自由滑行。
 - [x] `est_motor_stop()`：滑行和刹车已接入；位置保持尚未实现。
 - [x] `est_motor_stop_all()`：同时滑行停止或主动刹车全部电机。
@@ -174,7 +175,7 @@ USB/HID        MicroPython est 模块
 
 ## 6. MicroPython 接口映射
 
-- [x] `Motor`：状态、停止、开环功率、闭环速度、相对角度和角度清零已调用单电机 C API（M0.99A-M1.00A）；按时间运行仍待实现。
+- [x] `Motor`：状态、停止、开环功率、闭环速度、按时间、相对角度和角度清零均已调用单电机 C API（M0.99A-M1.01A）。
 - [ ] `MotorPair`/`DriveBase`：调用精确双电机 C API。
 - [x] 通用只读 `Sensor` 对象：端口、类型、状态、模式、值格式、有效性、错误和值（M0.98A）；颜色、触碰、超声、陀螺、声音、温度、红外便捷类型类仍待实现。
 - [x] 只读 `Buttons` 和 `Battery`（M0.98A）；`Display`、`LED`、`Audio` 和 `Storage` 仍待实现。
@@ -216,7 +217,7 @@ if gray.reflection() < 30:
 
 - [x] 将当前单实例速度/位置状态扩展为每端口独立状态（M0.74A 实机通过）。
 - [x] 完成角度、停止和状态查询；M1.00A 已从 MicroPython 实机调用。
-- [ ] 完成单马达按时间运行。
+- [x] 完成单马达按时间运行（M1.01A）。
 - [ ] 验证 A-D 端口并发、取消、超时和急停。
 
 ### 阶段 D：精确双电机轨迹
@@ -247,6 +248,7 @@ if gray.reflection() < 30:
 - [x] 建立正式只读 `Sensor`、`Buttons` 和 `Battery` Python API，并完成四路当前传感器和锂电池实机验收（M0.98A）。
 - [x] 建立正式 `Motor` 只读状态和逐端口 `COAST/BRAKE` 安全停止 API（M0.99A；真实大型、中型及空口通过）。
 - [x] 开放 `Motor.run_power()`、`run_speed()`、`run_angle()` 和 `reset_angle()`（M1.00A；真实大型和中型马达通过）。
+- [x] 开放 C 层计时的 `Motor.run_time()`，并验证自动滑行、自动刹车、中途取消和异常清理（M1.01A）。
 - [x] 强制 GC 下验证单马达闭环持续运行、角度到位和安全停止（M1.00A）。
 - [ ] 在 `MotorPair` 开放后继续验证双电机同步和急停不受 GC 影响。
 
@@ -280,7 +282,7 @@ if gray.reflection() < 30:
 17. [x] 开放正式只读 `Sensor`、`Buttons`、`Battery` API（M0.98A，四路当前传感器实机通过）。
 18. [x] 建立 `Motor` 的只读状态与安全停止（M0.99A，A/C 大型、B 空、D 中型实机通过）。
 19. [x] 开放单马达功率、闭环速度和相对角度运行，并完成真实大型/中型马达、强制 GC、异常、超时和主动停止回归（M1.00A）。
-20. [ ] 补齐单马达按时间运行及停止动作语义。
+20. [x] 补齐单马达按时间运行及停止动作语义（M1.01A；A 大型和 D 中型实机通过）。
 21. [ ] 开放 `MotorPair`/底盘 MicroPython API，并验证双电机同步、强制 GC 和急停。
 
-M1.00A 已完成 MicroPython 最小执行链路、C 服务连续性、传感器/按键/电池只读 API，以及单马达状态、停止、功率、闭环速度和相对角度运行。下一步先补齐单马达按时间运行，再开放双马达/底盘；毫米直行诊断流程不直接作为最终用户 API。
+M1.01A 已完成 MicroPython 最小执行链路、C 服务连续性、传感器/按键/电池只读 API，以及单马达状态、停止、功率、闭环速度、按时间和相对角度运行。下一步开放双马达/底盘；毫米直行诊断流程不直接作为最终用户 API。

@@ -106,6 +106,7 @@
 #define MOTOR_PAIR_SPEED_FOLLOW_TOLERANCE_PERCENT 1
 #define MOTOR_PAIR_OVERSPEED_TOLERANCE_PERCENT 10
 #define MOTOR_PAIR_OVERSPEED_CONTROL_GAIN 32
+#define MOTOR_TIMED_MAX_DURATION_MS 600000U
 #define MOTOR_PAIR_TIMED_MAX_DURATION_MS 600000U
 
 struct motor_port_config {
@@ -229,6 +230,10 @@ struct motor_speed_control {
 	enum board_motor_speed_state state;
 	enum board_motor_type type;
 	int8_t requested_speed;
+	uint32_t started_ms;
+	uint32_t duration_ms;
+	uint32_t elapsed_ms;
+	enum board_motor_stop_mode completion_stop_mode;
 	uint32_t last_control_ms;
 	int32_t pwm_x100;
 };
@@ -1222,6 +1227,33 @@ static void update_pair_speed_state(uint32_t now_ms)
 		BOARD_MOTOR_PAIR_SPEED_COMPLETE);
 }
 
+static void update_timed_speed_state(uint32_t now_ms)
+{
+	uint8_t port_index;
+
+	for (port_index = 0U; port_index < BOARD_MOTOR_PORT_COUNT; port_index++) {
+		struct motor_speed_control *control = &speed_controls[port_index];
+		uint32_t duration_ms;
+
+		if (control->state != BOARD_MOTOR_SPEED_RUNNING ||
+		    control->duration_ms == 0U) {
+			continue;
+		}
+		control->elapsed_ms = now_ms - control->started_ms;
+		if (control->elapsed_ms < control->duration_ms) {
+			continue;
+		}
+		duration_ms = control->duration_ms;
+		control->state = BOARD_MOTOR_SPEED_IDLE;
+		control->requested_speed = 0;
+		control->duration_ms = 0U;
+		control->elapsed_ms = duration_ms;
+		control->pwm_x100 = 0;
+		motor_apply_stop_mode((enum board_motor_port)port_index,
+			control->completion_stop_mode);
+	}
+}
+
 static void record_pair_speed_error(void)
 {
 	int32_t absolute_error;
@@ -1600,6 +1632,11 @@ void board_motor_init(void)
 		speed_controls[port_index].state = BOARD_MOTOR_SPEED_IDLE;
 		speed_controls[port_index].type = BOARD_MOTOR_TYPE_UNKNOWN;
 		speed_controls[port_index].requested_speed = 0;
+		speed_controls[port_index].started_ms = 0U;
+		speed_controls[port_index].duration_ms = 0U;
+		speed_controls[port_index].elapsed_ms = 0U;
+		speed_controls[port_index].completion_stop_mode =
+			BOARD_MOTOR_STOP_LOW_OPEN_DRAIN;
 		speed_controls[port_index].last_control_ms = 0U;
 		speed_controls[port_index].pwm_x100 = 0;
 	}
@@ -2050,6 +2087,10 @@ bool board_motor_start_speed(uint32_t now_ms, enum board_motor_port port,
 	control->state = BOARD_MOTOR_SPEED_RUNNING;
 	control->type = type;
 	control->requested_speed = speed_percent;
+	control->started_ms = now_ms;
+	control->duration_ms = 0U;
+	control->elapsed_ms = 0U;
+	control->completion_stop_mode = BOARD_MOTOR_STOP_LOW_OPEN_DRAIN;
 	control->last_control_ms = now_ms - MOTOR_SPEED_CONTROL_INTERVAL_MS;
 	control->pwm_x100 = 0;
 	speed_sample_count[(uint8_t)port] = tacho_count[(uint8_t)port];
@@ -2057,6 +2098,26 @@ bool board_motor_start_speed(uint32_t now_ms, enum board_motor_port port,
 	measured_speed_percent[(uint8_t)port] = 0;
 	speed_measurement_valid[(uint8_t)port] = false;
 	last_speed_port = port;
+	return true;
+}
+
+bool board_motor_start_speed_for_time(uint32_t now_ms,
+	enum board_motor_port port, int8_t speed_percent, uint32_t duration_ms,
+	enum board_motor_stop_mode stop_mode)
+{
+	struct motor_speed_control *control;
+
+	if (duration_ms == 0U || duration_ms > MOTOR_TIMED_MAX_DURATION_MS ||
+	    (stop_mode != BOARD_MOTOR_STOP_LOW_OPEN_DRAIN &&
+	     stop_mode != BOARD_MOTOR_STOP_HIGH_PUSH_PULL)) {
+		return false;
+	}
+	if (!board_motor_start_speed(now_ms, port, speed_percent)) {
+		return false;
+	}
+	control = &speed_controls[(uint8_t)port];
+	control->duration_ms = duration_ms;
+	control->completion_stop_mode = stop_mode;
 	return true;
 }
 
@@ -2078,6 +2139,9 @@ bool board_motor_stop_speed(enum board_motor_port port,
 	control = &speed_controls[(uint8_t)port];
 	control->state = BOARD_MOTOR_SPEED_IDLE;
 	control->requested_speed = 0;
+	control->started_ms = 0U;
+	control->duration_ms = 0U;
+	control->elapsed_ms = 0U;
 	control->pwm_x100 = 0;
 	motor_apply_stop_mode(port, stop_mode);
 	return true;
@@ -2102,6 +2166,8 @@ bool board_motor_speed_snapshot_for_port(enum board_motor_port port,
 	snapshot->measured_speed_percent = measured_speed_percent[port_index];
 	snapshot->power_percent = output_power[port_index];
 	snapshot->tacho_count = tacho_count[port_index];
+	snapshot->duration_ms = control->duration_ms;
+	snapshot->elapsed_ms = control->elapsed_ms;
 	return true;
 }
 
@@ -2374,6 +2440,9 @@ void board_motor_stop(void)
 		position_controls[port_index].pwm_x100 = 0;
 		speed_controls[port_index].state = BOARD_MOTOR_SPEED_IDLE;
 		speed_controls[port_index].requested_speed = 0;
+		speed_controls[port_index].started_ms = 0U;
+		speed_controls[port_index].duration_ms = 0U;
+		speed_controls[port_index].elapsed_ms = 0U;
 		speed_controls[port_index].pwm_x100 = 0;
 	}
 }
@@ -2386,6 +2455,7 @@ void board_motor_tick(uint32_t now_ms)
 	update_motor_speed(now_ms);
 	update_pair_speed_correction();
 	update_speed_control(now_ms);
+	update_timed_speed_state(now_ms);
 	update_pair_speed_state(now_ms);
 	update_pair_position_correction();
 	update_position_control(now_ms);
