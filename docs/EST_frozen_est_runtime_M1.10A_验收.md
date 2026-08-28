@@ -1,5 +1,54 @@
 # EST frozen est_runtime M1.10A 验收
 
+## 第一版程序闭环基线（2026-08-29，已通过）
+
+本节记录已经完成的真机结果，作为后续恢复开发时必须优先采用的第一版程序闭环基线。当前阶段暂停新增功能。
+
+| 基线项 | 已确认结果 |
+| --- | --- |
+| 固件代码提交 | `2d27f96`（`feat: freeze initial est runtime module`） |
+| 固件版本 | `M1.10A` |
+| USB 应用协议 | `1.20` |
+| 设备能力 | 包含 `frozen-est-runtime` |
+| 升级包 | `firmware/releases/M1.10A/est_minimal_upgrade_app_M1.10A.upgrade.bin` |
+| 升级包 SHA-256 | `835ba5342c5b91737f29e36fcd0d2c6af4afb998e8475cbc86ed93c86f16044e` |
+| MicroPython 自检 | `state=passed`，`self_test_value=96` |
+
+命令行真机冒烟结果：
+
+- `runtime_import_smoke.py`：`completed`，源码 `158/158` 字节，期望与实际 CRC32 均为 `fab868ce`，运行 `506 ms`，没有 import 或 Python exception。
+- `runtime_stop_smoke.py`：先确认 `state=running`，再主动停止；最终 `state=stopped`、`error=stopped`、`flags=0x05`，源码 `106/106` 字节，期望与实际 CRC32 均为 `8b99c9de`，运行 `1232 ms`。停止后 A-D 均为 `coast`、功率 `0`。
+
+### EST Studio 第一轮：纯 `import est`
+
+| 项目 | 验收结果 |
+| --- | --- |
+| 目标槽位 | 7 |
+| 程序类型 | 不依赖 `est_runtime` 的最小 Python 程序 |
+| 下载、保存、加载、运行 | 全部通过 |
+| 停止 | 通过，无错误弹窗 |
+| `0x24` 最终状态 | `state=stopped`，`error=stopped`，`flags=0x05` |
+| RAM 程序校验 | `received=37/37`，期望与实际 CRC32 均为 `48a0b72f` |
+| 运行记录 | `run_count=1`，`duration_ms=4955`，`timeout_ms=10000` |
+| `0x25` 槽位状态 | `state=saved`，`source_length=37`，`source_crc32=48a0b72f`，`last_error=none` |
+
+### EST Studio 第二轮：积木生成 `import est_runtime as rt`
+
+使用“当程序启动时 -> 重复执行 -> 等待 1 秒”积木程序；代码区确认生成 `import est_runtime as rt` 并通过 `rt.run()` 启动。
+
+| 项目 | 验收结果 |
+| --- | --- |
+| 目标槽位 | 6 |
+| 程序类型 | EST Studio 真实积木生成的 `est_runtime` 程序 |
+| 下载、保存、加载、运行 | 全部通过 |
+| 停止 | 通过，无错误弹窗 |
+| `0x24` 最终状态 | `state=stopped`，`error=stopped`，`flags=0x05` |
+| RAM 程序校验 | `received=115/115`，期望与实际 CRC32 均为 `50137350` |
+| 运行记录 | `run_count=1`，`duration_ms=7077`，`timeout_ms=10000` |
+| `0x25` 槽位状态 | `state=saved`，`source_length=115`，`source_crc32=50137350`，`last_error=none` |
+
+两轮均未记录 EST 操作失败或设备断开错误。至此，当前 EST Studio 与 M1.10A 已完成 Python 源码下载、持久化槽位保存、加载运行和主动停止的第一版真机闭环；纯 `import est` 与积木生成的 `import est_runtime as rt` 两条路径都列入基线。
+
 ## 阶段结论
 
 - M1.10A 将 `micropython_port/modules/est_runtime.py` 编译为 frozen MPY，用户程序可继续使用 `import est_runtime as rt`。

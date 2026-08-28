@@ -1,12 +1,16 @@
 # EST 项目说明与当前工作范围
 
-日期：2026-08-28
+日期：2026-08-29
 
 本文用于说明当前 EST 主控重构项目的真实状态、工作目标和边界。若本文与早期迁移记录或旧分支对话冲突，应优先采用本文和当前工作区文件；尤其应采用 `docs/EST_Bootloader_对话迁移上下文_2026-08-21.md` 最前面的“最新迁移覆盖段（2026-08-21，必须优先采用）”。
 
-## 最新覆盖（2026-08-28，M1.09A 多程序槽位核心实机通过，必须优先采用）
+## 最新覆盖（2026-08-29，M1.10A 第一版程序闭环基线，必须优先采用）
 
-- 当前接入设备正常运行 `M1.09A`，心跳、协议 `1.19`、电量、USB、四路传感器和 A-D 四路马达安全停止状态均正常。发布包 SHA-256 为 `bda17136eb5b2aa80d03abd32460899dfddee5a9653b2eec482bbbf1bf1f4425`。
+- 当前接入设备正常运行 `M1.10A`；基线代码提交为 `2d27f96`，USB 应用协议为 `1.20`，设备能力包含 `frozen-est-runtime`。发布包 SHA-256 为 `835ba5342c5b91737f29e36fcd0d2c6af4afb998e8475cbc86ed93c86f16044e`。
+- `M1.10A` 已把首版 `est_runtime.py` 编译为 frozen MPY，EST Studio 生成程序可直接使用 `import est_runtime as rt`。MicroPython 自检为 `state=passed`、`self_test_value=96`；runtime 导入和主动停止冒烟均通过，停止后 A-D 全部为 `coast`、功率 `0`。
+- EST Studio 已完成两轮真机闭环：槽位 7 的纯 `import est` 最小程序，以及槽位 6 的真实积木生成 `import est_runtime as rt` 程序，均通过下载、持久化保存、加载、运行和停止，且无错误弹窗、EST 操作失败或设备断开错误。详细数据见 `docs/EST_frozen_est_runtime_M1.10A_验收.md`。
+- `M1.10A` 现冻结为第一版程序闭环基线，当前暂停新增功能。后续恢复开发时先以该提交、发布包、协议和验收记录复核环境，不自动展开第二阶段接口。
+- `M1.09A` 已完成 8 个命名持久化程序槽位，并作为 M1.10A 程序闭环的存储基础。
 - `M1.09A` 已加入 8 个逻辑程序槽位，ID 为 `0..7`。每个槽位保存 UTF-8 程序名称（1..31 字节）、源码、generation、长度和 CRC32，可独立列表、保存、加载、运行和删除；单程序源码上限仍为 8 KiB，开机自动运行仍明确禁用。
 - 多槽位使用 W25Q256JV 最后 192 KiB（`0x01FD0000..0x01FFFFFF`）。每个逻辑槽位占 24 KiB，内部为两个 12 KiB A/B 物理银行；提交标记最后写入，删除使用更高代数 tombstone，发现未知数据会拒绝覆盖。`active_bank` 仅是固件内部元数据，不是用户程序槽位 ID。
 - 首次全区只读扫描确认槽位 0 正确继承 M1.08A 的 generation 4 tombstone，槽位 1..7 全为空且可写。槽位 2“巡线”运行返回 `85344`，槽位 5“机械臂”运行返回 `107107`；删除槽位 2 后槽位 5 不受影响。完整关机再开机后槽位 5 的名称、源码和 CRC 均保留并再次返回 `107107`，多槽格式跨断电通过；验收后已删除测试程序并清空 RAM。详见 `docs/EST_MicroPython_多槽持久化进度_2026-08-28.md`。
@@ -241,16 +245,16 @@ firmware\minimal_upgrade_app
 
 该工程已经从“最小启动诊断”发展为当前新固件主体，现已包含：
 
-- 完整自升级闭环、USB HID 心跳和应用协议 `1.19`。
+- 完整自升级闭环、USB HID 心跳和应用协议 `1.20`。
 - 屏幕、按键、红蓝灯、背光、电池和系统 C 服务层。
 - A-D 四路大型/中型马达识别、开环功率、角度/圈数、定速、双电机同步、直行和 EV3 转向。
 - 1-4 号颜色、触碰、超声波、温度、陀螺仪、声音和红外传感器。
-- 官方 MicroPython `v1.29.0` 最小端口、48 KiB Python 堆、RAM 源码执行链路和 8 个命名持久化程序槽位。
+- 官方 MicroPython `v1.29.0` 最小端口、48 KiB Python 堆、RAM 源码执行链路、8 个命名持久化程序槽位和 frozen `est_runtime` 首版包装。
 
 当前实机包：
 
 ```text
-firmware\releases\M1.09A\est_minimal_upgrade_app_M1.09A.upgrade.bin
+firmware\releases\M1.10A\est_minimal_upgrade_app_M1.10A.upgrade.bin
 ```
 
 该包已经实机验证。详细版本状态统一以 `firmware/releases/README.md` 为准。
@@ -283,7 +287,9 @@ firmware\releases\M1.09A\est_minimal_upgrade_app_M1.09A.upgrade.bin
 5. 每个重要阶段执行主机测试、ARM 构建、包校验和实机回归，再提交 Git。
 6. 软件界面代码属于 `EST STUDIO 开发` 项目，不在本硬件仓库修改；用户若误在硬件任务提出软件改动，应先提醒边界。
 
-## 8. 当前下一步可执行路径
+## 8. 当前暂停点与恢复后路径
+
+`M1.10A` 已冻结为第一版程序闭环基线，当前按用户要求暂停新增功能。恢复开发前应先复核 `2d27f96`、发布包 SHA-256、协议 `1.20`、`frozen-est-runtime` 能力和两轮 EST Studio 真机结果。
 
 ### 主线：开放正式 MicroPython 用户 API
 
