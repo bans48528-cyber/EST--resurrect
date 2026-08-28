@@ -521,12 +521,14 @@ EV3 Classroom 1.5.2 缓存中的 `TravelGuideBuilder.steeringToSpeeds()` 已给�
 - `est.battery.status()` 固定返回 `(result, valid, level, percent, low, adc_raw, sample_mv)`；普通积木优先使用 `valid()`、`level()`、`percent()` 和 `low()`。
 - 上述接口是类型便捷类和 `est_runtime` 的底层依据；代码生成器仍按第 17 章生成 `rt.color(port)` 等高层调用，不直接展开状态元组。
 
-### 16.6 M0.99A 已冻结的马达状态与停止契约
+### 16.6 M1.00A 已冻结的单马达契约
 
 - `est.Motor(port)` 接受字符串 `"A".."D"`，提供 `port()`、`type()`、`state()`、`stop_mode()`、`power()`、`target_speed()`、`speed()`、`angle()`、`error()`、`status()` 和 `stop()`。
 - `Motor.status()` 固定返回 `(error, type, state, stop_mode, power, target_speed, speed, angle)`；类型、状态和停止方式常量由 `est.Motor.TYPE_*`、`STATE_*`、`STOP_COAST` 和 `STOP_BRAKE` 提供。
 - `stop()` 默认自由滑行，`stop(STOP_BRAKE)` 主动刹车；`HOLD` 尚未支持，不得静默降级。脚本启动前、正常结束、异常、超时和主动停止仍由 C 层统一停止全部马达。
-- M0.99A 尚未开放任何启动马达的方法；代码生成器在下一阶段运行 API 冻结前，不得生成 `run_power`、`run_speed`、`run_time` 或 `run_angle` 调用。
+- M1.00A 开放 `run_power(power)`、`run_speed(speed)`、`run_angle(degrees, speed=50, stop=STOP_COAST)` 和 `reset_angle()`。功率范围为 `-100..100`；闭环速度必须为 `-100..-10` 或 `10..100`；相对角度为 `-3600..-1` 或 `1..3600`，角度速度为 `10..100`。
+- `run_angle()` 当前只支持完成后自由滑行；传入 `STOP_BRAKE` 会明确抛出不支持异常。`run_time()` 和 `HOLD` 尚未开放，代码生成器不得生成这些调用，也不得静默改成 Python `sleep` 或自由滑行。
+- 已验证 A 口大型和 D 口中型马达、强制 GC、未连接端口、参数错误、Python 异常、硬超时和电脑主动停止；所有退出路径均由 C 层停止全部马达。
 
 ## 17. 全部积木的 MicroPython 代码生成映射
 

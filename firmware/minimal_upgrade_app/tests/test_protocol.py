@@ -1300,16 +1300,32 @@ class MicroPythonIntegrationTests(unittest.TestCase):
         self.assertNotIn("board_keys_", module)
         self.assertNotIn("board_battery_", module)
 
-    def test_motor_python_api_is_read_only_except_for_safe_stop(self) -> None:
+    def test_motor_python_api_wraps_single_motor_services(self) -> None:
         module = (ROOT / "micropython_port" / "modest.c").read_text(
             encoding="utf-8"
         )
         runtime = (ROOT / "micropython_port" / "est_micropython.c").read_text(
             encoding="utf-8"
         )
-        script = (
+        read_script = (
             ROOT.parents[1] / "tools" / "est_hid_sender" / "examples" /
             "read_motors.py"
+        ).read_text(encoding="utf-8")
+        run_script = (
+            ROOT.parents[1] / "tools" / "est_hid_sender" / "examples" /
+            "run_single_motor.py"
+        ).read_text(encoding="utf-8")
+        exception_script = (
+            ROOT.parents[1] / "tools" / "est_hid_sender" / "examples" /
+            "motor_exception.py"
+        ).read_text(encoding="utf-8")
+        stop_script = (
+            ROOT.parents[1] / "tools" / "est_hid_sender" / "examples" /
+            "motor_until_stopped.py"
+        ).read_text(encoding="utf-8")
+        medium_script = (
+            ROOT.parents[1] / "tools" / "est_hid_sender" / "examples" /
+            "run_medium_motor.py"
         ).read_text(encoding="utf-8")
 
         self.assertIn("MP_QSTR_Motor", module)
@@ -1327,17 +1343,32 @@ class MicroPythonIntegrationTests(unittest.TestCase):
             "MP_QSTR_stop",
         ):
             self.assertIn(method, module)
-        for forbidden_call in (
+        for public_call in (
             "est_motor_set_power",
             "est_motor_run_speed",
-            "est_motor_run_time",
             "est_motor_run_angle",
             "est_motor_reset_angle",
         ):
-            self.assertNotIn(forbidden_call, module)
-        self.assertIn('est.Motor("A")', script)
-        self.assertIn("motor.stop()", script)
-        self.assertIn("motor.stop(motor.STOP_BRAKE)", script)
+            self.assertIn(public_call, module)
+        for python_method in (
+            "MP_QSTR_run_power",
+            "MP_QSTR_run_speed",
+            "MP_QSTR_run_angle",
+            "MP_QSTR_reset_angle",
+        ):
+            self.assertIn(python_method, module)
+        self.assertNotIn("est_motor_run_time", module)
+        self.assertIn('est.Motor("A")', read_script)
+        self.assertIn("motor.stop()", read_script)
+        self.assertIn("motor.stop(motor.STOP_BRAKE)", read_script)
+        self.assertIn("motor.run_power(20)", run_script)
+        self.assertIn("motor.run_speed(20)", run_script)
+        self.assertIn("motor.run_angle(degrees=90, speed=30)", run_script)
+        self.assertIn("est.force_gc()", run_script)
+        self.assertIn("raise RuntimeError", exception_script)
+        self.assertIn("while True:", stop_script)
+        self.assertIn('est.Motor("D")', medium_script)
+        self.assertIn("degrees=-90", medium_script)
         self.assertIn('assert est.Motor(\\"A\\").port() == \\"A\\"', runtime)
         self.assertNotIn("board_motor_", module)
 
