@@ -7,6 +7,8 @@
 #include <libopencm3/stm32/rcc.h>
 
 #include "board_lcd.h"
+#include "board_lcd_image.h"
+#include "board_lcd_text.h"
 #include "system_time.h"
 #include "watchdog.h"
 
@@ -40,52 +42,6 @@ _Static_assert(LCD_MOTOR_COLUMN_X +
 #define LCD_CONTROLLER_SETTLE_MS 100U
 
 static uint8_t framebuffer[LCD_WIDTH][LCD_PAGES];
-
-static const uint8_t glyph_blank[5] = {0x00U, 0x00U, 0x00U, 0x00U, 0x00U};
-static const uint8_t glyph_dot[5] = {0x00U, 0x60U, 0x60U, 0x00U, 0x00U};
-static const uint8_t glyph_colon[5] = {0x00U, 0x36U, 0x36U, 0x00U, 0x00U};
-static const uint8_t glyph_dash[5] = {0x08U, 0x08U, 0x08U, 0x08U, 0x08U};
-static const uint8_t glyph_percent[5] = {0x63U, 0x13U, 0x08U, 0x64U, 0x63U};
-static const uint8_t glyph_digits[10][5] = {
-	{0x3EU, 0x51U, 0x49U, 0x45U, 0x3EU},
-	{0x00U, 0x42U, 0x7FU, 0x40U, 0x00U},
-	{0x42U, 0x61U, 0x51U, 0x49U, 0x46U},
-	{0x21U, 0x41U, 0x45U, 0x4BU, 0x31U},
-	{0x18U, 0x14U, 0x12U, 0x7FU, 0x10U},
-	{0x27U, 0x45U, 0x45U, 0x45U, 0x39U},
-	{0x3CU, 0x4AU, 0x49U, 0x49U, 0x30U},
-	{0x01U, 0x71U, 0x09U, 0x05U, 0x03U},
-	{0x36U, 0x49U, 0x49U, 0x49U, 0x36U},
-	{0x06U, 0x49U, 0x49U, 0x29U, 0x1EU},
-};
-static const uint8_t glyph_letters[26][5] = {
-	{0x7EU, 0x11U, 0x11U, 0x11U, 0x7EU},
-	{0x7FU, 0x49U, 0x49U, 0x49U, 0x36U},
-	{0x3EU, 0x41U, 0x41U, 0x41U, 0x22U},
-	{0x7FU, 0x41U, 0x41U, 0x22U, 0x1CU},
-	{0x7FU, 0x49U, 0x49U, 0x49U, 0x41U},
-	{0x7FU, 0x09U, 0x09U, 0x09U, 0x01U},
-	{0x3EU, 0x41U, 0x49U, 0x49U, 0x7AU},
-	{0x7FU, 0x08U, 0x08U, 0x08U, 0x7FU},
-	{0x00U, 0x41U, 0x7FU, 0x41U, 0x00U},
-	{0x20U, 0x40U, 0x41U, 0x3FU, 0x01U},
-	{0x7FU, 0x08U, 0x14U, 0x22U, 0x41U},
-	{0x7FU, 0x40U, 0x40U, 0x40U, 0x40U},
-	{0x7FU, 0x02U, 0x0CU, 0x02U, 0x7FU},
-	{0x7FU, 0x04U, 0x08U, 0x10U, 0x7FU},
-	{0x3EU, 0x41U, 0x41U, 0x41U, 0x3EU},
-	{0x7FU, 0x09U, 0x09U, 0x09U, 0x06U},
-	{0x3EU, 0x41U, 0x51U, 0x21U, 0x5EU},
-	{0x7FU, 0x09U, 0x19U, 0x29U, 0x46U},
-	{0x46U, 0x49U, 0x49U, 0x49U, 0x31U},
-	{0x01U, 0x01U, 0x7FU, 0x01U, 0x01U},
-	{0x3FU, 0x40U, 0x40U, 0x40U, 0x3FU},
-	{0x1FU, 0x20U, 0x40U, 0x20U, 0x1FU},
-	{0x3FU, 0x40U, 0x38U, 0x40U, 0x3FU},
-	{0x63U, 0x14U, 0x08U, 0x14U, 0x63U},
-	{0x07U, 0x08U, 0x70U, 0x08U, 0x07U},
-	{0x61U, 0x51U, 0x49U, 0x45U, 0x43U},
-};
 
 static void bus_pause(void)
 {
@@ -300,64 +256,11 @@ static void framebuffer_set_pixel(uint16_t x, uint16_t y, bool on)
 	}
 }
 
-static const uint8_t *glyph_for(char character)
-{
-	if (character >= '0' && character <= '9') {
-		return glyph_digits[(uint8_t)character - (uint8_t)'0'];
-	}
-	if (character >= 'A' && character <= 'Z') {
-		return glyph_letters[(uint8_t)character - (uint8_t)'A'];
-	}
-	if (character >= 'a' && character <= 'z') {
-		return glyph_letters[(uint8_t)character - (uint8_t)'a'];
-	}
-	if (character == '.') {
-		return glyph_dot;
-	}
-	if (character == ':') {
-		return glyph_colon;
-	}
-	if (character == '-') {
-		return glyph_dash;
-	}
-	if (character == '%') {
-		return glyph_percent;
-	}
-	return glyph_blank;
-}
-
-static void draw_character(uint16_t x, uint16_t y, char character, uint8_t scale)
-{
-	const uint8_t *glyph = glyph_for(character);
-	uint8_t glyph_x;
-	uint8_t glyph_y;
-	uint8_t scale_x;
-	uint8_t scale_y;
-
-	for (glyph_x = 0U; glyph_x < 5U; glyph_x++) {
-		for (glyph_y = 0U; glyph_y < 7U; glyph_y++) {
-			if ((glyph[glyph_x] & (1U << glyph_y)) == 0U) {
-				continue;
-			}
-			for (scale_x = 0U; scale_x < scale; scale_x++) {
-				for (scale_y = 0U; scale_y < scale; scale_y++) {
-					framebuffer_set_pixel(
-						(uint16_t)(x + glyph_x * scale + scale_x),
-						(uint16_t)(y + glyph_y * scale + scale_y), true);
-				}
-			}
-		}
-	}
-}
-
 static void draw_text_at(uint16_t x, uint16_t y, const char *text,
 	uint8_t scale)
 {
-	while (*text != '\0' && x < LCD_WIDTH) {
-		draw_character(x, y, *text, scale);
-		x = (uint16_t)(x + LCD_TEXT_CELL_WIDTH * scale);
-		text++;
-	}
+	(void)board_lcd_text_draw_legacy(&framebuffer[0][0], LCD_WIDTH,
+		LCD_HEIGHT, x, y, text, scale);
 }
 
 static void draw_text_centered(uint16_t y, const char *text, uint8_t scale)
@@ -371,11 +274,7 @@ static void draw_text_centered(uint16_t y, const char *text, uint8_t scale)
 	}
 	width = (uint16_t)(((length * LCD_TEXT_CELL_WIDTH) - 1U) * scale);
 	x = width < LCD_WIDTH ? (uint16_t)((LCD_WIDTH - width) / 2U) : 0U;
-	while (*text != '\0' && x < LCD_WIDTH) {
-		draw_character(x, y, *text, scale);
-		x = (uint16_t)(x + LCD_TEXT_CELL_WIDTH * scale);
-		text++;
-	}
+	draw_text_at(x, y, text, scale);
 }
 
 void board_lcd_init(void)
@@ -493,6 +392,13 @@ bool board_lcd_draw_text(uint16_t x, uint16_t y,
 	return true;
 }
 
+bool board_lcd_draw_text_style(uint16_t x, uint16_t y,
+	const char *text, board_lcd_text_style_t style)
+{
+	return board_lcd_text_draw_style(&framebuffer[0][0], LCD_WIDTH,
+		LCD_HEIGHT, x, y, text, style);
+}
+
 bool board_lcd_draw_bitmap(uint16_t x, uint16_t y,
 	uint16_t width, uint16_t height, const uint8_t *bitmap,
 	size_t bitmap_size)
@@ -522,6 +428,23 @@ bool board_lcd_draw_bitmap(uint16_t x, uint16_t y,
 	return true;
 }
 
+bool board_lcd_draw_image(const char *name)
+{
+	const board_lcd_image_resource_t *resource =
+		board_lcd_image_find(name);
+	uint16_t x;
+	uint16_t y;
+
+	if (resource == NULL || resource->width > LCD_WIDTH ||
+	    resource->height > LCD_HEIGHT) {
+		return false;
+	}
+	x = (uint16_t)((LCD_WIDTH - resource->width) / 2U);
+	y = (uint16_t)((LCD_HEIGHT - resource->height) / 2U);
+	return board_lcd_image_draw(&framebuffer[0][0], LCD_WIDTH, LCD_HEIGHT,
+		x, y, resource);
+}
+
 void board_lcd_refresh(void)
 {
 	refresh_framebuffer(NULL);
@@ -534,14 +457,8 @@ void board_lcd_refresh_with_hook(board_lcd_refresh_hook_t hook)
 
 void board_lcd_show_version(const char *version)
 {
-	uint16_t x = 36U;
-
 	memset(framebuffer, 0, sizeof(framebuffer));
-	while (*version != '\0') {
-		draw_character(x, 54U, *version, 3U);
-		x = (uint16_t)(x + 18U);
-		version++;
-	}
+	draw_text_at(36U, 54U, version, 3U);
 	refresh_framebuffer(NULL);
 }
 

@@ -97,6 +97,20 @@ struct board_motor_speed_snapshot {
 	uint32_t elapsed_ms;
 };
 
+enum board_motor_hold_state {
+	BOARD_MOTOR_HOLD_IDLE = 0,
+	BOARD_MOTOR_HOLD_HOLDING = 1
+};
+
+struct board_motor_hold_snapshot {
+	enum board_motor_hold_state state;
+	enum board_motor_port port;
+	enum board_motor_type type;
+	int32_t target_count;
+	int32_t current_count;
+	int8_t power_percent;
+};
+
 enum board_motor_pair_speed_state {
 	BOARD_MOTOR_PAIR_SPEED_IDLE = 0,
 	BOARD_MOTOR_PAIR_SPEED_RUNNING = 1,
@@ -141,7 +155,9 @@ enum board_motor_stop_mode {
 	/* M0.36A real-device result: this state is free coast. */
 	BOARD_MOTOR_STOP_LOW_OPEN_DRAIN = 0,
 	/* M0.36A real-device result: this state is active brake. */
-	BOARD_MOTOR_STOP_HIGH_PUSH_PULL = 1
+	BOARD_MOTOR_STOP_HIGH_PUSH_PULL = 1,
+	/* Active encoder position control; this is not an electrical brake. */
+	BOARD_MOTOR_STOP_HOLD_POSITION = 2
 };
 
 enum board_motor_stop_test_state {
@@ -187,16 +203,20 @@ bool board_motor_control_snapshot(enum board_motor_port port,
 bool board_motor_refresh_identification(uint32_t now_ms,
 	enum board_motor_port port);
 bool board_motor_start_position(uint32_t now_ms, enum board_motor_port port,
-	uint8_t speed_percent, int32_t degrees);
+	uint8_t speed_percent, int32_t degrees,
+	enum board_motor_stop_mode stop_mode);
 bool board_motor_stop_position(enum board_motor_port port,
 	enum board_motor_stop_mode stop_mode);
 bool board_motor_position_snapshot_for_port(enum board_motor_port port,
 	struct board_motor_position_snapshot *snapshot);
 struct board_motor_position_snapshot board_motor_position_snapshot(void);
+bool board_motor_hold_snapshot_for_port(enum board_motor_port port,
+	struct board_motor_hold_snapshot *snapshot);
 bool board_motor_start_pair_position(uint32_t now_ms,
 	enum board_motor_port left_port, int32_t left_degrees,
 	enum board_motor_port right_port, int32_t right_degrees,
-	uint8_t maximum_speed_percent);
+	uint8_t maximum_speed_percent,
+	enum board_motor_stop_mode stop_mode);
 bool board_motor_stop_pair_position(enum board_motor_stop_mode stop_mode);
 struct board_motor_pair_position_snapshot
 	board_motor_pair_position_snapshot(void);

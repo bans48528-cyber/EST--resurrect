@@ -5,6 +5,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "board_lcd_text.h"
+
 #define BOARD_LCD_WIDTH 180U
 #define BOARD_LCD_HEIGHT 128U
 #define BOARD_LCD_MOTOR_LINE_CHARACTERS 18U
@@ -20,9 +22,12 @@ bool board_lcd_draw_rectangle(uint16_t x, uint16_t y,
 	uint16_t width, uint16_t height, bool filled, bool on);
 bool board_lcd_draw_text(uint16_t x, uint16_t y,
 	const char *text, uint8_t scale);
+bool board_lcd_draw_text_style(uint16_t x, uint16_t y,
+	const char *text, board_lcd_text_style_t style);
 bool board_lcd_draw_bitmap(uint16_t x, uint16_t y,
 	uint16_t width, uint16_t height, const uint8_t *bitmap,
 	size_t bitmap_size);
+bool board_lcd_draw_image(const char *name);
 void board_lcd_refresh(void);
 void board_lcd_refresh_with_hook(board_lcd_refresh_hook_t hook);
 void board_lcd_show_version(const char *version);

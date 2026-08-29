@@ -17,6 +17,18 @@ from test_protocol import FakeTransport  # noqa: E402
 
 
 class CliTests(unittest.TestCase):
+    def test_hold_position_capability_has_a_stable_cli_name(self) -> None:
+        self.assertIn(
+            (1 << 21, "hold-position-control"),
+            cli.DEVICE_CAPABILITY_NAMES,
+        )
+
+    def test_zero_speed_capability_has_a_stable_cli_name(self) -> None:
+        self.assertIn(
+            (1 << 20, "zero-speed-motor-control"),
+            cli.DEVICE_CAPABILITY_NAMES,
+        )
+
     def test_info_and_verify_do_not_open_device(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             package_path = write_package_with_manifest(Path(temp))

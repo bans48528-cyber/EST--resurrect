@@ -28,6 +28,7 @@ def make_fake_est() -> types.ModuleType:
         def __init__(self, port):
             self.port = port
             self.states = []
+            self.timed_until_ms = None
 
         def run_speed(self, speed):
             module.events.append(("motor.run_speed", self.port, speed))
@@ -36,13 +37,18 @@ def make_fake_est() -> types.ModuleType:
             module.events.append(
                 ("motor.run_time", self.port, duration_ms, kwargs)
             )
-            self.states = [self.STATE_TIMED, self.STATE_IDLE]
+            self.timed_until_ms = module.now_ms + duration_ms
 
         def run_angle(self, degrees, **kwargs):
             module.events.append(("motor.run_angle", self.port, degrees, kwargs))
             self.states = [self.STATE_POSITION, self.STATE_IDLE]
 
         def state(self):
+            if self.timed_until_ms is not None:
+                if module.now_ms < self.timed_until_ms:
+                    return self.STATE_TIMED
+                self.timed_until_ms = None
+                return self.STATE_IDLE
             if self.states:
                 return self.states.pop(0)
             return self.STATE_IDLE
@@ -138,6 +144,15 @@ def make_fake_est() -> types.ModuleType:
         def remote(self):
             return 9
 
+    class Display:
+        @staticmethod
+        def image(name):
+            module.events.append(("display.image", name))
+
+        @staticmethod
+        def refresh():
+            module.events.append(("display.refresh",))
+
     module.millis = millis
     module.Motor = Motor
     module.DriveBase = DriveBase
@@ -146,6 +161,7 @@ def make_fake_est() -> types.ModuleType:
     module.GyroSensor = GyroSensor
     module.UltrasonicSensor = UltrasonicSensor
     module.InfraredSensor = InfraredSensor
+    module.display = Display()
     return module
 
 
@@ -218,8 +234,57 @@ class RuntimeHardwareTests(unittest.TestCase):
             ("motor.run_time", "B", 2000, {"speed": -70, "stop": 0}),
             fake_est.events,
         )
-        with self.assertRaisesRegex(NotImplementedError, "hold stop action"):
-            runtime.motor_set_stop_action("A", "hold")
+        runtime.motor_set_stop_action("A", "hold")
+        runtime.motor_stop("A")
+        self.assertIn(("motor.stop", "A", 2), fake_est.events)
+
+    def test_motor_start_forwards_20_zero_75_without_interrupting(self) -> None:
+        runtime, fake_est = load_runtime()
+
+        runtime.motor_set_speed("A", 20)
+        runtime.motor_start("A", "clockwise")
+        runtime.motor_set_speed("A", 0)
+        runtime.motor_start("A", "clockwise")
+        runtime.motor_set_speed("A", 75)
+        runtime.motor_start("A", "clockwise")
+
+        self.assertEqual(
+            [
+                ("motor.run_speed", "A", 20),
+                ("motor.run_speed", "A", 0),
+                ("motor.run_speed", "A", 75),
+            ],
+            [event for event in fake_est.events if event[0] == "motor.run_speed"],
+        )
+    def test_motor_and_drive_speed_accept_zero_and_low_values(self) -> None:
+        runtime, fake_est = load_runtime()
+
+        for speed in (0, 1, 5, 9):
+            runtime.motor_set_speed("A", speed)
+            runtime.motor_start("A", "clockwise")
+            runtime.drive_set_speed(speed)
+
+        self.assertEqual(
+            [0, 1, 5, 9],
+            [event[2] for event in fake_est.events if event[0] == "motor.run_speed"],
+        )
+        with self.assertRaisesRegex(ValueError, "0..100"):
+            runtime.motor_set_speed("A", 101)
+
+    def test_timed_zero_speed_waits_full_duration_then_continues(self) -> None:
+        runtime, fake_est = load_runtime()
+        started_ms = fake_est.now_ms
+
+        runtime.motor_run_for("A", "clockwise", 2, "seconds", speed=0)
+        runtime.motor_set_speed("A", 75)
+        runtime.motor_start("A", "clockwise")
+
+        self.assertGreaterEqual(fake_est.now_ms - started_ms, 2000)
+        self.assertIn(
+            ("motor.run_time", "A", 2000, {"speed": 0, "stop": 0}),
+            fake_est.events,
+        )
+        self.assertEqual(("motor.run_speed", "A", 75), fake_est.events[-1])
 
     def test_drive_wrappers(self) -> None:
         runtime, fake_est = load_runtime()
@@ -264,6 +329,18 @@ class RuntimeHardwareTests(unittest.TestCase):
         with self.assertRaises(NotImplementedError):
             runtime.infrared("4").beacon_heading(1)
 
+    def test_display_image_for_draws_refreshes_and_waits(self) -> None:
+        runtime, fake_est = load_runtime()
+        started = fake_est.now_ms
+        runtime.display_image_for("Eyes/Neutral", 0.5)
+        self.assertEqual(
+            fake_est.events,
+            [("display.image", "Eyes/Neutral"), ("display.refresh",)],
+        )
+        self.assertGreaterEqual(fake_est.now_ms - started, 500)
+        with self.assertRaises(ValueError):
+            runtime.display_image_for("Eyes/Neutral", -1)
+
 
 class RuntimeContractTests(unittest.TestCase):
     def test_generator_runtime_names_are_explicit(self) -> None:
@@ -293,7 +370,7 @@ class RuntimeContractTests(unittest.TestCase):
         runtime, _ = load_runtime()
         unsupported = (
             "broadcast", "color_calibrate", "color_reset_calibration",
-            "display_image_for", "drive_dual_speed_for",
+            "drive_dual_speed_for",
             "drive_start_dual_speed", "ir_beacon_compare",
             "on_brick_button", "on_broadcast", "on_color", "on_condition",
             "on_gyro_angle", "on_ir_beacon_button", "on_ir_proximity",

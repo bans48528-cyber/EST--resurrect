@@ -49,6 +49,7 @@ from .constants import (
     PYTHON_PROGRAM_MAX_SIZE,
     PYTHON_PROGRAM_MAX_TIMEOUT_MS,
     PYTHON_PROGRAM_MIN_TIMEOUT_MS,
+    PYTHON_PROGRAM_NO_TIMEOUT_MS,
     MOTOR_CONTROL_ACTION_SET_POWER,
     MOTOR_CONTROL_COMMAND,
     MOTOR_DUAL_TEST_COMMAND,
@@ -461,8 +462,12 @@ def build_python_program_chunk_frame(offset: int, chunk: bytes) -> bytes:
 
 
 def build_python_program_run_frame(timeout_ms: int) -> bytes:
-    if not PYTHON_PROGRAM_MIN_TIMEOUT_MS <= timeout_ms <= PYTHON_PROGRAM_MAX_TIMEOUT_MS:
-        raise ValueError("Python program timeout must be 100..10000 ms")
+    if timeout_ms != PYTHON_PROGRAM_NO_TIMEOUT_MS and not (
+        PYTHON_PROGRAM_MIN_TIMEOUT_MS
+        <= timeout_ms
+        <= PYTHON_PROGRAM_MAX_TIMEOUT_MS
+    ):
+        raise ValueError("Python program timeout must be 0 or 100..10000 ms")
     payload = bytes((PYTHON_PROGRAM_ACTION_RUN,)) + timeout_ms.to_bytes(4, "little")
     return build_frame(PYTHON_PROGRAM_COMMAND, payload)
 
@@ -644,8 +649,8 @@ def build_motor_position_frame(
         raise ValueError("motor port must be 0, 1, 2, or 3")
     payload = bytes((action, motor_port))
     if action == MOTOR_POSITION_ACTION_START:
-        if speed_percent is None or not 10 <= speed_percent <= 100:
-            raise ValueError("motor speed must be between 10 and 100 percent")
+        if speed_percent is None or not 0 <= speed_percent <= 100:
+            raise ValueError("motor speed must be between 0 and 100 percent")
         if degrees is None or degrees == 0 or not -3600 <= degrees <= 3600:
             raise ValueError("motor degrees must be between -3600 and 3600, excluding 0")
         payload += bytes((speed_percent,))
@@ -666,13 +671,8 @@ def build_motor_speed_frame(
         raise ValueError("motor port must be 0, 1, 2, or 3")
     payload = bytes((action, motor_port))
     if action == MOTOR_SPEED_ACTION_START:
-        if (
-            speed_percent is None
-            or speed_percent == 0
-            or not -100 <= speed_percent <= 100
-            or abs(speed_percent) < 10
-        ):
-            raise ValueError("motor speed must be between -100 and 100 percent with magnitude at least 10")
+        if speed_percent is None or not -100 <= speed_percent <= 100:
+            raise ValueError("motor speed must be between -100 and 100 percent")
         payload += bytes((speed_percent & 0xFF,))
     elif speed_percent is not None:
         raise ValueError("speed is valid only for the start action")
@@ -695,8 +695,8 @@ def build_motor_pair_position_frame(
             raise ValueError("motor ports must be 0, 1, 2, or 3")
         if left_port == right_port:
             raise ValueError("motor pair ports must differ")
-        if speed_percent is None or not 10 <= speed_percent <= 100:
-            raise ValueError("motor speed must be between 10 and 100 percent")
+        if speed_percent is None or not 0 <= speed_percent <= 100:
+            raise ValueError("motor speed must be between 0 and 100 percent")
         if (
             left_degrees is None
             or right_degrees is None
@@ -737,10 +737,8 @@ def build_motor_pair_speed_frame(
         if (
             not -100 <= left_speed_percent <= 100
             or not -100 <= right_speed_percent <= 100
-            or abs(left_speed_percent) < 10
-            or abs(right_speed_percent) < 10
         ):
-            raise ValueError("motor speeds must have magnitude between 10 and 100")
+            raise ValueError("motor speeds must be between -100 and 100 percent")
         payload += bytes(
             (
                 left_port,
@@ -779,8 +777,8 @@ def build_drive_steer_frame(
             raise ValueError("drive motor ports must differ")
         if steering is None or not -100 <= steering <= 100:
             raise ValueError("drive steering must be between -100 and 100")
-        if speed_percent is None or speed_percent == 0 or not -100 <= speed_percent <= 100:
-            raise ValueError("drive speed must be between -100 and 100, excluding 0")
+        if speed_percent is None or not -100 <= speed_percent <= 100:
+            raise ValueError("drive speed must be between -100 and 100")
         payload += bytes(
             (left_port, right_port, steering & 0xFF, speed_percent & 0xFF)
         )
@@ -817,8 +815,8 @@ def build_drive_steer_for_frame(
             raise ValueError("finite drive steer mode must be degrees or time")
         if steering is None or not -100 <= steering <= 100:
             raise ValueError("drive steering must be between -100 and 100")
-        if speed_percent is None or speed_percent == 0 or not -100 <= speed_percent <= 100:
-            raise ValueError("drive speed must be between -100 and 100, excluding 0")
+        if speed_percent is None or not -100 <= speed_percent <= 100:
+            raise ValueError("drive speed must be between -100 and 100")
         if target_value is None or target_value <= 0:
             raise ValueError("finite drive target must be greater than zero")
         if mode == DRIVE_STEER_FOR_MODE_DEGREES and target_value > 3600:
@@ -882,8 +880,8 @@ def build_drive_straight_frame(
             raise ValueError("axle track must be between 1 and 65535 mm")
         if distance_mm is None or distance_mm == 0 or not -(1 << 31) <= distance_mm < (1 << 31):
             raise ValueError("drive distance must be a nonzero signed 32-bit value")
-        if speed_percent is None or not 10 <= speed_percent <= 100:
-            raise ValueError("drive speed must be between 10 and 100 percent")
+        if speed_percent is None or not 0 <= speed_percent <= 100:
+            raise ValueError("drive speed must be between 0 and 100 percent")
         if stop_mode != 0:
             raise ValueError("first drive straight mode supports coast stop only")
         payload += bytes((left_port, right_port))
@@ -932,8 +930,8 @@ def build_drive_run_frame(
             raise ValueError("drive degrees must be between -3600 and 3600")
         if mode == DRIVE_RUN_MODE_TIME_MS and not -600000 <= target_value <= 600000:
             raise ValueError("drive time must be between -600000 and 600000 ms")
-        if speed_percent is None or not 10 <= speed_percent <= 100:
-            raise ValueError("drive speed must be between 10 and 100 percent")
+        if speed_percent is None or not 0 <= speed_percent <= 100:
+            raise ValueError("drive speed must be between 0 and 100 percent")
         if stop_mode not in (0, 1):
             raise ValueError("drive stop mode must be coast or brake")
         if mode == DRIVE_RUN_MODE_DEGREES and stop_mode != 0:

@@ -40,11 +40,11 @@ assert 75 <= after - before <= 110
 assert motor.state() == motor.STATE_IDLE
 assert motor.power() == 0
 
-try:
-    motor.run_speed(0)
-    assert False
-except ValueError:
-    pass
+motor.run_speed(0)
+assert motor.state() == motor.STATE_SPEED
+assert motor.target_speed() == 0
+assert motor.power() == 0
+motor.stop()
 
 try:
     est.Motor("B").run_speed(20)

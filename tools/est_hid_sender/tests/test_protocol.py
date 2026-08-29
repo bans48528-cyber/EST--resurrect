@@ -819,8 +819,12 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(result.target_count, 372)
         self.assertEqual(result.current_count, 370)
         self.assertEqual(result.error_count, 2)
-        with self.assertRaisesRegex(ValueError, "between 10 and 100"):
-            build_motor_position_frame(1, 0, 9, 360)
+        self.assertEqual(
+            build_motor_position_frame(1, 0, 0, 360),
+            build_frame(0x1B, bytes((1, 0, 0)) + (360).to_bytes(4, "little", signed=True)),
+        )
+        with self.assertRaisesRegex(ValueError, "between 0 and 100"):
+            build_motor_position_frame(1, 0, 101, 360)
 
     def test_motor_speed_builds_signed_target_and_parses_closed_loop_state(self) -> None:
         self.assertEqual(
@@ -837,8 +841,11 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(result.measured_speed_percent, -29)
         self.assertEqual(result.power_percent, -34)
         self.assertEqual(result.tacho_count, -456)
-        with self.assertRaisesRegex(ValueError, "magnitude at least 10"):
-            build_motor_speed_frame(1, 0, 9)
+        for speed in (0, 1, 5, 9):
+            self.assertEqual(
+                build_motor_speed_frame(1, 0, speed),
+                build_frame(0x1C, bytes((1, 0, speed))),
+            )
 
     def test_motor_pair_position_supports_proportional_targets_and_parses_error(self) -> None:
         self.assertEqual(
@@ -884,13 +891,24 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual((result.left_actual_degrees,
                           result.right_actual_degrees), (180, -178))
         self.assertEqual(result.maximum_synchronization_error_degrees, 6)
-        with self.assertRaisesRegex(ValueError, "magnitude between 10 and 100"):
-            build_motor_pair_speed_frame(1, 0, 2, 5, 30)
+        for left_speed, right_speed in ((0, 50), (50, 0), (0, 0), (5, 9)):
+            self.assertEqual(
+                build_motor_pair_speed_frame(
+                    1, 0, 2, left_speed, right_speed
+                ),
+                build_frame(
+                    0x1E, bytes((1, 0, 2, left_speed, right_speed))
+                ),
+            )
 
     def test_drive_steer_uses_ev3_classroom_speed_mix(self) -> None:
         self.assertEqual(
             build_drive_steer_frame(1, 0, 2, 50, 80),
             build_frame(0x21, bytes((1, 0, 2, 50, 80))),
+        )
+        self.assertEqual(
+            build_drive_steer_frame(1, 0, 2, 50, 0),
+            build_frame(0x21, bytes((1, 0, 2, 50, 0))),
         )
         result = parse_drive_steer_response(
             build_motor_pair_speed_result(
@@ -1093,6 +1111,10 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(
             build_python_program_chunk_frame(0, source),
             build_frame(0x24, bytes((2, 0, 0)) + source),
+        )
+        self.assertEqual(
+            build_python_program_run_frame(0),
+            build_frame(0x24, bytes((3,)) + (0).to_bytes(4, "little")),
         )
         self.assertEqual(
             build_python_program_run_frame(2000),
@@ -1971,6 +1993,8 @@ class FakeTransport:
         result = 1
         if action == 0 and self.python_stop_pending:
             self.python_flags = (self.python_flags & ~0x08) | 0x04
+            self.python_state = 7
+            self.python_error = 4
             self.python_run_count += 1
             self.python_duration_ms = 1000
             self.python_stop_pending = False
@@ -2002,16 +2026,17 @@ class FakeTransport:
                         self.python_error = 2
                         result = 0
         elif action == 3:
-            self.python_timeout_ms = int.from_bytes(frame[6:10], "little")
+            self.python_timeout_ms = 0
             self.python_state = 5
             self.python_run_count += 1
             self.python_duration_ms = 7
             self.python_result_value = 12345
             self.python_flags |= 2
         elif action == 4:
-            self.python_state = 7
-            self.python_error = 4
-            self.python_stop_pending = (self.python_flags & 0x08) != 0
+            self.python_stop_pending = self.python_state == 4
+            if not self.python_stop_pending:
+                self.python_state = 7
+                self.python_error = 4
         elif action == 5:
             self.python_state = 0
             self.python_error = 0
@@ -2174,12 +2199,13 @@ class UpdaterTests(unittest.TestCase):
     def test_uploads_and_runs_crc_checked_python_program(self) -> None:
         source = b"import est\nest._program_result(12345)\n"
         transport = FakeTransport()
-        status = FirmwareUpdater(transport).run_python_program(source, timeout_ms=2000)
+        status = FirmwareUpdater(transport).run_python_program(source)
         self.assertEqual(status.state, 5)
         self.assertEqual(status.result_value, 12345)
         self.assertEqual(status.run_count, 1)
         self.assertEqual(bytes(transport.python_received), source)
         self.assertEqual(status.actual_crc32, binascii.crc32(source) & 0xFFFFFFFF)
+        self.assertEqual(status.timeout_ms, 0)
 
     def test_stops_and_clears_ram_python_program(self) -> None:
         transport = FakeTransport()
@@ -2221,7 +2247,7 @@ class UpdaterTests(unittest.TestCase):
         loaded = updater.load_persistent_program()
         self.assertEqual(loaded.state, 3)
         self.assertEqual(updater.read_python_program_status().state, 2)
-        completed = updater.run_persistent_program(timeout_ms=2000)
+        completed = updater.run_persistent_program()
         self.assertEqual(completed.state, 5)
         self.assertEqual(completed.result_value, 12345)
 

@@ -570,6 +570,16 @@ int main(void)
 			(void)est_led_set((diag_phase & 1U) != 0U ?
 				EST_LED_BLUE : EST_LED_OFF);
 		}
+#ifndef DIAGNOSTIC_SKIP_LCD_STARTUP
+		{
+			est_micropython_program_status_t python_program = {0};
+
+			if (est_micropython_program_get_status(&python_program) &&
+			    python_program.state == EST_MICROPYTHON_PROGRAM_QUEUED) {
+				display_initialized = false;
+			}
+		}
+#endif
 		est_micropython_tick();
 		if (usb_hid_power_off_requested() ||
 		    update_protocol_power_off_due(now_ms)) {

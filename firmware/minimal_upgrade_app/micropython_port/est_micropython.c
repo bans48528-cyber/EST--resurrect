@@ -17,6 +17,7 @@
 #include "shared/runtime/gchelper.h"
 
 #include "est_micropython.h"
+#include "est_display.h"
 #include "est_motor.h"
 #include "est_runtime.h"
 #include "est_sensor.h"
@@ -42,7 +43,6 @@ static volatile bool program_stop_requested;
 static volatile bool program_executing;
 static volatile est_micropython_program_error_t program_abort_error;
 static uint32_t program_started_ms;
-static uint32_t program_deadline_ms;
 static uint32_t program_last_watchdog_ms;
 static uint32_t program_last_usb_poll_ms;
 
@@ -224,17 +224,19 @@ void est_micropython_tick(void)
 	program_status.error = EST_MICROPYTHON_PROGRAM_ERROR_NONE;
 	program_status.flags &= (uint8_t)~(
 		EST_MICROPYTHON_PROGRAM_FLAG_RESULT_SET |
-		EST_MICROPYTHON_PROGRAM_FLAG_CLEANUP_CALLED);
-	program_status.flags |= EST_MICROPYTHON_PROGRAM_FLAG_TIMEOUT_ARMED;
+		EST_MICROPYTHON_PROGRAM_FLAG_CLEANUP_CALLED |
+		EST_MICROPYTHON_PROGRAM_FLAG_TIMEOUT_ARMED);
 	program_status.duration_ms = 0U;
 	program_status.result_value = 0;
 	program_started_ms = est_system_millis();
-	program_deadline_ms = program_started_ms + program_status.timeout_ms;
 	program_last_watchdog_ms = program_started_ms;
 	program_last_usb_poll_ms = program_started_ms;
 	program_executing = true;
 	(void)est_motor_stop_all(EST_STOP_COAST);
 	reset_vm();
+	est_display_clear();
+	(void)est_display_text(45U, 60U, "Program Running", 1U);
+	est_display_refresh();
 
 	script_succeeded = execute_script((const char *)program_source,
 		program_status.expected_length);
@@ -253,11 +255,6 @@ void est_micropython_tick(void)
 		   EST_MICROPYTHON_PROGRAM_ERROR_STOPPED) {
 		program_status.state = EST_MICROPYTHON_PROGRAM_STOPPED;
 		program_status.error = EST_MICROPYTHON_PROGRAM_ERROR_STOPPED;
-		program_cleanup_after_failure();
-	} else if (program_abort_error ==
-		   EST_MICROPYTHON_PROGRAM_ERROR_TIMEOUT) {
-		program_status.state = EST_MICROPYTHON_PROGRAM_TIMED_OUT;
-		program_status.error = EST_MICROPYTHON_PROGRAM_ERROR_TIMEOUT;
 		program_cleanup_after_failure();
 	} else {
 		program_status.state = EST_MICROPYTHON_PROGRAM_EXCEPTION;
@@ -378,11 +375,12 @@ est_result_t est_micropython_program_run(uint32_t timeout_ms)
 	if (program_executing || program_run_requested) {
 		return EST_ERR_BUSY;
 	}
-	if (timeout_ms < EST_MICROPYTHON_PROGRAM_MIN_TIMEOUT_MS ||
-	    timeout_ms > EST_MICROPYTHON_PROGRAM_MAX_TIMEOUT_MS) {
+	if (timeout_ms != EST_MICROPYTHON_PROGRAM_NO_TIMEOUT_MS &&
+	    (timeout_ms < EST_MICROPYTHON_PROGRAM_MIN_TIMEOUT_MS ||
+	     timeout_ms > EST_MICROPYTHON_PROGRAM_MAX_TIMEOUT_MS)) {
 		return EST_ERR_INVALID_ARGUMENT;
 	}
-	program_status.timeout_ms = timeout_ms;
+	program_status.timeout_ms = EST_MICROPYTHON_PROGRAM_NO_TIMEOUT_MS;
 	program_status.state = EST_MICROPYTHON_PROGRAM_QUEUED;
 	program_status.error = EST_MICROPYTHON_PROGRAM_ERROR_NONE;
 	program_run_requested = true;
@@ -403,8 +401,6 @@ est_result_t est_micropython_program_stop(void)
 		return EST_ERR_STATE;
 	}
 	program_stop_requested = true;
-	program_status.state = EST_MICROPYTHON_PROGRAM_STOPPED;
-	program_status.error = EST_MICROPYTHON_PROGRAM_ERROR_STOPPED;
 	(void)est_motor_stop_all(EST_STOP_COAST);
 	return EST_OK;
 }
@@ -473,10 +469,6 @@ void est_micropython_vm_hook(void)
 	if (program_stop_requested) {
 		program_abort_error = EST_MICROPYTHON_PROGRAM_ERROR_STOPPED;
 		mp_raise_msg(&mp_type_RuntimeError, MP_ERROR_TEXT("program stopped"));
-	}
-	if ((int32_t)(now_ms - program_deadline_ms) >= 0) {
-		program_abort_error = EST_MICROPYTHON_PROGRAM_ERROR_TIMEOUT;
-		mp_raise_msg(&mp_type_RuntimeError, MP_ERROR_TEXT("program timeout"));
 	}
 }
 

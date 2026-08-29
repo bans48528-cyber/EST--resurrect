@@ -63,6 +63,7 @@ from .constants import (
     PERSISTENT_PROGRAM_TIMEOUT_SECONDS,
     PYTHON_PROGRAM_CHUNK_SIZE,
     PYTHON_PROGRAM_FLAG_TIMEOUT_ARMED,
+    PYTHON_PROGRAM_NO_TIMEOUT_MS,
 )
 from .errors import (
     AckRejectedError,
@@ -300,7 +301,9 @@ class FirmwareUpdater:
         return status
 
     def run_persistent_program(
-        self, timeout_ms: int = 2000, program_slot_id: int = 0
+        self,
+        timeout_ms: int = PYTHON_PROGRAM_NO_TIMEOUT_MS,
+        program_slot_id: int = 0,
     ) -> PythonProgramStatus:
         self.load_persistent_program(program_slot_id)
         return self._run_loaded_python_program(timeout_ms)
@@ -354,7 +357,7 @@ class FirmwareUpdater:
         return status
 
     def run_python_program(
-        self, source: bytes, timeout_ms: int = 2000
+        self, source: bytes, timeout_ms: int = PYTHON_PROGRAM_NO_TIMEOUT_MS
     ) -> PythonProgramStatus:
         self.upload_python_program(source)
         return self._run_loaded_python_program(timeout_ms)
@@ -364,13 +367,11 @@ class FirmwareUpdater:
             build_python_program_run_frame(timeout_ms)
         )
         self._require_python_program_success(status, "queue run")
-        deadline = time.monotonic() + timeout_ms / 1000.0 + 2.0
-        while time.monotonic() < deadline:
+        while True:
             status = self.read_python_program_status()
             if self._python_program_finished(status):
                 return status
             time.sleep(0.02)
-        raise DiagnosticTimeoutError("RAM 中的 Python 程序没有返回最终状态")
 
     def stop_python_program(self) -> PythonProgramStatus:
         status = self._python_program_action(build_python_program_stop_frame())

@@ -11,11 +11,15 @@ from .constants import (
     DEVICE_CAPABILITY_DRIVE_RUN,
     DEVICE_CAPABILITY_DRIVE_STEER,
     DEVICE_CAPABILITY_DRIVE_STEER_FOR,
+    DEVICE_CAPABILITY_DISPLAY_FONT_STYLES,
     DEVICE_CAPABILITY_FROZEN_EST_RUNTIME,
+    DEVICE_CAPABILITY_HOLD_POSITION_CONTROL,
     DEVICE_CAPABILITY_INPUT_SENSOR,
     DEVICE_CAPABILITY_KEYS,
     DEVICE_CAPABILITY_MICROPYTHON,
     DEVICE_CAPABILITY_PERSISTENT_PROGRAM,
+    DEVICE_CAPABILITY_UNLIMITED_PYTHON_RUN,
+    DEVICE_CAPABILITY_ZERO_SPEED_MOTOR_CONTROL,
     PERSISTENT_PROGRAM_SLOT_COUNT,
     DEVICE_CAPABILITY_PYTHON_PROGRAM,
     DEVICE_CAPABILITY_MOTOR_CONTROL,
@@ -96,7 +100,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--slot", type=int, choices=range(PERSISTENT_PROGRAM_SLOT_COUNT), default=0
     )
     python_run_saved.add_argument(
-        "--timeout-ms", type=int, default=2000, help="硬执行上限，默认 2000 ms"
+        "--timeout-ms",
+        type=int,
+        default=0,
+        help="兼容字段；0 表示无限运行，新固件会忽略旧的非零上限",
     )
 
     python_saved_clear = commands.add_parser(
@@ -113,7 +120,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     add_device_options(python_run)
     python_run.add_argument("--file", type=Path, required=True, help="Python 源文件")
     python_run.add_argument(
-        "--timeout-ms", type=int, default=2000, help="硬执行上限，默认 2000 ms"
+        "--timeout-ms",
+        type=int,
+        default=0,
+        help="兼容字段；0 表示无限运行，新固件会忽略旧的非零上限",
     )
 
     python_stop = commands.add_parser("python-stop", help="停止当前 RAM Python 程序")
@@ -224,7 +234,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     motor_position.add_argument(
         "--speed", type=int, default=30,
-        help="目标转速百分比，范围 10-100，默认 30；短行程会自动限速",
+        help="目标转速百分比，范围 0-100，默认 30；速度 0 的任务等待 STOP",
     )
     position_target = motor_position.add_mutually_exclusive_group(required=True)
     position_target.add_argument(
@@ -243,7 +253,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     motor_speed.add_argument(
         "--speed", type=int, default=30,
-        help="有方向的目标转速百分比，范围 -100 到 100，绝对值至少 10，默认 30",
+        help="有方向的目标转速百分比，范围 -100 到 100，默认 30",
     )
     motor_speed.add_argument(
         "--duration", type=float, default=5.0,
@@ -276,7 +286,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     motor_pair_position.add_argument(
         "--speed", type=int, default=20,
-        help="最大目标速度，范围 10-100，默认 20",
+        help="最大目标速度，范围 0-100，默认 20",
     )
 
     motor_pair_speed = commands.add_parser(
@@ -334,7 +344,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     drive_straight.add_argument(
         "--speed", type=int, default=40,
-        help="最大目标速度，范围 10-100，默认 40",
+        help="最大目标速度，范围 0-100，默认 40",
     )
 
     drive_run = commands.add_parser(
@@ -361,7 +371,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     drive_run.add_argument(
         "--speed", type=int, default=40,
-        help="目标速度，范围 10-100，默认 40",
+        help="目标速度，范围 0-100，默认 40",
     )
     drive_run.add_argument(
         "--stop", choices=("coast", "brake"), default="coast",
@@ -386,7 +396,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     drive_steer.add_argument(
         "--speed", type=int, default=80,
-        help="有方向移动速度，范围 -100 到 100 且不能为 0；默认 80",
+        help="有方向移动速度，范围 -100 到 100；默认 80",
     )
     drive_steer.add_argument(
         "--duration", type=float, default=5.0,
@@ -415,7 +425,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     drive_steer_for.add_argument(
         "--speed", type=int, default=40,
-        help="有方向移动速度，范围 -100 到 100 且不能为 0；默认 40",
+        help="有方向移动速度，范围 -100 到 100；默认 40",
     )
     steer_target = drive_steer_for.add_mutually_exclusive_group(required=True)
     steer_target.add_argument(
@@ -661,6 +671,10 @@ DEVICE_CAPABILITY_NAMES = (
     (DEVICE_CAPABILITY_PYTHON_PROGRAM, "python-program"),
     (DEVICE_CAPABILITY_PERSISTENT_PROGRAM, "persistent-program"),
     (DEVICE_CAPABILITY_FROZEN_EST_RUNTIME, "frozen-est-runtime"),
+    (DEVICE_CAPABILITY_UNLIMITED_PYTHON_RUN, "unlimited-python-run"),
+    (DEVICE_CAPABILITY_DISPLAY_FONT_STYLES, "display-font-styles"),
+    (DEVICE_CAPABILITY_ZERO_SPEED_MOTOR_CONTROL, "zero-speed-motor-control"),
+    (DEVICE_CAPABILITY_HOLD_POSITION_CONTROL, "hold-position-control"),
 )
 
 
@@ -1689,8 +1703,8 @@ MOTOR_POSITION_STATES = {
 
 
 def run_motor_position(args: argparse.Namespace) -> int:
-    if not 10 <= args.speed <= 100:
-        raise ValueError("--speed 必须在 10 到 100 之间")
+    if not 0 <= args.speed <= 100:
+        raise ValueError("--speed 必须在 0 到 100 之间")
     if args.rotations is not None:
         if args.rotations == 0 or not -10 <= args.rotations <= 10:
             raise ValueError("--rotations 必须在 -10 到 10 之间且不能为 0")
@@ -1760,8 +1774,8 @@ def run_motor_position(args: argparse.Namespace) -> int:
 
 
 def run_motor_speed(args: argparse.Namespace) -> int:
-    if args.speed == 0 or not -100 <= args.speed <= 100 or abs(args.speed) < 10:
-        raise ValueError("--speed 必须在 -100 到 100 之间，且绝对值至少为 10")
+    if not -100 <= args.speed <= 100:
+        raise ValueError("--speed 必须在 -100 到 100 之间")
     if not 0.5 <= args.duration <= 30.0:
         raise ValueError("--duration 必须在 0.5 到 30 秒之间")
 
@@ -1833,8 +1847,8 @@ DRIVE_STATES = {
 def run_motor_pair_position(args: argparse.Namespace) -> int:
     if args.left_port == args.right_port:
         raise ValueError("两个端口不能相同")
-    if not 10 <= args.speed <= 100:
-        raise ValueError("--speed 必须在 10 到 100 之间")
+    if not 0 <= args.speed <= 100:
+        raise ValueError("--speed 必须在 0 到 100 之间")
     degrees = (args.left_degrees, args.right_degrees)
     if any(value == 0 or not -3600 <= value <= 3600 for value in degrees):
         raise ValueError("两路目标角度必须在 -3600 到 3600 之间且不能为 0")
@@ -1910,8 +1924,8 @@ def run_motor_pair_speed(args: argparse.Namespace) -> int:
     speeds = (args.left_speed, args.right_speed)
     if args.left_port == args.right_port:
         raise ValueError("两个端口不能相同")
-    if any(speed == 0 or not -100 <= speed <= 100 or abs(speed) < 10 for speed in speeds):
-        raise ValueError("两个速度的绝对值都必须在 10 到 100 之间")
+    if any(not -100 <= speed <= 100 for speed in speeds):
+        raise ValueError("两个速度都必须在 -100 到 100 之间")
     if not 0.5 <= args.duration <= 60.0:
         raise ValueError("--duration 必须在 0.5 到 60 秒之间")
 
@@ -1987,8 +2001,8 @@ def run_drive_steer(args: argparse.Namespace) -> int:
         raise ValueError("左右轮端口不能相同")
     if not -100 <= args.steering <= 100:
         raise ValueError("--steering 必须在 -100 到 100 之间")
-    if args.speed == 0 or not -100 <= args.speed <= 100:
-        raise ValueError("--speed 必须在 -100 到 100 之间且不能为 0")
+    if not -100 <= args.speed <= 100:
+        raise ValueError("--speed 必须在 -100 到 100 之间")
     if not 0.5 <= args.duration <= 60.0:
         raise ValueError("--duration 必须在 0.5 到 60 秒之间")
 
@@ -2071,8 +2085,8 @@ def run_drive_steer_for(args: argparse.Namespace) -> int:
         raise ValueError("左右轮端口不能相同")
     if not -100 <= args.steering <= 100:
         raise ValueError("--steering 必须在 -100 到 100 之间")
-    if args.speed == 0 or not -100 <= args.speed <= 100:
-        raise ValueError("--speed 必须在 -100 到 100 之间且不能为 0")
+    if not -100 <= args.speed <= 100:
+        raise ValueError("--speed 必须在 -100 到 100 之间")
     if args.rotations is not None:
         if not 0 < args.rotations <= 10:
             raise ValueError("--rotations 必须大于 0 且不超过 10 圈")
@@ -2191,8 +2205,8 @@ def run_drive_straight(args: argparse.Namespace) -> int:
         raise ValueError("--axle-track 必须在 1 到 65535 毫米之间")
     if args.distance == 0:
         raise ValueError("--distance 不能为 0")
-    if not 10 <= args.speed <= 100:
-        raise ValueError("--speed 必须在 10 到 100 之间")
+    if not 0 <= args.speed <= 100:
+        raise ValueError("--speed 必须在 0 到 100 之间")
     numerator = args.distance * 360 * 113
     denominator = args.wheel_diameter * 355
     target_degrees = (
@@ -2267,8 +2281,8 @@ def run_drive_straight(args: argparse.Namespace) -> int:
 def run_drive_run(args: argparse.Namespace) -> int:
     if args.left_port == args.right_port:
         raise ValueError("左右轮端口不能相同")
-    if not 10 <= args.speed <= 100:
-        raise ValueError("--speed 必须在 10 到 100 之间")
+    if not 0 <= args.speed <= 100:
+        raise ValueError("--speed 必须在 0 到 100 之间")
     if args.rotations is not None:
         if args.rotations == 0 or not -10 <= args.rotations <= 10:
             raise ValueError("--rotations 必须在 -10 到 10 圈之间且不能为 0")

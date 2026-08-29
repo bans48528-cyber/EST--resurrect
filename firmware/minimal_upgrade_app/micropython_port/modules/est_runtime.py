@@ -5,6 +5,7 @@ API_VERSION = 1
 
 _COAST = 0
 _BRAKE = 1
+_HOLD = 2
 _start_handlers = []
 _motors = {}
 _motor_speeds = {}
@@ -43,8 +44,8 @@ def _elapsed_ms(start_ms):
 
 def _speed_magnitude(value):
     value = _absolute(int(value))
-    if value < 10 or value > 100:
-        raise ValueError("speed magnitude must be 10..100")
+    if value > 100:
+        raise ValueError("speed magnitude must be 0..100")
     return value
 
 
@@ -54,7 +55,7 @@ def _stop_mode(action):
     if action == "brake":
         return _BRAKE
     if action == "hold":
-        _not_implemented("hold stop action")
+        return _HOLD
     raise ValueError("stop action must be float, coast, brake or hold")
 
 
@@ -356,10 +357,15 @@ def infrared(port):
     return _sensor("infrared:", _Infrared, port)
 
 
+def display_image_for(name, seconds):
+    est.display.image(name)
+    est.display.refresh()
+    sleep(seconds)
+
+
 broadcast = _unsupported("broadcast")
 color_calibrate = _unsupported("color_calibrate")
 color_reset_calibration = _unsupported("color_reset_calibration")
-display_image_for = _unsupported("display_image_for")
 drive_dual_speed_for = _unsupported("drive_dual_speed_for")
 drive_start_dual_speed = _unsupported("drive_start_dual_speed")
 ir_beacon_compare = _unsupported("ir_beacon_compare")

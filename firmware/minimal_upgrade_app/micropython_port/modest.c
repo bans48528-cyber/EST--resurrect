@@ -1,4 +1,5 @@
 #include <stdint.h>
+#include <string.h>
 
 #include "py/gc.h"
 #include "py/obj.h"
@@ -236,8 +237,8 @@ static mp_obj_t modest_motor_stop(size_t argument_count,
 
 	if (argument_count == 2U) {
 		int32_t requested_mode = require_integer_range(arguments[1],
-			EST_STOP_COAST, EST_STOP_BRAKE,
-			MP_ERROR_TEXT("stop mode must be COAST or BRAKE"));
+			EST_STOP_COAST, EST_STOP_HOLD,
+			MP_ERROR_TEXT("stop mode must be COAST, BRAKE or HOLD"));
 
 		stop_mode = (est_stop_mode_t)requested_mode;
 	}
@@ -272,13 +273,9 @@ static mp_obj_t modest_motor_run_speed(mp_obj_t self_object,
 {
 	modest_motor_instance_t *self = MP_OBJ_TO_PTR(self_object);
 	int32_t speed = require_integer_range(speed_object, -100, 100,
-		MP_ERROR_TEXT("speed must be -100..-10 or 10..100"));
+		MP_ERROR_TEXT("speed must be -100..100"));
 	est_result_t result;
 
-	if (speed > -10 && speed < 10) {
-		mp_raise_ValueError(
-			MP_ERROR_TEXT("speed must be -100..-10 or 10..100"));
-	}
 	result = est_motor_run_speed(self->port, (int8_t)speed);
 	if (result != EST_OK) {
 		modest_raise_motor_error(result);
@@ -314,9 +311,8 @@ static mp_obj_t modest_motor_run_time(size_t argument_count,
 		mp_raise_ValueError(
 			MP_ERROR_TEXT("duration_ms must be 1..600000"));
 	}
-	if (speed < -100 || speed > 100 || (speed > -10 && speed < 10)) {
-		mp_raise_ValueError(
-			MP_ERROR_TEXT("speed must be -100..-10 or 10..100"));
+	if (speed < -100 || speed > 100) {
+		mp_raise_ValueError(MP_ERROR_TEXT("speed must be -100..100"));
 	}
 	if (stop_mode < EST_STOP_COAST || stop_mode > EST_STOP_HOLD) {
 		mp_raise_ValueError(
@@ -358,12 +354,12 @@ static mp_obj_t modest_motor_run_angle(size_t argument_count,
 		mp_raise_ValueError(
 			MP_ERROR_TEXT("degrees must be -3600..-1 or 1..3600"));
 	}
-	if (speed < 10 || speed > 100) {
-		mp_raise_ValueError(MP_ERROR_TEXT("speed must be 10..100"));
+	if (speed < 0 || speed > 100) {
+		mp_raise_ValueError(MP_ERROR_TEXT("speed must be 0..100"));
 	}
-	if (stop_mode < EST_STOP_COAST || stop_mode > EST_STOP_BRAKE) {
+	if (stop_mode < EST_STOP_COAST || stop_mode > EST_STOP_HOLD) {
 		mp_raise_ValueError(
-			MP_ERROR_TEXT("stop mode must be COAST or BRAKE"));
+			MP_ERROR_TEXT("stop mode must be COAST, BRAKE or HOLD"));
 	}
 	result = est_motor_run_angle(self->port, degrees, (uint8_t)speed,
 		(est_stop_mode_t)stop_mode);
@@ -426,6 +422,7 @@ static const mp_rom_map_elem_t modest_motor_locals_table[] = {
 	{MP_ROM_QSTR(MP_QSTR_STATE_FAULT), MP_ROM_INT(EST_MOTOR_FAULT)},
 	{MP_ROM_QSTR(MP_QSTR_STOP_COAST), MP_ROM_INT(EST_STOP_COAST)},
 	{MP_ROM_QSTR(MP_QSTR_STOP_BRAKE), MP_ROM_INT(EST_STOP_BRAKE)},
+	{MP_ROM_QSTR(MP_QSTR_STOP_HOLD), MP_ROM_INT(EST_STOP_HOLD)},
 };
 static MP_DEFINE_CONST_DICT(modest_motor_locals, modest_motor_locals_table);
 
@@ -634,8 +631,8 @@ static mp_obj_t modest_pair_stop(size_t argument_count,
 
 	if (argument_count == 2U) {
 		stop_mode = (est_stop_mode_t)require_integer_range(arguments[1],
-			EST_STOP_COAST, EST_STOP_BRAKE,
-			MP_ERROR_TEXT("stop mode must be COAST or BRAKE"));
+			EST_STOP_COAST, EST_STOP_HOLD,
+			MP_ERROR_TEXT("stop mode must be COAST, BRAKE, or HOLD"));
 	}
 	result = est_motor_pair_stop(stop_mode);
 	if (result == EST_ERR_STATE) {
@@ -656,16 +653,11 @@ static mp_obj_t modest_motor_pair_run_speed(mp_obj_t self_object,
 {
 	modest_pair_instance_t *self = MP_OBJ_TO_PTR(self_object);
 	int32_t left_speed = require_integer_range(left_speed_object, -100, 100,
-		MP_ERROR_TEXT("left_speed must be -100..-10 or 10..100"));
+		MP_ERROR_TEXT("left_speed must be -100..100"));
 	int32_t right_speed = require_integer_range(right_speed_object, -100, 100,
-		MP_ERROR_TEXT("right_speed must be -100..-10 or 10..100"));
+		MP_ERROR_TEXT("right_speed must be -100..100"));
 	est_result_t result;
 
-	if ((left_speed > -10 && left_speed < 10) ||
-	    (right_speed > -10 && right_speed < 10)) {
-		mp_raise_ValueError(
-			MP_ERROR_TEXT("pair speeds must have magnitude 10..100"));
-	}
 	result = est_motor_pair_run_speeds(self->left_port,
 		(int8_t)left_speed, self->right_port, (int8_t)right_speed);
 	if (result != EST_OK) {
@@ -710,15 +702,13 @@ static mp_obj_t modest_motor_pair_run_time(size_t argument_count,
 			MP_ERROR_TEXT("duration_ms must be 1..600000"));
 	}
 	if (left_speed < -100 || left_speed > 100 ||
-	    right_speed < -100 || right_speed > 100 ||
-	    (left_speed > -10 && left_speed < 10) ||
-	    (right_speed > -10 && right_speed < 10)) {
+	    right_speed < -100 || right_speed > 100) {
 		mp_raise_ValueError(
-			MP_ERROR_TEXT("pair speeds must have magnitude 10..100"));
+			MP_ERROR_TEXT("pair speeds must be -100..100"));
 	}
-	if (stop_mode < EST_STOP_COAST || stop_mode > EST_STOP_BRAKE) {
+	if (stop_mode < EST_STOP_COAST || stop_mode > EST_STOP_HOLD) {
 		mp_raise_ValueError(
-			MP_ERROR_TEXT("stop mode must be COAST or BRAKE"));
+			MP_ERROR_TEXT("stop mode must be COAST, BRAKE, or HOLD"));
 	}
 	result = est_motor_pair_run_speeds_for_time(self->left_port,
 		(int8_t)left_speed, self->right_port, (int8_t)right_speed,
@@ -770,12 +760,12 @@ static mp_obj_t modest_motor_pair_run_angle(size_t argument_count,
 		mp_raise_ValueError(
 			MP_ERROR_TEXT("pair degrees must be nonzero and within 3600"));
 	}
-	if (speed < 10 || speed > 100) {
-		mp_raise_ValueError(MP_ERROR_TEXT("speed must be 10..100"));
+	if (speed < 0 || speed > 100) {
+		mp_raise_ValueError(MP_ERROR_TEXT("speed must be 0..100"));
 	}
-	if (stop_mode < EST_STOP_COAST || stop_mode > EST_STOP_BRAKE) {
+	if (stop_mode < EST_STOP_COAST || stop_mode > EST_STOP_HOLD) {
 		mp_raise_ValueError(
-			MP_ERROR_TEXT("stop mode must be COAST or BRAKE"));
+			MP_ERROR_TEXT("stop mode must be COAST, BRAKE, or HOLD"));
 	}
 	result = est_motor_pair_run_angles(self->left_port, left_degrees,
 		self->right_port, right_degrees, (uint8_t)speed,
@@ -814,6 +804,7 @@ static const mp_rom_map_elem_t modest_motor_pair_locals_table[] = {
 	{MP_ROM_QSTR(MP_QSTR_STATE_FAULT), MP_ROM_INT(EST_DRIVE_FAULT)},
 	{MP_ROM_QSTR(MP_QSTR_STOP_COAST), MP_ROM_INT(EST_STOP_COAST)},
 	{MP_ROM_QSTR(MP_QSTR_STOP_BRAKE), MP_ROM_INT(EST_STOP_BRAKE)},
+	{MP_ROM_QSTR(MP_QSTR_STOP_HOLD), MP_ROM_INT(EST_STOP_HOLD)},
 };
 static MP_DEFINE_CONST_DICT(
 	modest_motor_pair_locals, modest_motor_pair_locals_table);
@@ -852,12 +843,12 @@ static mp_obj_t modest_drive_straight_angle(size_t argument_count,
 		mp_raise_ValueError(
 			MP_ERROR_TEXT("degrees must be -3600..-1 or 1..3600"));
 	}
-	if (speed < 10 || speed > 100) {
-		mp_raise_ValueError(MP_ERROR_TEXT("speed must be 10..100"));
+	if (speed < 0 || speed > 100) {
+		mp_raise_ValueError(MP_ERROR_TEXT("speed must be 0..100"));
 	}
-	if (stop_mode < EST_STOP_COAST || stop_mode > EST_STOP_BRAKE) {
+	if (stop_mode < EST_STOP_COAST || stop_mode > EST_STOP_HOLD) {
 		mp_raise_ValueError(
-			MP_ERROR_TEXT("stop mode must be COAST or BRAKE"));
+			MP_ERROR_TEXT("stop mode must be COAST, BRAKE, or HOLD"));
 	}
 	result = est_drive_run_degrees(self->left_port, self->right_port,
 		degrees, (uint8_t)speed, (est_stop_mode_t)stop_mode);
@@ -903,13 +894,12 @@ static mp_obj_t modest_drive_straight_time(size_t argument_count,
 		mp_raise_ValueError(
 			MP_ERROR_TEXT("duration_ms must be 1..600000"));
 	}
-	if (speed < -100 || speed > 100 || (speed > -10 && speed < 10)) {
-		mp_raise_ValueError(
-			MP_ERROR_TEXT("speed must be -100..-10 or 10..100"));
+	if (speed < -100 || speed > 100) {
+		mp_raise_ValueError(MP_ERROR_TEXT("speed must be -100..100"));
 	}
-	if (stop_mode < EST_STOP_COAST || stop_mode > EST_STOP_BRAKE) {
+	if (stop_mode < EST_STOP_COAST || stop_mode > EST_STOP_HOLD) {
 		mp_raise_ValueError(
-			MP_ERROR_TEXT("stop mode must be COAST or BRAKE"));
+			MP_ERROR_TEXT("stop mode must be COAST, BRAKE, or HOLD"));
 	}
 	signed_duration = speed < 0 ? -duration_ms : duration_ms;
 	speed_magnitude = speed < 0 ? -speed : speed;
@@ -950,13 +940,8 @@ static mp_obj_t modest_drive_steer(size_t argument_count,
 	if (steering < -100 || steering > 100) {
 		mp_raise_ValueError(MP_ERROR_TEXT("steering must be -100..100"));
 	}
-	if (speed > -10 && speed < 10) {
-		mp_raise_ValueError(
-			MP_ERROR_TEXT("speed must be -100..-10 or 10..100"));
-	}
 	if (speed < -100 || speed > 100) {
-		mp_raise_ValueError(
-			MP_ERROR_TEXT("speed must be -100..-10 or 10..100"));
+		mp_raise_ValueError(MP_ERROR_TEXT("speed must be -100..100"));
 	}
 	result = est_drive_start_steer(self->left_port, self->right_port,
 		(int8_t)steering, (int8_t)speed);
@@ -1004,13 +989,12 @@ static mp_obj_t modest_drive_steer_for(size_t argument_count,
 	    (target_mode == EST_DRIVE_TARGET_TIME_MS && target > 600000)) {
 		mp_raise_ValueError(MP_ERROR_TEXT("drive target out of range"));
 	}
-	if (speed < -100 || speed > 100 || (speed > -10 && speed < 10)) {
-		mp_raise_ValueError(
-			MP_ERROR_TEXT("speed must be -100..-10 or 10..100"));
+	if (speed < -100 || speed > 100) {
+		mp_raise_ValueError(MP_ERROR_TEXT("speed must be -100..100"));
 	}
-	if (stop_mode < EST_STOP_COAST || stop_mode > EST_STOP_BRAKE) {
+	if (stop_mode < EST_STOP_COAST || stop_mode > EST_STOP_HOLD) {
 		mp_raise_ValueError(
-			MP_ERROR_TEXT("stop mode must be COAST or BRAKE"));
+			MP_ERROR_TEXT("stop mode must be COAST, BRAKE, or HOLD"));
 	}
 	result = est_drive_steer_for(self->left_port, self->right_port,
 		target_mode, (int8_t)steering, (int8_t)speed, target,
@@ -1069,6 +1053,7 @@ static const mp_rom_map_elem_t modest_drive_base_locals_table[] = {
 	{MP_ROM_QSTR(MP_QSTR_STATE_FAULT), MP_ROM_INT(EST_DRIVE_FAULT)},
 	{MP_ROM_QSTR(MP_QSTR_STOP_COAST), MP_ROM_INT(EST_STOP_COAST)},
 	{MP_ROM_QSTR(MP_QSTR_STOP_BRAKE), MP_ROM_INT(EST_STOP_BRAKE)},
+	{MP_ROM_QSTR(MP_QSTR_STOP_HOLD), MP_ROM_INT(EST_STOP_HOLD)},
 };
 static MP_DEFINE_CONST_DICT(
 	modest_drive_base_locals, modest_drive_base_locals_table);
@@ -1893,30 +1878,91 @@ static mp_obj_t modest_display_rectangle(size_t argument_count,
 static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(
 	modest_display_rectangle_obj, 4, 6, modest_display_rectangle);
 
-static mp_obj_t modest_display_text(size_t argument_count,
-	const mp_obj_t *arguments)
+static est_display_font_t modest_display_font_from_object(mp_obj_t font_object)
 {
-	uint16_t x = (uint16_t)require_integer_range(arguments[0], 0,
-		EST_DISPLAY_WIDTH - 1, MP_ERROR_TEXT("x must be 0..179"));
-	uint16_t y = (uint16_t)require_integer_range(arguments[1], 0,
-		EST_DISPLAY_HEIGHT - 1, MP_ERROR_TEXT("y must be 0..127"));
-	const char *value;
-	uint8_t scale = 1U;
+	const char *font;
 
-	if (!mp_obj_is_str(arguments[2])) {
+	if (!mp_obj_is_str(font_object)) {
+		mp_raise_ValueError(MP_ERROR_TEXT("invalid display font"));
+	}
+	font = mp_obj_str_get_str(font_object);
+	if (strcmp(font, "regular_black") == 0) {
+		return EST_DISPLAY_FONT_REGULAR_BLACK;
+	}
+	if (strcmp(font, "bold_black") == 0) {
+		return EST_DISPLAY_FONT_BOLD_BLACK;
+	}
+	if (strcmp(font, "large_black") == 0) {
+		return EST_DISPLAY_FONT_LARGE_BLACK;
+	}
+	if (strcmp(font, "regular_white") == 0) {
+		return EST_DISPLAY_FONT_REGULAR_WHITE;
+	}
+	if (strcmp(font, "bold_white") == 0) {
+		return EST_DISPLAY_FONT_BOLD_WHITE;
+	}
+	if (strcmp(font, "large_white") == 0) {
+		return EST_DISPLAY_FONT_LARGE_WHITE;
+	}
+	mp_raise_ValueError(MP_ERROR_TEXT("invalid display font"));
+}
+
+static mp_obj_t modest_display_text(size_t argument_count,
+	const mp_obj_t *positional_arguments, mp_map_t *keyword_arguments)
+{
+	enum { ARG_x, ARG_y, ARG_text, ARG_scale, ARG_font };
+	static const mp_arg_t allowed_arguments[] = {
+		{MP_QSTR_x, MP_ARG_REQUIRED | MP_ARG_OBJ,
+			{.u_rom_obj = MP_ROM_NONE}},
+		{MP_QSTR_y, MP_ARG_REQUIRED | MP_ARG_OBJ,
+			{.u_rom_obj = MP_ROM_NONE}},
+		{MP_QSTR_text, MP_ARG_REQUIRED | MP_ARG_OBJ,
+			{.u_rom_obj = MP_ROM_NONE}},
+		{MP_QSTR_scale, MP_ARG_OBJ, {.u_rom_obj = MP_ROM_NONE}},
+		{MP_QSTR_font, MP_ARG_KW_ONLY | MP_ARG_OBJ,
+			{.u_rom_obj = MP_ROM_NONE}},
+	};
+	mp_arg_val_t arguments[MP_ARRAY_SIZE(allowed_arguments)];
+	uint16_t x;
+	uint16_t y;
+	const char *value;
+
+	mp_arg_parse_all(argument_count, positional_arguments,
+		keyword_arguments, MP_ARRAY_SIZE(allowed_arguments),
+		allowed_arguments, arguments);
+	x = (uint16_t)require_integer_range(arguments[ARG_x].u_obj, 0,
+		EST_DISPLAY_WIDTH - 1, MP_ERROR_TEXT("x must be 0..179"));
+	y = (uint16_t)require_integer_range(arguments[ARG_y].u_obj, 0,
+		EST_DISPLAY_HEIGHT - 1, MP_ERROR_TEXT("y must be 0..127"));
+	if (!mp_obj_is_str(arguments[ARG_text].u_obj)) {
 		mp_raise_TypeError(MP_ERROR_TEXT("display text must be a string"));
 	}
-	value = mp_obj_str_get_str(arguments[2]);
-	if (argument_count == 4U) {
-		scale = (uint8_t)require_integer_range(arguments[3], 1, 4,
-			MP_ERROR_TEXT("text scale must be 1..4"));
+	value = mp_obj_str_get_str(arguments[ARG_text].u_obj);
+	if (arguments[ARG_font].u_obj != mp_const_none) {
+		est_display_font_t font;
+
+		if (arguments[ARG_scale].u_obj != mp_const_none) {
+			mp_raise_ValueError(
+				MP_ERROR_TEXT("scale and font cannot be combined"));
+		}
+		font = modest_display_font_from_object(arguments[ARG_font].u_obj);
+		modest_require_peripheral_result(
+			est_display_text_font(x, y, value, font));
+	} else {
+		uint8_t scale = 1U;
+
+		if (arguments[ARG_scale].u_obj != mp_const_none) {
+			scale = (uint8_t)require_integer_range(
+				arguments[ARG_scale].u_obj, 1, 4,
+				MP_ERROR_TEXT("text scale must be 1..4"));
+		}
+		modest_require_peripheral_result(
+			est_display_text(x, y, value, scale));
 	}
-	modest_require_peripheral_result(
-		est_display_text(x, y, value, scale));
 	return mp_const_none;
 }
-static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(
-	modest_display_text_obj, 3, 4, modest_display_text);
+static MP_DEFINE_CONST_FUN_OBJ_KW(
+	modest_display_text_obj, 3, modest_display_text);
 
 static mp_obj_t modest_display_bitmap(size_t argument_count,
 	const mp_obj_t *arguments)
@@ -1940,6 +1986,23 @@ static mp_obj_t modest_display_bitmap(size_t argument_count,
 static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(
 	modest_display_bitmap_obj, 5, 5, modest_display_bitmap);
 
+static mp_obj_t modest_display_image(mp_obj_t name_object)
+{
+	const char *name;
+
+	if (!mp_obj_is_str(name_object)) {
+		mp_raise_TypeError(
+			MP_ERROR_TEXT("display image name must be a string"));
+	}
+	name = mp_obj_str_get_str(name_object);
+	if (est_display_image(name) != EST_OK) {
+		mp_raise_ValueError(MP_ERROR_TEXT("unknown display image"));
+	}
+	return mp_const_none;
+}
+static MP_DEFINE_CONST_FUN_OBJ_1(
+	modest_display_image_obj, modest_display_image);
+
 static mp_obj_t modest_display_refresh(void)
 {
 	est_micropython_vm_hook();
@@ -1959,6 +2022,7 @@ static const mp_rom_map_elem_t modest_display_globals_table[] = {
 		MP_ROM_PTR(&modest_display_rectangle_obj)},
 	{MP_ROM_QSTR(MP_QSTR_text), MP_ROM_PTR(&modest_display_text_obj)},
 	{MP_ROM_QSTR(MP_QSTR_bitmap), MP_ROM_PTR(&modest_display_bitmap_obj)},
+	{MP_ROM_QSTR(MP_QSTR_image), MP_ROM_PTR(&modest_display_image_obj)},
 	{MP_ROM_QSTR(MP_QSTR_refresh), MP_ROM_PTR(&modest_display_refresh_obj)},
 	{MP_ROM_QSTR(MP_QSTR_WIDTH), MP_ROM_INT(EST_DISPLAY_WIDTH)},
 	{MP_ROM_QSTR(MP_QSTR_HEIGHT), MP_ROM_INT(EST_DISPLAY_HEIGHT)},

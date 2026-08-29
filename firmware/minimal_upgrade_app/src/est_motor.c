@@ -60,9 +60,13 @@ static bool stop_mode_valid(est_stop_mode_t stop_mode)
 static enum board_motor_stop_mode board_stop_from_est(
 	est_stop_mode_t stop_mode)
 {
-	return stop_mode == EST_STOP_BRAKE ?
-		BOARD_MOTOR_STOP_HIGH_PUSH_PULL :
-		BOARD_MOTOR_STOP_LOW_OPEN_DRAIN;
+	if (stop_mode == EST_STOP_BRAKE) {
+		return BOARD_MOTOR_STOP_HIGH_PUSH_PULL;
+	}
+	if (stop_mode == EST_STOP_HOLD) {
+		return BOARD_MOTOR_STOP_HOLD_POSITION;
+	}
+	return BOARD_MOTOR_STOP_LOW_OPEN_DRAIN;
 }
 
 est_result_t est_motor_get_type(est_motor_port_t port,
@@ -110,7 +114,7 @@ est_result_t est_motor_run_speed(est_motor_port_t port,
 	if (magnitude < 0) {
 		magnitude = -magnitude;
 	}
-	if (magnitude < 10 || magnitude > 100) {
+	if (magnitude > 100) {
 		return EST_ERR_INVALID_ARGUMENT;
 	}
 	result = require_tacho_motor(port);
@@ -136,13 +140,10 @@ est_result_t est_motor_run_time(est_motor_port_t port,
 	if (magnitude < 0) {
 		magnitude = -magnitude;
 	}
-	if (magnitude < 10 || magnitude > 100 || duration_ms == 0U ||
+	if (magnitude > 100 || duration_ms == 0U ||
 	    duration_ms > EST_MOTOR_MAX_DURATION_MS ||
 	    !stop_mode_valid(stop_mode)) {
 		return EST_ERR_INVALID_ARGUMENT;
-	}
-	if (stop_mode == EST_STOP_HOLD) {
-		return EST_ERR_NOT_SUPPORTED;
 	}
 	result = require_tacho_motor(port);
 	if (result != EST_OK) {
@@ -165,19 +166,17 @@ est_result_t est_motor_run_angle(est_motor_port_t port, int32_t degrees,
 		return EST_ERR_INVALID_PORT;
 	}
 	if (degrees == 0 || degrees < -3600 || degrees > 3600 ||
-	    maximum_speed_percent < 10U || maximum_speed_percent > 100U ||
+	    maximum_speed_percent > 100U ||
 	    !stop_mode_valid(stop_mode)) {
 		return EST_ERR_INVALID_ARGUMENT;
-	}
-	if (stop_mode != EST_STOP_COAST) {
-		return EST_ERR_NOT_SUPPORTED;
 	}
 	result = require_tacho_motor(port);
 	if (result != EST_OK) {
 		return result;
 	}
 	if (!board_motor_start_position(est_system_millis(),
-	    board_port_from_est(port), maximum_speed_percent, degrees)) {
+	    board_port_from_est(port), maximum_speed_percent, degrees,
+	    board_stop_from_est(stop_mode))) {
 		return EST_ERR_BUSY;
 	}
 	return EST_OK;
@@ -196,9 +195,6 @@ est_result_t est_motor_stop(est_motor_port_t port,
 	if (!stop_mode_valid(stop_mode)) {
 		return EST_ERR_INVALID_ARGUMENT;
 	}
-	if (stop_mode == EST_STOP_HOLD) {
-		return EST_ERR_NOT_SUPPORTED;
-	}
 	board_port = board_port_from_est(port);
 	(void)board_motor_speed_snapshot_for_port(board_port, &speed);
 	if (speed.state == BOARD_MOTOR_SPEED_RUNNING && speed.port == board_port) {
@@ -210,6 +206,15 @@ est_result_t est_motor_stop(est_motor_port_t port,
 	    position.port == board_port) {
 		return board_motor_stop_position(board_port,
 			board_stop_from_est(stop_mode)) ? EST_OK : EST_ERR_BUSY;
+	}
+	if (stop_mode == EST_STOP_HOLD) {
+		est_result_t result = require_tacho_motor(port);
+
+		if (result != EST_OK) {
+			return result;
+		}
+		return board_motor_stop_position(board_port,
+			BOARD_MOTOR_STOP_HOLD_POSITION) ? EST_OK : EST_ERR_STATE;
 	}
 	if (stop_mode == EST_STOP_BRAKE) {
 		return board_motor_brake(board_port) ? EST_OK : EST_ERR_STATE;
@@ -258,6 +263,7 @@ est_result_t est_motor_get_status(est_motor_port_t port,
 	struct board_motor_control_snapshot control;
 	struct board_motor_position_snapshot position;
 	struct board_motor_speed_snapshot speed;
+	struct board_motor_hold_snapshot hold;
 
 	if (!est_motor_port_valid(port)) {
 		return EST_ERR_INVALID_PORT;
@@ -298,6 +304,12 @@ est_result_t est_motor_get_status(est_motor_port_t port,
 			status->state = EST_MOTOR_FAULT;
 			status->error = EST_ERR_TIMEOUT;
 		}
+	}
+	(void)board_motor_hold_snapshot_for_port(board_port, &hold);
+	if (hold.state == BOARD_MOTOR_HOLD_HOLDING && hold.port == board_port) {
+		status->state = EST_MOTOR_HOLDING;
+		status->stop_mode = EST_STOP_HOLD;
+		status->target_speed_percent = 0;
 	}
 	return EST_OK;
 }

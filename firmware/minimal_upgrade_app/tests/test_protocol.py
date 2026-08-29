@@ -265,6 +265,7 @@ class EstServiceApiTests(unittest.TestCase):
             "est_display_line",
             "est_display_rectangle",
             "est_display_text",
+            "est_display_text_font",
             "est_display_bitmap",
             "est_display_refresh",
         ):
@@ -682,7 +683,7 @@ class BoardModuleLayoutTests(unittest.TestCase):
         header = (ROOT / "include" / "board_motor.h").read_text(encoding="utf-8")
         config = (ROOT / "include" / "app_config.h").read_text(encoding="utf-8")
         self.assertIn("MOTOR_POSITION_COMMAND          0x1BU", config)
-        self.assertIn("DEVICE_PROTOCOL_MINOR           20U", config)
+        self.assertIn("DEVICE_PROTOCOL_MINOR           22U", config)
         self.assertIn("MOTOR_LARGE_COUNTS_PER_SPEED 12800U", motor)
         self.assertIn("MOTOR_MEDIUM_COUNTS_PER_SPEED 8100U", motor)
         self.assertIn("medium_samples[4] = {2U, 4U, 8U, 16U}", motor)
@@ -708,11 +709,55 @@ class BoardModuleLayoutTests(unittest.TestCase):
         self.assertIn("board_motor_start_speed", motor)
         self.assertIn("apply_closed_loop_speed", motor)
         self.assertIn("speed_error * 8", motor)
-        self.assertIn("MOTOR_SPEED_MIN_PERCENT 10", motor)
+        self.assertIn("MOTOR_SPEED_MIN_PERCENT 1", motor)
+        self.assertIn("MOTOR_POSITION_MIN_SPEED_PERCENT 1U", motor)
         self.assertIn("board_motor_stop_speed", motor)
         self.assertIn("EST_STOP_COAST", protocol)
         self.assertIn("EST_STOP_BRAKE", protocol)
         self.assertIn("queue_motor_speed_result", protocol)
+
+    def test_closed_loop_speed_accepts_zero_through_nine_across_all_layers(self) -> None:
+        board = (SOURCE_DIR / "board_motor.c").read_text(encoding="utf-8")
+        motor = (SOURCE_DIR / "est_motor.c").read_text(encoding="utf-8")
+        drive = (SOURCE_DIR / "est_drive.c").read_text(encoding="utf-8")
+        module = (ROOT / "micropython_port" / "modest.c").read_text(
+            encoding="utf-8"
+        )
+        runtime = (
+            ROOT / "micropython_port" / "modules" / "est_runtime.py"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("MOTOR_SPEED_MIN_PERCENT 1", board)
+        self.assertIn("MOTOR_POSITION_MIN_SPEED_PERCENT 1U", board)
+        self.assertIn("if (magnitude > 100)", motor)
+        self.assertIn("return magnitude <= 100;", drive)
+        self.assertIn("speed must be -100..100", module)
+        self.assertIn("speed magnitude must be 0..100", runtime)
+        for source in (board, motor, drive, module, runtime):
+            self.assertNotIn("10..100", source)
+
+    def test_continuous_motor_speed_can_be_retargeted_without_restart(self) -> None:
+        motor = (SOURCE_DIR / "board_motor.c").read_text(encoding="utf-8")
+        start_speed = motor.split("bool board_motor_start_speed", 1)[1].split(
+            "bool board_motor_start_speed_for_time", 1
+        )[0]
+        retarget = start_speed.split("if (speed_control_active(port))", 1)[1].split(
+            "if (port_control_active(port)", 1
+        )[0]
+        start_timed = motor.split(
+            "bool board_motor_start_speed_for_time", 1
+        )[1].split("bool board_motor_stop_speed", 1)[0]
+
+        self.assertIn("control->duration_ms != 0U", retarget)
+        self.assertIn("pair_speed_owns_port(port)", retarget)
+        self.assertIn("control->requested_speed = speed_percent;", retarget)
+        self.assertNotIn("motor_output_off(port)", retarget)
+        self.assertNotIn("control->pwm_x100 = 0", retarget)
+        self.assertNotIn("control->started_ms = now_ms", retarget)
+        self.assertLess(
+            start_timed.index("port_control_active(port)"),
+            start_timed.index("board_motor_start_speed(now_ms"),
+        )
 
     def test_motor_closed_loop_state_is_independent_for_all_four_ports(self) -> None:
         motor = (SOURCE_DIR / "board_motor.c").read_text(encoding="utf-8")
@@ -1073,6 +1118,7 @@ class BoardModuleLayoutTests(unittest.TestCase):
 
     def test_sensor_screen_shows_live_modes_and_cycles_with_a_key(self) -> None:
         lcd = (SOURCE_DIR / "board_lcd.c").read_text(encoding="utf-8")
+        lcd_text = (SOURCE_DIR / "board_lcd_text.c").read_text(encoding="utf-8")
         header = (ROOT / "include" / "board_lcd.h").read_text(encoding="utf-8")
         main = (SOURCE_DIR / "main.c").read_text(encoding="utf-8")
         self.assertIn("board_lcd_show_sensor", header)
@@ -1093,7 +1139,7 @@ class BoardModuleLayoutTests(unittest.TestCase):
         self.assertIn("format_status_line", main)
         self.assertIn('append_status_text(output, &output_index, "BAT:");', main)
         self.assertIn('append_status_text(output, &output_index, " SND:");', main)
-        self.assertIn("glyph_percent", lcd)
+        self.assertIn("glyph_percent", lcd_text)
         self.assertIn("draw_text_centered(116U, status, 1U);", lcd)
         self.assertIn("BOARD_SENSOR_PORT_COUNT", main)
         self.assertIn("board_sensor_set_all_modes", main)
@@ -1229,16 +1275,22 @@ class MicroPythonIntegrationTests(unittest.TestCase):
         config = (ROOT / "include" / "app_config.h").read_text(encoding="utf-8")
         protocol = (SOURCE_DIR / "update_protocol.c").read_text(encoding="utf-8")
         self.assertIn("MICROPYTHON_STATUS_COMMAND      0x23U", config)
-        self.assertIn("DEVICE_PROTOCOL_MINOR           20U", config)
+        self.assertIn("DEVICE_PROTOCOL_MINOR           22U", config)
         self.assertIn("DEVICE_CAPABILITY_MICROPYTHON", config)
         self.assertIn("DEVICE_CAPABILITY_FROZEN_EST_RUNTIME", config)
+        self.assertIn("DEVICE_CAPABILITY_UNLIMITED_PYTHON_RUN", config)
+        self.assertIn("DEVICE_CAPABILITY_DISPLAY_FONT_STYLES", config)
+        self.assertIn("DEVICE_CAPABILITY_ZERO_SPEED_MOTOR_CONTROL", config)
         self.assertIn("DEVICE_CAPABILITY_FROZEN_EST_RUNTIME", protocol)
+        self.assertIn("DEVICE_CAPABILITY_UNLIMITED_PYTHON_RUN", protocol)
+        self.assertIn("DEVICE_CAPABILITY_DISPLAY_FONT_STYLES", protocol)
+        self.assertIn("DEVICE_CAPABILITY_ZERO_SPEED_MOTOR_CONTROL", protocol)
         self.assertIn("MICROPYTHON_STATUS_PAYLOAD_LENGTH 28U", protocol)
         self.assertIn("queue_micropython_status", protocol)
         self.assertIn("status.maximum_gc_pause_us", protocol)
         self.assertIn("status.self_test_value", protocol)
 
-    def test_ram_python_program_is_crc_checked_bounded_and_interruptible(self) -> None:
+    def test_ram_python_program_is_crc_checked_unbounded_and_interruptible(self) -> None:
         config = (ROOT / "include" / "app_config.h").read_text(encoding="utf-8")
         header = (ROOT / "include" / "est_micropython.h").read_text(
             encoding="utf-8"
@@ -1255,8 +1307,14 @@ class MicroPythonIntegrationTests(unittest.TestCase):
         self.assertIn("PYTHON_PROGRAM_COMMAND          0x24U", config)
         self.assertIn("DEVICE_CAPABILITY_PYTHON_PROGRAM", config)
         self.assertIn("EST_MICROPYTHON_PROGRAM_MAX_SIZE 8192U", header)
+        self.assertIn("EST_MICROPYTHON_PROGRAM_NO_TIMEOUT_MS 0U", header)
         self.assertIn("crc32_bytes", runtime)
-        self.assertIn("program_deadline_ms", runtime)
+        self.assertNotIn("program_deadline_ms", runtime)
+        self.assertNotIn('MP_ERROR_TEXT("program timeout")', runtime)
+        self.assertIn(
+            "program_status.timeout_ms = EST_MICROPYTHON_PROGRAM_NO_TIMEOUT_MS;",
+            runtime,
+        )
         self.assertIn("program_stop_requested", runtime)
         self.assertIn("mp_raise_msg(&mp_type_RuntimeError", runtime)
         self.assertIn("usb_hid_poll();", runtime)
@@ -1269,6 +1327,26 @@ class MicroPythonIntegrationTests(unittest.TestCase):
         self.assertLess(
             main.index("est_runtime_tick(now_ms);"),
             main.index("est_micropython_tick();"),
+        )
+
+    def test_running_program_reports_stopped_only_after_cleanup(self) -> None:
+        runtime = (ROOT / "micropython_port" / "est_micropython.c").read_text(
+            encoding="utf-8"
+        )
+        stop = runtime.split("est_result_t est_micropython_program_stop", 1)[1].split(
+            "est_result_t est_micropython_program_clear", 1
+        )[0]
+        tick = runtime.split("void est_micropython_tick(void)", 1)[1].split(
+            "bool est_micropython_get_status", 1
+        )[0]
+
+        running_stop = stop.split("if (!program_executing", 1)[1]
+        self.assertIn("program_stop_requested = true;", running_stop)
+        self.assertIn("est_motor_stop_all(EST_STOP_COAST)", running_stop)
+        self.assertNotIn("program_status.state =", running_stop)
+        self.assertLess(
+            tick.index("program_cleanup_after_failure();"),
+            tick.index("program_executing = false;"),
         )
 
     def test_persistent_program_store_has_named_logical_slots_and_dual_banks(self) -> None:
@@ -1471,6 +1549,64 @@ class MicroPythonIntegrationTests(unittest.TestCase):
         self.assertNotIn("board_led_", module)
         self.assertNotIn("board_backlight_", module)
 
+    def test_display_font_styles_keep_keyword_and_legacy_scale_contract(self) -> None:
+        module = (ROOT / "micropython_port" / "modest.c").read_text(
+            encoding="utf-8"
+        )
+        display_header = (ROOT / "include" / "est_display.h").read_text(
+            encoding="utf-8"
+        )
+        display_source = (SOURCE_DIR / "est_display.c").read_text(
+            encoding="utf-8"
+        )
+        lcd_header = (ROOT / "include" / "board_lcd.h").read_text(
+            encoding="utf-8"
+        )
+        lcd_source = (SOURCE_DIR / "board_lcd.c").read_text(encoding="utf-8")
+        renderer = (SOURCE_DIR / "board_lcd_text.c").read_text(encoding="utf-8")
+        script = (
+            ROOT.parents[1]
+            / "tools"
+            / "est_hid_sender"
+            / "examples"
+            / "display_font_styles_smoke.py"
+        ).read_text(encoding="utf-8")
+
+        font_names = (
+            "regular_black",
+            "bold_black",
+            "large_black",
+            "regular_white",
+            "bold_white",
+            "large_white",
+        )
+        for font_name in font_names:
+            self.assertIn(f'"{font_name}"', module)
+            self.assertIn(f'font="{font_name}"', script)
+        self.assertIn("MP_QSTR_font, MP_ARG_KW_ONLY | MP_ARG_OBJ", module)
+        self.assertIn("MP_DEFINE_CONST_FUN_OBJ_KW", module)
+        self.assertIn('MP_ERROR_TEXT("invalid display font")', module)
+        self.assertIn('MP_ERROR_TEXT("scale and font cannot be combined")', module)
+        self.assertIn("est_display_text(x, y, value, scale)", module)
+        self.assertIn("est_display_text_font(x, y, value, font)", module)
+        self.assertIn("est_display_text_font", display_header)
+        self.assertIn("board_lcd_draw_text_style", display_source)
+        self.assertIn("board_lcd_draw_text_style", lcd_header)
+        self.assertIn("board_lcd_text_draw_legacy", lcd_source)
+        self.assertIn("board_lcd_text_draw_style", renderer)
+        self.assertIn("fill_region", renderer)
+        self.assertIn("fill_text_background", renderer)
+        self.assertIn(
+            "background_padding = foreground_on ? 0U : scale;", renderer
+        )
+        self.assertIn("if (bold)", renderer)
+        display_text = module.split(
+            "static mp_obj_t modest_display_text(size_t", 1
+        )[1].split("static MP_DEFINE_CONST_FUN_OBJ_KW", 1)[0]
+        self.assertNotIn("est_display_refresh", display_text)
+        self.assertEqual(script.count("est.display.text("), 6)
+        self.assertEqual(script.count("est.display.refresh()"), 1)
+
     def test_motor_python_api_wraps_single_motor_services(self) -> None:
         module = (ROOT / "micropython_port" / "modest.c").read_text(
             encoding="utf-8"
@@ -1649,6 +1785,33 @@ class MicroPythonIntegrationTests(unittest.TestCase):
         self.assertIn("program_cleanup_after_failure();", tick)
         self.assertIn("(void)est_system_cleanup();", runtime)
         self.assertIn("restart_sensors();", runtime)
+
+    def test_ram_program_switches_to_running_screen_and_restores_status(self) -> None:
+        runtime = (ROOT / "micropython_port" / "est_micropython.c").read_text(
+            encoding="utf-8"
+        )
+        main = (ROOT / "src" / "main.c").read_text(encoding="utf-8")
+        tick = runtime.split("void est_micropython_tick(void)", 1)[1].split(
+            "bool est_micropython_get_status", 1
+        )[0]
+
+        self.assertIn('#include "est_display.h"', runtime)
+        self.assertIn("est_display_clear();", tick)
+        self.assertIn(
+            '(void)est_display_text(45U, 60U, "Program Running", 1U);', tick
+        )
+        self.assertIn("est_display_refresh();", tick)
+        self.assertLess(
+            tick.index('est_display_text(45U, 60U, "Program Running", 1U)'),
+            tick.index("execute_script((const char *)program_source"),
+        )
+        self.assertIn(
+            "python_program.state == EST_MICROPYTHON_PROGRAM_QUEUED", main
+        )
+        self.assertLess(
+            main.index("display_initialized = false;"),
+            main.index("est_micropython_tick();"),
+        )
 
 
 if __name__ == "__main__":

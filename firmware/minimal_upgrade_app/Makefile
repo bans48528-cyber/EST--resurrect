@@ -28,7 +28,12 @@ LDFLAGS := $(ARCH_FLAGS) -Tmemory.ld -L$(OPENCM3_DIR)/lib -nostartfiles \
 LDLIBS := -lopencm3_stm32f4 -Wl,--start-group -lc -lm -lgcc -lnosys -Wl,--end-group
 
 SOURCES := $(wildcard src/*.c)
-OBJECTS := $(patsubst src/%.c,$(BUILD_DIR)/obj/%.o,$(SOURCES))
+SOURCE_OBJECTS := $(patsubst src/%.c,$(BUILD_DIR)/obj/%.o,$(SOURCES))
+DISPLAY_IMAGE_ASSET_DIRS := assets/display_images/Expressions \
+	assets/display_images/Eyes
+DISPLAY_IMAGE_SOURCE := $(BUILD_DIR)/generated/display_image_resources.c
+DISPLAY_IMAGE_OBJECT := $(BUILD_DIR)/obj/display_image_resources.o
+OBJECTS := $(SOURCE_OBJECTS) $(DISPLAY_IMAGE_OBJECT)
 DEPS := $(OBJECTS:.o=.d)
 ELF := $(BUILD_DIR)/$(PROJECT).elf
 BIN := $(BUILD_DIR)/$(PROJECT).bin
@@ -45,6 +50,16 @@ LIBMICROPYTHON := $(BUILD_DIR)/micropython/libest_micropython.a
 all: $(ELF) $(BIN) $(HEX) $(LST) $(PACKAGE) verify
 
 $(BUILD_DIR)/obj/%.o: src/%.c
+	@$(MKDIR_P) $(dir $@)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -MMD -MP -c $< -o $@
+
+$(DISPLAY_IMAGE_SOURCE): FORCE tools/generate_display_images.py \
+	$(DISPLAY_IMAGE_ASSET_DIRS)
+	@$(MKDIR_P) $(dir $@)
+	$(PYTHON) tools/generate_display_images.py \
+		--assets-dir assets/display_images --output $@
+
+$(DISPLAY_IMAGE_OBJECT): $(DISPLAY_IMAGE_SOURCE)
 	@$(MKDIR_P) $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -MMD -MP -c $< -o $@
 
