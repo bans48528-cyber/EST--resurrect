@@ -574,7 +574,7 @@ est_result_t est_program_store_load(uint8_t program_slot_id)
 		return fail(program_slot_id, EST_PROGRAM_STORE_ERROR_NO_SAVED_PROGRAM,
 			EST_ERR_STATE);
 	}
-	result = est_micropython_program_begin(status.source_length,
+	result = est_micropython_program_begin_saved(status.source_length,
 		status.source_crc32);
 	if (result != EST_OK) {
 		return fail(program_slot_id,

@@ -683,7 +683,7 @@ class BoardModuleLayoutTests(unittest.TestCase):
         header = (ROOT / "include" / "board_motor.h").read_text(encoding="utf-8")
         config = (ROOT / "include" / "app_config.h").read_text(encoding="utf-8")
         self.assertIn("MOTOR_POSITION_COMMAND          0x1BU", config)
-        self.assertIn("DEVICE_PROTOCOL_MINOR           22U", config)
+        self.assertIn("DEVICE_PROTOCOL_MINOR           25U", config)
         self.assertIn("MOTOR_LARGE_COUNTS_PER_SPEED 12800U", motor)
         self.assertIn("MOTOR_MEDIUM_COUNTS_PER_SPEED 8100U", motor)
         self.assertIn("medium_samples[4] = {2U, 4U, 8U, 16U}", motor)
@@ -1275,16 +1275,28 @@ class MicroPythonIntegrationTests(unittest.TestCase):
         config = (ROOT / "include" / "app_config.h").read_text(encoding="utf-8")
         protocol = (SOURCE_DIR / "update_protocol.c").read_text(encoding="utf-8")
         self.assertIn("MICROPYTHON_STATUS_COMMAND      0x23U", config)
-        self.assertIn("DEVICE_PROTOCOL_MINOR           22U", config)
+        self.assertIn("DEVICE_PROTOCOL_MINOR           25U", config)
         self.assertIn("DEVICE_CAPABILITY_MICROPYTHON", config)
         self.assertIn("DEVICE_CAPABILITY_FROZEN_EST_RUNTIME", config)
         self.assertIn("DEVICE_CAPABILITY_UNLIMITED_PYTHON_RUN", config)
         self.assertIn("DEVICE_CAPABILITY_DISPLAY_FONT_STYLES", config)
         self.assertIn("DEVICE_CAPABILITY_ZERO_SPEED_MOTOR_CONTROL", config)
+        self.assertIn(
+            "DEVICE_CAPABILITY_RUNTIME_TEMPERATURE (1UL << 22U)", config
+        )
+        self.assertIn(
+            "DEVICE_CAPABILITY_COOPERATIVE_MULTITASK (1UL << 23U)", config
+        )
+        self.assertIn(
+            "DEVICE_CAPABILITY_RUNTIME_BASIC_EVENT_HATS (1UL << 24U)", config
+        )
         self.assertIn("DEVICE_CAPABILITY_FROZEN_EST_RUNTIME", protocol)
         self.assertIn("DEVICE_CAPABILITY_UNLIMITED_PYTHON_RUN", protocol)
         self.assertIn("DEVICE_CAPABILITY_DISPLAY_FONT_STYLES", protocol)
         self.assertIn("DEVICE_CAPABILITY_ZERO_SPEED_MOTOR_CONTROL", protocol)
+        self.assertIn("DEVICE_CAPABILITY_RUNTIME_TEMPERATURE", protocol)
+        self.assertIn("DEVICE_CAPABILITY_COOPERATIVE_MULTITASK", protocol)
+        self.assertIn("DEVICE_CAPABILITY_RUNTIME_BASIC_EVENT_HATS", protocol)
         self.assertIn("MICROPYTHON_STATUS_PAYLOAD_LENGTH 28U", protocol)
         self.assertIn("queue_micropython_status", protocol)
         self.assertIn("status.maximum_gc_pause_us", protocol)
@@ -1316,7 +1328,8 @@ class MicroPythonIntegrationTests(unittest.TestCase):
             runtime,
         )
         self.assertIn("program_stop_requested", runtime)
-        self.assertIn("mp_raise_msg(&mp_type_RuntimeError", runtime)
+        self.assertIn("mp_sched_vm_abort();", runtime)
+        self.assertIn("nlr_set_abort(&nlr);", runtime)
         self.assertIn("usb_hid_poll();", runtime)
         self.assertIn("est_micropython_program_is_executing", protocol)
         self.assertIn("logical_frame[2] != PYTHON_PROGRAM_COMMAND", protocol)

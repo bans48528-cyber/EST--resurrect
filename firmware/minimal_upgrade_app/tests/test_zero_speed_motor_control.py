@@ -72,7 +72,7 @@ class ZeroSpeedMotorControlTests(unittest.TestCase):
         self.assertIn("if (speed_percent == 0U)", start)
         self.assertIn("control->timeout_ms = 0U;", start)
         zero_branch = update.split("if (control->requested_speed == 0)", 1)[1].split(
-            "if ((control->requested_speed > 0", 1
+            "pair_owned = pair_position_owns_port(port);", 1
         )[0]
         self.assertIn("apply_closed_loop_speed(port, 0", zero_branch)
         self.assertIn("return;", zero_branch)

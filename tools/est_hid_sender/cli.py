@@ -7,6 +7,7 @@ from pathlib import Path
 
 from .constants import (
     DEVICE_CAPABILITY_BATTERY,
+    DEVICE_CAPABILITY_COOPERATIVE_MULTITASK,
     DEVICE_CAPABILITY_DRIVE_STRAIGHT,
     DEVICE_CAPABILITY_DRIVE_RUN,
     DEVICE_CAPABILITY_DRIVE_STEER,
@@ -18,6 +19,8 @@ from .constants import (
     DEVICE_CAPABILITY_KEYS,
     DEVICE_CAPABILITY_MICROPYTHON,
     DEVICE_CAPABILITY_PERSISTENT_PROGRAM,
+    DEVICE_CAPABILITY_RUNTIME_TEMPERATURE,
+    DEVICE_CAPABILITY_RUNTIME_BASIC_EVENT_HATS,
     DEVICE_CAPABILITY_UNLIMITED_PYTHON_RUN,
     DEVICE_CAPABILITY_ZERO_SPEED_MOTOR_CONTROL,
     PERSISTENT_PROGRAM_SLOT_COUNT,
@@ -568,7 +571,8 @@ def run_ping(args: argparse.Namespace) -> int:
 
 
 def format_pressed_keys(mask: int) -> str:
-    names = [f"KEY{index}" for index in range(6) if mask & (1 << index)]
+    button_names = ("back", "left", "up", "down", "right", "confirm")
+    names = [name for index, name in enumerate(button_names) if mask & (1 << index)]
     return ",".join(names) if names else "none"
 
 
@@ -675,6 +679,9 @@ DEVICE_CAPABILITY_NAMES = (
     (DEVICE_CAPABILITY_DISPLAY_FONT_STYLES, "display-font-styles"),
     (DEVICE_CAPABILITY_ZERO_SPEED_MOTOR_CONTROL, "zero-speed-motor-control"),
     (DEVICE_CAPABILITY_HOLD_POSITION_CONTROL, "hold-position-control"),
+    (DEVICE_CAPABILITY_RUNTIME_TEMPERATURE, "runtime-temperature"),
+    (DEVICE_CAPABILITY_COOPERATIVE_MULTITASK, "cooperative-multitask"),
+    (DEVICE_CAPABILITY_RUNTIME_BASIC_EVENT_HATS, "runtime-basic-event-hats"),
 )
 
 

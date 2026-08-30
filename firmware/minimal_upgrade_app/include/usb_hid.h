@@ -8,6 +8,7 @@
 
 void usb_hid_init(void);
 void usb_hid_poll(void);
+bool usb_hid_host_connected(void);
 bool usb_hid_queue_report(const uint8_t report[USB_HID_REPORT_SIZE],
 	bool power_off_after_report);
 bool usb_hid_power_off_requested(void);

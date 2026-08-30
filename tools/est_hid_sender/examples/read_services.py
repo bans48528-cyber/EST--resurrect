@@ -29,7 +29,7 @@ for button in (
     est.buttons.UP,
     est.buttons.DOWN,
     est.buttons.RIGHT,
-    est.buttons.CENTER,
+    est.buttons.CONFIRM,
 ):
     assert est.buttons.pressed(button) == ((button_mask & button) != 0)
 

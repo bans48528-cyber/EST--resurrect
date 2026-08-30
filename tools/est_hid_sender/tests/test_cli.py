@@ -17,6 +17,24 @@ from test_protocol import FakeTransport  # noqa: E402
 
 
 class CliTests(unittest.TestCase):
+    def test_basic_event_hats_capability_has_a_stable_cli_name(self) -> None:
+        self.assertIn(
+            (1 << 24, "runtime-basic-event-hats"),
+            cli.DEVICE_CAPABILITY_NAMES,
+        )
+
+    def test_cooperative_multitask_capability_has_a_stable_cli_name(self) -> None:
+        self.assertIn(
+            (1 << 23, "cooperative-multitask"),
+            cli.DEVICE_CAPABILITY_NAMES,
+        )
+
+    def test_runtime_temperature_capability_has_a_stable_cli_name(self) -> None:
+        self.assertIn(
+            (1 << 22, "runtime-temperature"),
+            cli.DEVICE_CAPABILITY_NAMES,
+        )
+
     def test_hold_position_capability_has_a_stable_cli_name(self) -> None:
         self.assertIn(
             (1 << 21, "hold-position-control"),
@@ -47,7 +65,7 @@ class CliTests(unittest.TestCase):
             with contextlib.redirect_stdout(output):
                 self.assertEqual(cli.main(["keys"]), 0)
         self.assertIn("current_version=M0.19A", output.getvalue())
-        self.assertIn("pressed=KEY0,KEY5 mask=0x21", output.getvalue())
+        self.assertIn("pressed=back,confirm mask=0x21", output.getvalue())
 
     def test_device_status_prints_complete_machine_snapshot(self) -> None:
         output = io.StringIO()

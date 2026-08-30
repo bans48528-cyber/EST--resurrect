@@ -2131,6 +2131,7 @@ static const mp_rom_map_elem_t modest_buttons_globals_table[] = {
 	{MP_ROM_QSTR(MP_QSTR_UP), MP_ROM_INT(1U << EST_BUTTON_UP)},
 	{MP_ROM_QSTR(MP_QSTR_DOWN), MP_ROM_INT(1U << EST_BUTTON_DOWN)},
 	{MP_ROM_QSTR(MP_QSTR_RIGHT), MP_ROM_INT(1U << EST_BUTTON_RIGHT)},
+	{MP_ROM_QSTR(MP_QSTR_CONFIRM), MP_ROM_INT(1U << EST_BUTTON_CONFIRM)},
 	{MP_ROM_QSTR(MP_QSTR_CENTER), MP_ROM_INT(1U << EST_BUTTON_CENTER)},
 };
 static MP_DEFINE_CONST_DICT(
@@ -2272,6 +2273,14 @@ static mp_obj_t modest_program_result(mp_obj_t value_object)
 static MP_DEFINE_CONST_FUN_OBJ_1(
 	modest_program_result_obj, modest_program_result);
 
+static mp_obj_t modest_stop_user_program(void)
+{
+	est_micropython_program_stop_from_vm();
+	return mp_const_none;
+}
+static MP_DEFINE_CONST_FUN_OBJ_0(
+	modest_stop_user_program_obj, modest_stop_user_program);
+
 static const mp_rom_map_elem_t modest_module_globals_table[] = {
 	{MP_ROM_QSTR(MP_QSTR___name__), MP_ROM_QSTR(MP_QSTR_est)},
 	{MP_ROM_QSTR(MP_QSTR_millis), MP_ROM_PTR(&modest_millis_obj)},
@@ -2312,6 +2321,8 @@ static const mp_rom_map_elem_t modest_module_globals_table[] = {
 		MP_ROM_PTR(&modest_self_test_complete_obj)},
 	{MP_ROM_QSTR(MP_QSTR__program_result),
 		MP_ROM_PTR(&modest_program_result_obj)},
+	{MP_ROM_QSTR(MP_QSTR__stop_user_program),
+		MP_ROM_PTR(&modest_stop_user_program_obj)},
 };
 static MP_DEFINE_CONST_DICT(modest_module_globals, modest_module_globals_table);
 

@@ -17,6 +17,7 @@
 #include "shared/runtime/gchelper.h"
 
 #include "est_micropython.h"
+#include "est_buttons.h"
 #include "est_display.h"
 #include "est_motor.h"
 #include "est_runtime.h"
@@ -42,6 +43,7 @@ static volatile bool program_run_requested;
 static volatile bool program_stop_requested;
 static volatile bool program_executing;
 static volatile est_micropython_program_error_t program_abort_error;
+static bool program_requires_host;
 static uint32_t program_started_ms;
 static uint32_t program_last_watchdog_ms;
 static uint32_t program_last_usb_poll_ms;
@@ -103,6 +105,7 @@ static bool execute_script(const char *source, size_t length)
 	nlr_buf_t nlr;
 
 	if (nlr_push(&nlr) == 0) {
+		nlr_set_abort(&nlr);
 		mp_lexer_t *lexer = mp_lexer_new_from_str_len(
 			MP_QSTR__lt_stdin_gt_, source, length, 0U);
 		qstr source_name = lexer->source_name;
@@ -112,8 +115,10 @@ static bool execute_script(const char *source, size_t length)
 
 		mp_call_function_0(module_function);
 		nlr_pop();
+		nlr_set_abort(NULL);
 		return true;
 	}
+	nlr_set_abort(NULL);
 	return false;
 }
 
@@ -172,6 +177,7 @@ void est_micropython_init(void)
 	program_stop_requested = false;
 	program_executing = false;
 	program_abort_error = EST_MICROPYTHON_PROGRAM_ERROR_NONE;
+	program_requires_host = false;
 	initialize_vm();
 
 	script_succeeded = execute_script(
@@ -281,7 +287,8 @@ void est_micropython_mark_self_test(uint16_t value)
 	micropython_status.self_test_value = value;
 }
 
-est_result_t est_micropython_program_begin(uint16_t length, uint32_t crc32)
+static est_result_t program_begin(uint16_t length, uint32_t crc32,
+	bool requires_host)
 {
 	if (!micropython_initialized) {
 		return EST_ERR_STATE;
@@ -303,8 +310,20 @@ est_result_t est_micropython_program_begin(uint16_t length, uint32_t crc32)
 	program_status.duration_ms = 0U;
 	program_status.timeout_ms = 0U;
 	program_status.result_value = 0;
+	program_requires_host = requires_host;
 	program_source[0] = 0U;
 	return EST_OK;
+}
+
+est_result_t est_micropython_program_begin(uint16_t length, uint32_t crc32)
+{
+	return program_begin(length, crc32, true);
+}
+
+est_result_t est_micropython_program_begin_saved(uint16_t length,
+	uint32_t crc32)
+{
+	return program_begin(length, crc32, false);
 }
 
 est_result_t est_micropython_program_write(uint16_t offset,
@@ -401,8 +420,21 @@ est_result_t est_micropython_program_stop(void)
 		return EST_ERR_STATE;
 	}
 	program_stop_requested = true;
+	program_abort_error = EST_MICROPYTHON_PROGRAM_ERROR_STOPPED;
 	(void)est_motor_stop_all(EST_STOP_COAST);
 	return EST_OK;
+}
+
+void est_micropython_program_stop_from_vm(void)
+{
+	if (!program_executing) {
+		return;
+	}
+	program_stop_requested = true;
+	program_abort_error = EST_MICROPYTHON_PROGRAM_ERROR_STOPPED;
+	(void)est_motor_stop_all(EST_STOP_COAST);
+	mp_sched_vm_abort();
+	mp_handle_pending(MP_HANDLE_PENDING_CALLBACKS_AND_EXCEPTIONS);
 }
 
 est_result_t est_micropython_program_clear(void)
@@ -462,13 +494,20 @@ void est_micropython_vm_hook(void)
 		usb_hid_poll();
 		est_runtime_tick(now_ms);
 	}
+	if (est_button_is_pressed(EST_BUTTON_BACK) ||
+	    (program_requires_host && !usb_hid_host_connected())) {
+		program_stop_requested = true;
+		program_abort_error = EST_MICROPYTHON_PROGRAM_ERROR_STOPPED;
+		(void)est_motor_stop_all(EST_STOP_COAST);
+	}
 	if ((uint32_t)(now_ms - program_last_watchdog_ms) >= 10U) {
 		program_last_watchdog_ms = now_ms;
 		watchdog_kick();
 	}
 	if (program_stop_requested) {
 		program_abort_error = EST_MICROPYTHON_PROGRAM_ERROR_STOPPED;
-		mp_raise_msg(&mp_type_RuntimeError, MP_ERROR_TEXT("program stopped"));
+		mp_sched_vm_abort();
+		mp_handle_pending(MP_HANDLE_PENDING_CALLBACKS_AND_EXCEPTIONS);
 	}
 }
 

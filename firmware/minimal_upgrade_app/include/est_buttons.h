@@ -14,8 +14,10 @@ typedef enum {
 	EST_BUTTON_UP = 2,
 	EST_BUTTON_DOWN = 3,
 	EST_BUTTON_RIGHT = 4,
-	EST_BUTTON_CENTER = 5
+	EST_BUTTON_CONFIRM = 5
 } est_button_t;
+
+#define EST_BUTTON_CENTER EST_BUTTON_CONFIRM
 
 void est_buttons_init(uint32_t now_ms);
 void est_buttons_tick(uint32_t now_ms);

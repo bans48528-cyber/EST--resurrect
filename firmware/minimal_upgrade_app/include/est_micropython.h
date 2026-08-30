@@ -89,12 +89,15 @@ void est_micropython_tick(void);
 bool est_micropython_get_status(est_micropython_status_t *status);
 void est_micropython_mark_self_test(uint16_t value);
 est_result_t est_micropython_program_begin(uint16_t length, uint32_t crc32);
+est_result_t est_micropython_program_begin_saved(uint16_t length,
+	uint32_t crc32);
 est_result_t est_micropython_program_write(uint16_t offset,
 	const uint8_t *data, uint16_t length);
 est_result_t est_micropython_program_read(uint16_t offset, uint8_t *data,
 	uint16_t length);
 est_result_t est_micropython_program_run(uint32_t timeout_ms);
 est_result_t est_micropython_program_stop(void);
+void est_micropython_program_stop_from_vm(void);
 est_result_t est_micropython_program_clear(void);
 bool est_micropython_program_get_status(
 	est_micropython_program_status_t *status);

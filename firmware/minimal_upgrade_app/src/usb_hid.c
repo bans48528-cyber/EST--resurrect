@@ -154,6 +154,8 @@ static bool in_power_off_after;
 static bool power_off_requested;
 static uint8_t hid_idle_state;
 static uint8_t hid_protocol;
+static bool host_configured;
+static bool host_suspended;
 
 static enum usbd_request_return_codes hid_control_request(
 	usbd_device *device, struct usb_setup_data *request, uint8_t **buffer,
@@ -294,17 +296,37 @@ static enum usbd_request_return_codes hid_control_request(
 
 static void hid_set_config(usbd_device *device, uint16_t value)
 {
-	(void)value;
+	host_configured = value != 0U;
+	host_suspended = false;
 	in_busy = false;
 	in_power_off_after = false;
 	report_queue_head = 0U;
 	report_queue_tail = 0U;
 	report_queue_count = 0U;
+	if (!host_configured) {
+		return;
+	}
 	usbd_ep_setup(device, USB_HID_OUT_ENDPOINT, USB_ENDPOINT_ATTR_INTERRUPT,
 		USB_HID_REPORT_SIZE, hid_out_callback);
 	usbd_ep_setup(device, USB_HID_IN_ENDPOINT, USB_ENDPOINT_ATTR_INTERRUPT,
 		USB_HID_REPORT_SIZE, hid_in_callback);
 	register_control_callbacks(device);
+}
+
+static void usb_reset_callback(void)
+{
+	host_configured = false;
+	host_suspended = false;
+}
+
+static void usb_suspend_callback(void)
+{
+	host_suspended = true;
+}
+
+static void usb_resume_callback(void)
+{
+	host_suspended = false;
 }
 
 void usb_hid_init(void)
@@ -334,8 +356,13 @@ void usb_hid_init(void)
 		&usb_config_descriptor, usb_strings,
 		(int)(sizeof(usb_strings) / sizeof(usb_strings[0])),
 		control_buffer, sizeof(control_buffer));
+	host_configured = false;
+	host_suspended = false;
 	register_control_callbacks(usb_device);
 	(void)usbd_register_set_config_callback(usb_device, hid_set_config);
+	usbd_register_reset_callback(usb_device, usb_reset_callback);
+	usbd_register_suspend_callback(usb_device, usb_suspend_callback);
+	usbd_register_resume_callback(usb_device, usb_resume_callback);
 }
 
 void usb_hid_poll(void)
@@ -362,4 +389,9 @@ bool usb_hid_queue_report(const uint8_t report[USB_HID_REPORT_SIZE],
 bool usb_hid_power_off_requested(void)
 {
 	return power_off_requested;
+}
+
+bool usb_hid_host_connected(void)
+{
+	return host_configured && !host_suspended;
 }

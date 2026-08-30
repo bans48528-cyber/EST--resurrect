@@ -14,16 +14,36 @@ RUNTIME_PATH = ROOT / "micropython_port" / "modules" / "est_runtime.py"
 def make_fake_est() -> types.ModuleType:
     module = types.ModuleType("est")
     module.now_ms = 0
+    module.millis_step = 100
+    module.button_mask = 0
     module.events = []
 
+    class GlobalProgramStop(BaseException):
+        pass
+
     def millis():
-        module.now_ms += 100
+        module.now_ms += module.millis_step
         return module.now_ms
+
+    class Buttons:
+        NONE = 0
+        BACK = 1 << 0
+        LEFT = 1 << 1
+        UP = 1 << 2
+        DOWN = 1 << 3
+        RIGHT = 1 << 4
+        CONFIRM = 1 << 5
+        CENTER = CONFIRM
+
+        @staticmethod
+        def value():
+            return module.button_mask
 
     class Motor:
         STATE_IDLE = 0
         STATE_POSITION = 3
         STATE_TIMED = 4
+        STATE_FAULT = 6
 
         def __init__(self, port):
             self.port = port
@@ -31,6 +51,8 @@ def make_fake_est() -> types.ModuleType:
             self.timed_until_ms = None
 
         def run_speed(self, speed):
+            self.states = []
+            self.timed_until_ms = None
             module.events.append(("motor.run_speed", self.port, speed))
 
         def run_time(self, duration_ms, **kwargs):
@@ -54,35 +76,57 @@ def make_fake_est() -> types.ModuleType:
             return self.STATE_IDLE
 
         def stop(self, stop_mode=0):
+            self.states = []
+            self.timed_until_ms = None
             module.events.append(("motor.stop", self.port, stop_mode))
 
     class DriveBase:
+        STATE_IDLE = 0
+        STATE_RUNNING = 1
+        STATE_COMPLETE = 2
+        STATE_FAULT = 3
+
         def __init__(self, left_port, right_port):
             self.left_port = left_port
             self.right_port = right_port
+            self.states = []
             module.events.append(("drive.new", left_port, right_port))
 
         def straight_angle(self, degrees, **kwargs):
             module.events.append(("drive.straight_angle", degrees, kwargs))
+            if not kwargs.get("wait", True):
+                self.states = [self.STATE_RUNNING, self.STATE_COMPLETE]
 
         def straight_time(self, duration_ms, **kwargs):
             module.events.append(("drive.straight_time", duration_ms, kwargs))
+            if not kwargs.get("wait", True):
+                self.states = [self.STATE_RUNNING, self.STATE_COMPLETE]
 
         def steer_angle(self, steering, degrees, **kwargs):
             module.events.append(
                 ("drive.steer_angle", steering, degrees, kwargs)
             )
+            if not kwargs.get("wait", True):
+                self.states = [self.STATE_RUNNING, self.STATE_COMPLETE]
 
         def steer_time(self, steering, duration_ms, **kwargs):
             module.events.append(
                 ("drive.steer_time", steering, duration_ms, kwargs)
             )
+            if not kwargs.get("wait", True):
+                self.states = [self.STATE_RUNNING, self.STATE_COMPLETE]
 
         def steer(self, steering, **kwargs):
             module.events.append(("drive.steer", steering, kwargs))
 
         def stop(self, stop_mode=0):
+            self.states = []
             module.events.append(("drive.stop", stop_mode))
+
+        def state(self):
+            if self.states:
+                return self.states.pop(0)
+            return self.STATE_IDLE
 
     class TouchSensor:
         def __init__(self, port):
@@ -117,6 +161,16 @@ def make_fake_est() -> types.ModuleType:
 
         def reset_angle(self):
             self.zeroed = True
+
+    class TemperatureSensor:
+        def __init__(self, port):
+            self.port = port
+
+        def celsius_tenths(self):
+            return 215
+
+        def fahrenheit_tenths(self):
+            return 707
 
     class UltrasonicSensor:
         def __init__(self, port):
@@ -159,9 +213,18 @@ def make_fake_est() -> types.ModuleType:
     module.TouchSensor = TouchSensor
     module.ColorSensor = ColorSensor
     module.GyroSensor = GyroSensor
+    module.TemperatureSensor = TemperatureSensor
     module.UltrasonicSensor = UltrasonicSensor
     module.InfraredSensor = InfraredSensor
     module.display = Display()
+    module.buttons = Buttons()
+
+    def stop_user_program():
+        module.events.append(("program.stop",))
+        raise GlobalProgramStop
+
+    module.GlobalProgramStop = GlobalProgramStop
+    module._stop_user_program = stop_user_program
     return module
 
 
@@ -196,6 +259,130 @@ class RuntimeLifecycleTests(unittest.TestCase):
         runtime.wait_until(lambda: attempts.append(1) or len(attempts) == 3)
         self.assertEqual(len(attempts), 3)
         runtime.sleep(0.5)
+
+    def test_async_start_tasks_are_cooperatively_interleaved(self) -> None:
+        runtime, _ = load_runtime()
+        calls = []
+
+        @runtime.on_start
+        async def first():
+            calls.append("first-start")
+            await runtime.sleep(0.3)
+            calls.append("first-end")
+
+        @runtime.on_start
+        async def second():
+            calls.append("second-start")
+            await runtime.yield_once()
+            calls.append("second-end")
+
+        runtime.run()
+
+        self.assertEqual(calls[0:2], ["first-start", "second-start"])
+        self.assertIn("first-end", calls)
+        self.assertIn("second-end", calls)
+
+    def test_wait_until_yields_to_another_start_task(self) -> None:
+        runtime, _ = load_runtime()
+        state = {"ready": False}
+        calls = []
+
+        @runtime.on_start
+        async def waiter():
+            calls.append("waiting")
+            await runtime.wait_until(lambda: state["ready"])
+            calls.append("ready")
+
+        @runtime.on_start
+        async def setter():
+            await runtime.yield_once()
+            state["ready"] = True
+            calls.append("set")
+
+        runtime.run()
+        self.assertEqual(calls, ["waiting", "set", "ready"])
+
+    def test_at_most_eight_start_tasks_are_accepted(self) -> None:
+        runtime, _ = load_runtime()
+
+        for _ in range(9):
+            runtime.on_start(lambda: None)
+
+        with self.assertRaisesRegex(RuntimeError, "at most 8"):
+            runtime.run()
+
+    def test_stop_this_stack_keeps_peer_running(self) -> None:
+        runtime, _ = load_runtime()
+        calls = []
+
+        @runtime.on_start
+        async def stopped():
+            calls.append("stopped-start")
+            runtime.stop("this_stack")
+            calls.append("unreachable")
+
+        @runtime.on_start
+        async def peer():
+            await runtime.yield_once()
+            calls.append("peer-finished")
+
+        runtime.run()
+        self.assertEqual(calls, ["stopped-start", "peer-finished"])
+
+    def test_stop_other_stacks_cancels_peers(self) -> None:
+        runtime, _ = load_runtime()
+        calls = []
+
+        @runtime.on_start
+        async def peer():
+            calls.append("peer-start")
+            await runtime.yield_once()
+            calls.append("peer-unreachable")
+
+        @runtime.on_start
+        async def controller():
+            runtime.stop_other_stacks()
+            calls.append("controller-only")
+
+        runtime.run()
+        self.assertEqual(calls, ["peer-start", "controller-only"])
+
+    def test_stop_all_uses_uncatchable_native_stop(self) -> None:
+        runtime, fake_est = load_runtime()
+
+        @runtime.on_start
+        async def task():
+            runtime.stop("all")
+
+        with self.assertRaises(fake_est.GlobalProgramStop):
+            runtime.run()
+        self.assertIn(("program.stop",), fake_est.events)
+
+    def test_old_task_cleanup_does_not_stop_new_motor_owner(self) -> None:
+        runtime, fake_est = load_runtime()
+
+        @runtime.on_start
+        async def old_owner():
+            runtime.motor_set_speed("A", 20)
+            runtime.motor_start("A", "clockwise")
+            await runtime.yield_once()
+            runtime.stop("this_stack")
+
+        @runtime.on_start
+        async def new_owner():
+            runtime.motor_set_speed("A", 75)
+            runtime.motor_start("A", "clockwise")
+            await runtime.yield_once()
+            runtime.motor_set_speed("A", 80)
+            runtime.motor_start("A", "clockwise")
+
+        runtime.run()
+        events = fake_est.events
+        speed_20 = events.index(("motor.run_speed", "A", 20))
+        speed_75 = events.index(("motor.run_speed", "A", 75))
+        speed_80 = events.index(("motor.run_speed", "A", 80))
+        self.assertNotIn(("motor.stop", "A", 0), events[speed_20 + 1:speed_75])
+        self.assertNotIn(("motor.stop", "A", 0), events[speed_75 + 1:speed_80])
 
     def test_time_comparison_and_repeat_helpers(self) -> None:
         runtime, fake_est = load_runtime()
@@ -322,6 +509,9 @@ class RuntimeHardwareTests(unittest.TestCase):
         self.assertEqual(runtime.color("3").reflection(), 42)
         self.assertTrue(runtime.touch("1").pressed())
         self.assertEqual(runtime.gyro("2").angle(), 90)
+        self.assertIs(runtime.temperature("2"), runtime.temperature("2"))
+        self.assertEqual(runtime.temperature("2").celsius(), 21.5)
+        self.assertEqual(runtime.temperature("2").fahrenheit(), 70.7)
         self.assertEqual(runtime.ultrasonic("4").distance("centimeters"), 123.4)
         self.assertEqual(runtime.ultrasonic("4").distance("inches"), 4.8)
         self.assertEqual(runtime.infrared("4").proximity(), 31)
@@ -342,6 +532,366 @@ class RuntimeHardwareTests(unittest.TestCase):
             runtime.display_image_for("Eyes/Neutral", -1)
 
 
+class RuntimeEventTests(unittest.TestCase):
+    def test_event_listener_limit_is_separate_from_task_slots(self) -> None:
+        runtime, _ = load_runtime()
+
+        for index in range(16):
+            runtime.on_condition(lambda index=index: False)(lambda: None)
+
+        self.assertEqual(len(runtime._event_handlers), 16)
+        self.assertEqual(len(runtime._tasks), 8)
+        self.assertTrue(all(not task.active for task in runtime._tasks))
+        with self.assertRaisesRegex(RuntimeError, "at most 16"):
+            runtime.on_condition(lambda: False)(lambda: None)
+
+    def test_start_tasks_and_async_condition_event_run_together(self) -> None:
+        runtime, fake_est = load_runtime()
+        state = {"ready": False}
+        calls = []
+
+        @runtime.on_condition(lambda: state["ready"])
+        async def condition_handler():
+            calls.append("event-start")
+            await runtime.yield_once()
+            calls.append("event-end")
+
+        @runtime.on_start
+        async def driver():
+            calls.append("start")
+            await runtime.yield_once()
+            state["ready"] = True
+            await runtime.wait_until(lambda: calls[-1:] == ["event-end"])
+            runtime.stop("all")
+
+        with self.assertRaises(fake_est.GlobalProgramStop):
+            runtime.run()
+        self.assertEqual(calls, ["start", "event-start", "event-end"])
+
+    def test_button_edges_debounce_rearm_and_center_alias(self) -> None:
+        runtime, fake_est = load_runtime()
+        fake_est.millis_step = 5
+        calls = []
+
+        @runtime.on_brick_button("center", "pressed")
+        def pressed():
+            calls.append("pressed")
+
+        @runtime.on_brick_button("confirm", "released")
+        def released():
+            calls.append("released")
+
+        @runtime.on_start
+        async def driver():
+            await runtime.yield_once()
+            fake_est.button_mask = fake_est.buttons.CONFIRM
+            for _ in range(6):
+                await runtime.yield_once()
+            for _ in range(4):
+                await runtime.yield_once()
+            fake_est.button_mask = 0
+            for _ in range(6):
+                await runtime.yield_once()
+            runtime.stop("all")
+
+        with self.assertRaises(fake_est.GlobalProgramStop):
+            runtime.run()
+        self.assertEqual(calls, ["pressed", "released"])
+
+    def test_button_registration_rejects_reserved_and_invalid_values(self) -> None:
+        runtime, _ = load_runtime()
+        for button in ("back", "none", "invalid"):
+            with self.subTest(button=button):
+                with self.assertRaises(ValueError):
+                    runtime.on_brick_button(button, "pressed")
+        with self.assertRaises(ValueError):
+            runtime.on_brick_button("left", "held")
+
+    def test_condition_edges_only_and_rearms(self) -> None:
+        runtime, fake_est = load_runtime()
+        state = {"value": False}
+        calls = []
+
+        @runtime.on_condition(lambda: state["value"])
+        def handler():
+            calls.append("edge")
+
+        @runtime.on_start
+        async def driver():
+            await runtime.yield_once()
+            state["value"] = True
+            await runtime.yield_once()
+            await runtime.yield_once()
+            state["value"] = False
+            await runtime.yield_once()
+            state["value"] = True
+            await runtime.yield_once()
+            runtime.stop("all")
+
+        with self.assertRaises(fake_est.GlobalProgramStop):
+            runtime.run()
+        self.assertEqual(calls, ["edge", "edge"])
+
+    def test_condition_initial_true_needs_false_before_first_edge(self) -> None:
+        runtime, fake_est = load_runtime()
+        state = {"value": True}
+        calls = []
+
+        @runtime.on_condition(lambda: state["value"])
+        def handler():
+            calls.append("edge")
+            runtime.stop("all")
+
+        @runtime.on_start
+        async def driver():
+            await runtime.yield_once()
+            self.assertEqual(calls, [])
+            state["value"] = False
+            await runtime.yield_once()
+            state["value"] = True
+
+        with self.assertRaises(fake_est.GlobalProgramStop):
+            runtime.run()
+        self.assertEqual(calls, ["edge"])
+
+    def test_timer_fires_once_per_generation_and_reset_rearms(self) -> None:
+        runtime, fake_est = load_runtime()
+        fake_est.millis_step = 50
+        calls = []
+
+        @runtime.on_timer_gt(0.1)
+        def handler():
+            calls.append("timer")
+            if len(calls) == 1:
+                runtime.reset_timer()
+            else:
+                runtime.stop("all")
+
+        with self.assertRaises(fake_est.GlobalProgramStop):
+            runtime.run()
+        self.assertEqual(calls, ["timer", "timer"])
+
+    def test_timer_rejects_negative_nan_and_invalid_values(self) -> None:
+        runtime, _ = load_runtime()
+        for value in (-1, float("nan"), None, "invalid"):
+            with self.subTest(value=value):
+                with self.assertRaises(ValueError):
+                    runtime.on_timer_gt(value)
+
+    def test_event_is_not_reentrant_and_records_only_one_pending_run(self) -> None:
+        runtime, fake_est = load_runtime()
+        fake_est.millis_step = 20
+        state = {"value": False}
+        calls = []
+
+        @runtime.on_condition(lambda: state["value"])
+        async def handler():
+            calls.append("start")
+            await runtime.sleep(0.2)
+            calls.append("end")
+            if calls.count("end") == 2:
+                runtime.stop("all")
+
+        @runtime.on_start
+        async def driver():
+            await runtime.yield_once()
+            state["value"] = True
+            await runtime.yield_once()
+            state["value"] = False
+            await runtime.yield_once()
+            state["value"] = True
+            await runtime.yield_once()
+            state["value"] = False
+            await runtime.yield_once()
+            state["value"] = True
+
+        with self.assertRaises(fake_est.GlobalProgramStop):
+            runtime.run()
+        self.assertEqual(calls, ["start", "end", "start", "end"])
+
+    def test_full_task_pool_keeps_one_pending_event_until_slot_is_free(self) -> None:
+        runtime, fake_est = load_runtime()
+        state = {"value": False}
+        calls = []
+
+        @runtime.on_condition(lambda: state["value"])
+        def handler():
+            calls.append("event")
+            runtime.stop("all")
+
+        @runtime.on_start
+        async def driver():
+            state["value"] = True
+            await runtime.yield_once()
+
+        for _ in range(7):
+            @runtime.on_start
+            async def blocker():
+                while True:
+                    await runtime.yield_once()
+
+        with self.assertRaises(fake_est.GlobalProgramStop):
+            runtime.run()
+        self.assertEqual(calls, ["event"])
+        self.assertEqual(len(runtime._tasks), 8)
+
+    def test_task_slots_are_reused_across_many_event_triggers(self) -> None:
+        runtime, fake_est = load_runtime()
+        state = {"value": False}
+        calls = []
+        task_ids = [id(task) for task in runtime._tasks]
+
+        @runtime.on_condition(lambda: state["value"])
+        def handler():
+            calls.append(1)
+            if len(calls) == 20:
+                runtime.stop("all")
+
+        @runtime.on_start
+        async def driver():
+            await runtime.yield_once()
+            for _ in range(20):
+                state["value"] = True
+                await runtime.yield_once()
+                state["value"] = False
+                await runtime.yield_once()
+
+        with self.assertRaises(fake_est.GlobalProgramStop):
+            runtime.run()
+        self.assertEqual(len(calls), 20)
+        self.assertEqual([id(task) for task in runtime._tasks], task_ids)
+
+    def test_event_this_stack_can_trigger_again(self) -> None:
+        runtime, fake_est = load_runtime()
+        state = {"value": False}
+        calls = []
+
+        @runtime.on_condition(lambda: state["value"])
+        async def handler():
+            calls.append("run")
+            runtime.stop("this_stack")
+
+        @runtime.on_start
+        async def driver():
+            await runtime.yield_once()
+            for _ in range(2):
+                state["value"] = True
+                await runtime.yield_once()
+                state["value"] = False
+                await runtime.yield_once()
+            runtime.stop("all")
+
+        with self.assertRaises(fake_est.GlobalProgramStop):
+            runtime.run()
+        self.assertEqual(calls, ["run", "run"])
+
+    def test_stop_other_stacks_keeps_event_listeners_registered(self) -> None:
+        runtime, fake_est = load_runtime()
+        fake_est.millis_step = 50
+        state = {"value": False}
+        calls = []
+
+        @runtime.on_condition(lambda: state["value"])
+        def condition_handler():
+            calls.append("condition")
+            if len(calls) == 1:
+                runtime.stop_other_stacks()
+                state["value"] = False
+                runtime.reset_timer()
+            else:
+                runtime.stop("all")
+
+        @runtime.on_timer_gt(0.1)
+        def timer_handler():
+            state["value"] = True
+
+        @runtime.on_start
+        async def driver():
+            await runtime.yield_once()
+            state["value"] = True
+            while True:
+                await runtime.yield_once()
+
+        with self.assertRaises(fake_est.GlobalProgramStop):
+            runtime.run()
+        self.assertEqual(calls, ["condition", "condition"])
+        self.assertEqual(len(runtime._event_handlers), 2)
+
+    def test_event_task_cleanup_does_not_stop_new_motor_owner(self) -> None:
+        runtime, fake_est = load_runtime()
+        state = {"value": False}
+
+        @runtime.on_condition(lambda: state["value"])
+        async def old_owner():
+            runtime.motor_set_speed("A", 20)
+            runtime.motor_start("A", "clockwise")
+            await runtime.yield_once()
+            await runtime.yield_once()
+
+        @runtime.on_start
+        async def new_owner():
+            await runtime.yield_once()
+            state["value"] = True
+            await runtime.yield_once()
+            await runtime.yield_once()
+            runtime.motor_set_speed("A", 75)
+            runtime.motor_start("A", "clockwise")
+            await runtime.yield_once()
+            runtime.motor_set_speed("A", 80)
+            runtime.motor_start("A", "clockwise")
+            runtime.stop("all")
+
+        with self.assertRaises(fake_est.GlobalProgramStop):
+            runtime.run()
+        events = fake_est.events
+        speed_75 = events.index(("motor.run_speed", "A", 75))
+        speed_80 = events.index(("motor.run_speed", "A", 80))
+        self.assertNotIn(("motor.stop", "A", 0), events[speed_75 + 1:speed_80])
+
+    def test_plain_handler_is_supported_but_waits_require_async(self) -> None:
+        runtime, fake_est = load_runtime()
+        state = {"value": False}
+
+        @runtime.on_condition(lambda: state["value"])
+        def handler():
+            runtime.sleep(0.1)
+
+        @runtime.on_start
+        async def driver():
+            await runtime.yield_once()
+            state["value"] = True
+
+        with self.assertRaisesRegex(RuntimeError, "requires an async"):
+            runtime.run()
+        self.assertEqual(fake_est.events, [])
+
+    def test_only_event_hats_keep_run_alive(self) -> None:
+        runtime, fake_est = load_runtime()
+        calls = []
+
+        @runtime.on_timer_gt(0.2)
+        def handler():
+            calls.append("event-only")
+            runtime.stop("all")
+
+        with self.assertRaises(fake_est.GlobalProgramStop):
+            runtime.run()
+        self.assertEqual(calls, ["event-only"])
+
+    def test_predicate_exception_escapes_as_program_error(self) -> None:
+        runtime, _ = load_runtime()
+
+        def broken_predicate():
+            raise ValueError("predicate failed")
+
+        @runtime.on_condition(broken_predicate)
+        def handler():
+            pass
+
+        with self.assertRaisesRegex(ValueError, "predicate failed"):
+            runtime.run()
+
+
 class RuntimeContractTests(unittest.TestCase):
     def test_generator_runtime_names_are_explicit(self) -> None:
         runtime, _ = load_runtime()
@@ -359,7 +909,7 @@ class RuntimeContractTests(unittest.TestCase):
             "on_ir_proximity", "on_start", "on_timer_gt", "on_touch",
             "on_ultrasonic", "repeat_count", "reset_timer", "run",
             "seconds_to_ms", "sleep", "stop", "stop_other_stacks",
-            "timer_seconds", "touch", "ultrasonic", "wait_brick_button",
+            "temperature", "timer_seconds", "touch", "ultrasonic", "wait_brick_button",
             "wait_color", "wait_gyro", "wait_ir_beacon_button",
             "wait_ir_proximity", "wait_touch", "wait_ultrasonic",
             "wait_until", "yield_once",
@@ -372,10 +922,10 @@ class RuntimeContractTests(unittest.TestCase):
             "broadcast", "color_calibrate", "color_reset_calibration",
             "drive_dual_speed_for",
             "drive_start_dual_speed", "ir_beacon_compare",
-            "on_brick_button", "on_broadcast", "on_color", "on_condition",
+            "on_broadcast", "on_color",
             "on_gyro_angle", "on_ir_beacon_button", "on_ir_proximity",
-            "on_timer_gt", "on_touch", "on_ultrasonic", "stop",
-            "stop_other_stacks", "wait_brick_button", "wait_color",
+            "on_touch", "on_ultrasonic",
+            "wait_brick_button", "wait_color",
             "wait_gyro", "wait_ir_beacon_button", "wait_ir_proximity",
             "wait_touch", "wait_ultrasonic",
         )

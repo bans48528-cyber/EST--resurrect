@@ -96,10 +96,37 @@
 #define MOTOR_MEDIUM_COUNTS_PER_SPEED 8100U
 #define MOTOR_POSITION_MIN_SPEED_PERCENT 1U
 #define MOTOR_POSITION_MAX_DEGREES 3600
-#define MOTOR_POSITION_TIMEOUT_MARGIN_MS 2500U
+#define MOTOR_POSITION_TIMEOUT_MARGIN_MS 3000U
 #define MOTOR_POSITION_TIMEOUT_MIN_MS 3000U
 #define MOTOR_POSITION_TIMEOUT_MAX_MS 15000U
 #define MOTOR_POSITION_BRAKE_MS 300U
+#define MOTOR_POSITION_SETTLING_LARGE_KP_X100 70
+#define MOTOR_POSITION_SETTLING_LARGE_KD_X100 160
+#define MOTOR_POSITION_SETTLING_MEDIUM_KP_X100 100
+#define MOTOR_POSITION_SETTLING_MEDIUM_KD_X100 220
+#define MOTOR_POSITION_SETTLING_LARGE_MAX_PWM_X100 2000
+#define MOTOR_POSITION_SETTLING_MEDIUM_MAX_PWM_X100 3000
+#define MOTOR_POSITION_SETTLING_LARGE_REVERSE_MAX_PWM_X100 800
+#define MOTOR_POSITION_SETTLING_MEDIUM_REVERSE_MAX_PWM_X100 2000
+#define MOTOR_POSITION_SETTLING_LARGE_PWM_SLEW_X100 400
+#define MOTOR_POSITION_SETTLING_MEDIUM_PWM_SLEW_X100 500
+#define MOTOR_POSITION_SETTLING_MEDIUM_RELEASE_SLEW_X100 3500
+#define MOTOR_POSITION_SETTLING_LARGE_MIN_RECOVERY_PWM_X100 700
+#define MOTOR_POSITION_SETTLING_MEDIUM_MIN_RECOVERY_PWM_X100 3000
+#define MOTOR_POSITION_SETTLING_MEDIUM_STRONG_RECOVERY_PWM_X100 3500
+#define MOTOR_POSITION_SETTLING_MEDIUM_STRONG_RECOVERY_THRESHOLD_COUNTS 8
+#define MOTOR_POSITION_SETTLING_LARGE_RECOVERY_THRESHOLD_COUNTS 3
+#define MOTOR_POSITION_SETTLING_MEDIUM_RECOVERY_THRESHOLD_COUNTS 6
+#define MOTOR_POSITION_SETTLING_MEDIUM_RECOVERY_DRIVE_SAMPLES 3U
+#define MOTOR_POSITION_SETTLING_MEDIUM_RECOVERY_COOLDOWN_SAMPLES 4U
+#define MOTOR_POSITION_SETTLING_MEDIUM_RECOVERY_RAMP_X100 1750
+#define MOTOR_POSITION_SETTLING_LARGE_POSITION_TOLERANCE_COUNTS 2
+#define MOTOR_POSITION_SETTLING_MEDIUM_POSITION_TOLERANCE_COUNTS 5
+#define MOTOR_POSITION_SETTLING_LARGE_SPEED_TOLERANCE_PERCENT 2
+#define MOTOR_POSITION_SETTLING_MEDIUM_SPEED_TOLERANCE_PERCENT 2
+#define MOTOR_POSITION_SETTLING_RECOVERY_VELOCITY_COUNTS 1
+#define MOTOR_POSITION_SETTLING_VELOCITY_TOLERANCE_COUNTS 0
+#define MOTOR_POSITION_SETTLING_STABLE_SAMPLES 8U
 #define MOTOR_PAIR_SYNC_COUNTS_PER_PERCENT 4
 #define MOTOR_PAIR_SYNC_MAX_CORRECTION_PERCENT 10
 #define MOTOR_PAIR_LEADER_DEADBAND_COUNTS 4
@@ -117,6 +144,7 @@
 #define MOTOR_HOLD_MEDIUM_KD_X100 180
 #define MOTOR_HOLD_MEDIUM_MAX_PWM_X100 4000
 #define MOTOR_HOLD_MEDIUM_MIN_RECOVERY_PWM_X100 1500
+#define MOTOR_HOLD_MEDIUM_RECOVERY_THRESHOLD_COUNTS 12
 #define MOTOR_HOLD_MEDIUM_ENTER_DEADBAND_COUNTS 3
 #define MOTOR_HOLD_MEDIUM_EXIT_DEADBAND_COUNTS 6
 #define MOTOR_HOLD_SETTLED_SPEED_COUNTS 1
@@ -146,6 +174,11 @@ enum motor_identification_refresh_state {
 	MOTOR_IDENTIFICATION_REFRESH_FLOAT = 1,
 	MOTOR_IDENTIFICATION_REFRESH_DRIVE_LOW = 2,
 	MOTOR_IDENTIFICATION_REFRESH_PIN5_PULLUP = 3
+};
+
+enum motor_position_control_phase {
+	MOTOR_POSITION_PHASE_TRACKING = 0,
+	MOTOR_POSITION_PHASE_SETTLING = 1
 };
 
 static const struct motor_port_config motor_ports[BOARD_MOTOR_PORT_COUNT] = {
@@ -231,6 +264,7 @@ static bool speed_measurement_valid[BOARD_MOTOR_PORT_COUNT];
 
 struct motor_position_control {
 	enum board_motor_position_state state;
+	enum motor_position_control_phase phase;
 	enum board_motor_type type;
 	int8_t requested_speed;
 	int32_t start_count;
@@ -239,7 +273,13 @@ struct motor_position_control {
 	uint32_t timeout_ms;
 	uint32_t finished_ms;
 	uint32_t last_control_ms;
+	int32_t last_count;
 	int32_t pwm_x100;
+	uint8_t stable_samples;
+	uint8_t recovery_drive_samples;
+	uint8_t recovery_cooldown_samples;
+	int8_t recovery_direction;
+	int16_t recovery_pwm_x100;
 	enum board_motor_stop_mode completion_stop_mode;
 };
 
@@ -576,6 +616,35 @@ static uint16_t motor_position_slowdown_degrees(enum board_motor_type type,
 		return type == BOARD_MOTOR_TYPE_MEDIUM ? 130U : 140U;
 	}
 	return type == BOARD_MOTOR_TYPE_MEDIUM ? 180U : 160U;
+}
+
+static int8_t motor_position_tracking_speed(enum board_motor_type type,
+	int8_t requested_speed, int32_t position_error,
+	int8_t measured_speed)
+{
+	uint8_t requested_magnitude = requested_speed < 0 ?
+		(uint8_t)(-(int16_t)requested_speed) : (uint8_t)requested_speed;
+	uint8_t measured_magnitude = measured_speed < 0 ?
+		(uint8_t)(-(int16_t)measured_speed) : (uint8_t)measured_speed;
+	uint8_t profile_speed = requested_magnitude > measured_magnitude ?
+		requested_magnitude : measured_magnitude;
+	uint16_t slowdown = motor_position_slowdown_degrees(type, profile_speed);
+	uint32_t deceleration_window = (uint32_t)slowdown * 2U;
+	uint32_t remaining = position_error < 0 ?
+		(uint32_t)(-position_error) : (uint32_t)position_error;
+	uint32_t magnitude;
+
+	if (remaining >= deceleration_window) {
+		return requested_speed;
+	}
+	magnitude = ((uint32_t)requested_magnitude * remaining +
+		deceleration_window - 1U) / deceleration_window;
+	if (magnitude < MOTOR_POSITION_MIN_SPEED_PERCENT) {
+		magnitude = MOTOR_POSITION_MIN_SPEED_PERCENT;
+	} else if (magnitude > requested_magnitude) {
+		magnitude = requested_magnitude;
+	}
+	return requested_speed < 0 ? -(int8_t)magnitude : (int8_t)magnitude;
 }
 
 static void reset_motor_measurements(enum board_motor_port port, uint32_t now_ms)
@@ -941,6 +1010,38 @@ static bool start_hold_control(enum board_motor_port port,
 	return true;
 }
 
+static bool handoff_position_to_hold(enum board_motor_port port,
+	const struct motor_position_control *position, uint32_t now_ms)
+{
+	struct motor_hold_control *hold;
+	int32_t current;
+	int32_t enter_deadband;
+
+	if (!motor_port_valid(port) || position == NULL ||
+	    (position->type != BOARD_MOTOR_TYPE_LARGE &&
+	     position->type != BOARD_MOTOR_TYPE_MEDIUM)) {
+		return false;
+	}
+	current = tacho_count[(uint8_t)port];
+	enter_deadband = position->type == BOARD_MOTOR_TYPE_MEDIUM ?
+		MOTOR_HOLD_MEDIUM_ENTER_DEADBAND_COUNTS :
+		MOTOR_HOLD_LARGE_ENTER_DEADBAND_COUNTS;
+	hold = &hold_controls[(uint8_t)port];
+	hold->state = BOARD_MOTOR_HOLD_HOLDING;
+	hold->type = position->type;
+	hold->target_count = position->target_count;
+	hold->last_count = position->last_count;
+	hold->last_control_ms = now_ms;
+	hold->last_disconnect_check_ms = 0U;
+	hold->pwm_x100 = position->pwm_x100;
+	hold->disconnect_samples = 0U;
+	hold->settled = absolute_i32(position->target_count - current) <=
+		enter_deadband &&
+		absolute_i32(measured_speed_percent[(uint8_t)port]) <=
+		MOTOR_POSITION_SETTLING_MEDIUM_SPEED_TOLERANCE_PERCENT;
+	return true;
+}
+
 static void motor_apply_completion_stop_mode(enum board_motor_port port,
 	enum board_motor_stop_mode mode, int32_t hold_target_count)
 {
@@ -962,6 +1063,25 @@ static int32_t hold_slew_pwm(int32_t previous, int32_t requested,
 		return previous - maximum_step;
 	}
 	return requested;
+}
+
+static int32_t position_settling_slew_pwm(bool medium, int32_t previous,
+	int32_t requested, int32_t drive_step)
+{
+	int32_t adjusted = requested;
+	int32_t maximum_step = drive_step;
+
+	if (!medium) {
+		return hold_slew_pwm(previous, requested, drive_step);
+	}
+	if ((previous > 0 && requested < 0) ||
+	    (previous < 0 && requested > 0)) {
+		adjusted = 0;
+	}
+	if (absolute_i32(adjusted) < absolute_i32(previous)) {
+		maximum_step = MOTOR_POSITION_SETTLING_MEDIUM_RELEASE_SLEW_X100;
+	}
+	return hold_slew_pwm(previous, adjusted, maximum_step);
 }
 
 static void apply_hold_pwm(enum board_motor_port port, int32_t pwm_x100)
@@ -1070,7 +1190,8 @@ static void update_hold_control(uint32_t now_ms)
 		control->settled = false;
 		requested_pwm = error * kp_x100 - velocity * kd_x100;
 		if (minimum_recovery_pwm_x100 != 0 &&
-		    absolute_i32(velocity) <= MOTOR_HOLD_SETTLED_SPEED_COUNTS &&
+		    absolute_error >= MOTOR_HOLD_MEDIUM_RECOVERY_THRESHOLD_COUNTS &&
+		    velocity == 0 &&
 		    absolute_i32(requested_pwm) < minimum_recovery_pwm_x100) {
 			requested_pwm = error < 0 ? -minimum_recovery_pwm_x100 :
 				minimum_recovery_pwm_x100;
@@ -1698,13 +1819,21 @@ static void finish_position_control(enum board_motor_port port, uint32_t now_ms,
 {
 	struct motor_position_control *control =
 		&position_controls[(uint8_t)port];
+	bool handed_off_to_hold = false;
 
 	if (state == BOARD_MOTOR_POSITION_COMPLETE) {
 		if (control->completion_stop_mode ==
 		    BOARD_MOTOR_STOP_HOLD_POSITION) {
-			motor_apply_completion_stop_mode(port,
-				control->completion_stop_mode,
-				control->target_count);
+			if (control->phase == MOTOR_POSITION_PHASE_SETTLING &&
+			    !pair_position_owns_port(port)) {
+				handed_off_to_hold = handoff_position_to_hold(port,
+					control, now_ms);
+			}
+			if (!handed_off_to_hold) {
+				motor_apply_completion_stop_mode(port,
+					control->completion_stop_mode,
+					control->target_count);
+			}
 		} else {
 			motor_apply_stop_mode(port,
 				BOARD_MOTOR_STOP_HIGH_PUSH_PULL);
@@ -1714,7 +1843,139 @@ static void finish_position_control(enum board_motor_port port, uint32_t now_ms,
 	}
 	control->state = state;
 	control->finished_ms = now_ms;
-	control->pwm_x100 = 0;
+	if (!handed_off_to_hold) {
+		control->pwm_x100 = 0;
+	}
+}
+
+static void update_position_settling(enum board_motor_port port,
+	uint32_t now_ms, int32_t position_error, int32_t velocity)
+{
+	struct motor_position_control *control =
+		&position_controls[(uint8_t)port];
+	bool medium = control->type == BOARD_MOTOR_TYPE_MEDIUM;
+	int32_t kp_x100 = medium ? MOTOR_POSITION_SETTLING_MEDIUM_KP_X100 :
+		MOTOR_POSITION_SETTLING_LARGE_KP_X100;
+	int32_t kd_x100 = medium ? MOTOR_POSITION_SETTLING_MEDIUM_KD_X100 :
+		MOTOR_POSITION_SETTLING_LARGE_KD_X100;
+	int32_t maximum_pwm_x100 = medium ?
+		MOTOR_POSITION_SETTLING_MEDIUM_MAX_PWM_X100 :
+		MOTOR_POSITION_SETTLING_LARGE_MAX_PWM_X100;
+	int32_t reverse_maximum_pwm_x100 = medium ?
+		MOTOR_POSITION_SETTLING_MEDIUM_REVERSE_MAX_PWM_X100 :
+		MOTOR_POSITION_SETTLING_LARGE_REVERSE_MAX_PWM_X100;
+	int32_t pwm_slew_x100 = medium ?
+		MOTOR_POSITION_SETTLING_MEDIUM_PWM_SLEW_X100 :
+		MOTOR_POSITION_SETTLING_LARGE_PWM_SLEW_X100;
+	int32_t position_tolerance = medium ?
+		MOTOR_POSITION_SETTLING_MEDIUM_POSITION_TOLERANCE_COUNTS :
+		MOTOR_POSITION_SETTLING_LARGE_POSITION_TOLERANCE_COUNTS;
+	int32_t speed_tolerance = medium ?
+		MOTOR_POSITION_SETTLING_MEDIUM_SPEED_TOLERANCE_PERCENT :
+		MOTOR_POSITION_SETTLING_LARGE_SPEED_TOLERANCE_PERCENT;
+	int32_t minimum_recovery_pwm_x100 = medium ?
+		MOTOR_POSITION_SETTLING_MEDIUM_MIN_RECOVERY_PWM_X100 :
+		MOTOR_POSITION_SETTLING_LARGE_MIN_RECOVERY_PWM_X100;
+	int32_t recovery_threshold = medium ?
+		MOTOR_POSITION_SETTLING_MEDIUM_RECOVERY_THRESHOLD_COUNTS :
+		MOTOR_POSITION_SETTLING_LARGE_RECOVERY_THRESHOLD_COUNTS;
+	int32_t absolute_error = absolute_i32(position_error);
+	int32_t requested_pwm = position_error * kp_x100 - velocity * kd_x100;
+	bool recovery_condition = absolute_error >= recovery_threshold &&
+		absolute_i32(velocity) <=
+			MOTOR_POSITION_SETTLING_RECOVERY_VELOCITY_COUNTS &&
+		measured_speed_percent[(uint8_t)port] == 0 &&
+		absolute_i32(requested_pwm) < minimum_recovery_pwm_x100;
+	bool recovery_drive = false;
+	bool recovery_cooldown = false;
+
+	if (medium && control->recovery_drive_samples != 0U) {
+		int8_t error_direction = position_error < 0 ? -1 : 1;
+		bool motor_started = absolute_i32(velocity) >
+			MOTOR_POSITION_SETTLING_RECOVERY_VELOCITY_COUNTS ||
+			measured_speed_percent[(uint8_t)port] != 0;
+
+		if (absolute_error <= position_tolerance || motor_started ||
+		    error_direction != control->recovery_direction) {
+			control->recovery_drive_samples = 0U;
+			control->recovery_cooldown_samples =
+				MOTOR_POSITION_SETTLING_MEDIUM_RECOVERY_COOLDOWN_SAMPLES;
+			recovery_cooldown = true;
+		} else {
+			control->recovery_drive_samples--;
+			recovery_drive = true;
+			if (control->recovery_drive_samples == 0U) {
+				control->recovery_cooldown_samples =
+					MOTOR_POSITION_SETTLING_MEDIUM_RECOVERY_COOLDOWN_SAMPLES;
+			}
+		}
+	} else if (medium && control->recovery_cooldown_samples != 0U) {
+		control->recovery_cooldown_samples--;
+		recovery_cooldown = true;
+	} else if (medium && recovery_condition) {
+		bool strong_recovery = absolute_error >=
+			MOTOR_POSITION_SETTLING_MEDIUM_STRONG_RECOVERY_THRESHOLD_COUNTS;
+
+		control->recovery_direction = position_error < 0 ? -1 : 1;
+		control->recovery_pwm_x100 = strong_recovery ?
+			MOTOR_POSITION_SETTLING_MEDIUM_STRONG_RECOVERY_PWM_X100 :
+			minimum_recovery_pwm_x100;
+		control->recovery_drive_samples = strong_recovery ?
+			MOTOR_POSITION_SETTLING_MEDIUM_RECOVERY_DRIVE_SAMPLES - 1U : 1U;
+		recovery_drive = true;
+	}
+
+	if (absolute_error <= position_tolerance &&
+	    absolute_i32(velocity) <=
+	    MOTOR_POSITION_SETTLING_VELOCITY_TOLERANCE_COUNTS) {
+		requested_pwm = 0;
+	}
+	if (recovery_cooldown) {
+		requested_pwm = 0;
+	}
+	if (requested_pwm > maximum_pwm_x100) {
+		requested_pwm = maximum_pwm_x100;
+	} else if (requested_pwm < -maximum_pwm_x100) {
+		requested_pwm = -maximum_pwm_x100;
+	}
+	if (control->requested_speed > 0 &&
+	    requested_pwm < -reverse_maximum_pwm_x100) {
+		requested_pwm = -reverse_maximum_pwm_x100;
+	} else if (control->requested_speed < 0 &&
+		   requested_pwm > reverse_maximum_pwm_x100) {
+		requested_pwm = reverse_maximum_pwm_x100;
+	}
+	if (recovery_drive || (!medium && recovery_condition)) {
+		int32_t recovery_pwm = medium ? control->recovery_pwm_x100 :
+			minimum_recovery_pwm_x100;
+
+		requested_pwm = position_error < 0 ? -recovery_pwm : recovery_pwm;
+	}
+	if (recovery_drive) {
+		control->pwm_x100 = hold_slew_pwm(control->pwm_x100,
+			requested_pwm,
+			MOTOR_POSITION_SETTLING_MEDIUM_RECOVERY_RAMP_X100);
+	} else {
+		control->pwm_x100 = position_settling_slew_pwm(medium,
+			control->pwm_x100, requested_pwm, pwm_slew_x100);
+	}
+	apply_hold_pwm(port, control->pwm_x100);
+
+	if (absolute_error <= position_tolerance &&
+	    absolute_i32(measured_speed_percent[(uint8_t)port]) <=
+	    speed_tolerance &&
+	    absolute_i32(velocity) <=
+	    MOTOR_POSITION_SETTLING_VELOCITY_TOLERANCE_COUNTS) {
+		if (control->stable_samples < UINT8_MAX) {
+			control->stable_samples++;
+		}
+	} else {
+		control->stable_samples = 0U;
+	}
+	if (control->stable_samples >= MOTOR_POSITION_SETTLING_STABLE_SAMPLES) {
+		finish_position_control(port, now_ms,
+			BOARD_MOTOR_POSITION_COMPLETE);
+	}
 }
 
 static void update_position_control_port(uint32_t now_ms,
@@ -1725,8 +1986,10 @@ static void update_position_control_port(uint32_t now_ms,
 	int32_t current;
 	int32_t remaining;
 	int32_t absolute_remaining;
+	int32_t velocity;
 	int8_t target_speed;
-	uint16_t slowdown_degrees;
+	int32_t settling_entry;
+	bool pair_owned;
 
 	if (!position_control_active(port)) {
 		if (control->state == BOARD_MOTOR_POSITION_COMPLETE &&
@@ -1745,12 +2008,15 @@ static void update_position_control_port(uint32_t now_ms,
 		if ((uint32_t)(now_ms - control->last_control_ms) >=
 		    MOTOR_SPEED_CONTROL_INTERVAL_MS) {
 			control->last_control_ms = now_ms;
+			control->last_count = current;
 			apply_closed_loop_speed(port, 0, &control->pwm_x100);
 		}
 		return;
 	}
-	if ((control->requested_speed > 0 && remaining <= 0) ||
-	    (control->requested_speed < 0 && remaining >= 0)) {
+	pair_owned = pair_position_owns_port(port);
+	if (pair_owned &&
+	    ((control->requested_speed > 0 && remaining <= 0) ||
+	     (control->requested_speed < 0 && remaining >= 0))) {
 		finish_position_control(port, now_ms, BOARD_MOTOR_POSITION_COMPLETE);
 		return;
 	}
@@ -1764,18 +2030,48 @@ static void update_position_control_port(uint32_t now_ms,
 		return;
 	}
 	control->last_control_ms = now_ms;
+	velocity = current - control->last_count;
+	control->last_count = current;
 	absolute_remaining = remaining < 0 ? -remaining : remaining;
-	slowdown_degrees = motor_position_slowdown_degrees(control->type,
-		(uint8_t)(control->requested_speed < 0 ?
-		-control->requested_speed : control->requested_speed));
-	target_speed = control->requested_speed;
-	if ((uint32_t)absolute_remaining < slowdown_degrees) {
-		target_speed = control->requested_speed < 0 ?
-			-(int8_t)MOTOR_POSITION_MIN_SPEED_PERCENT :
-			(int8_t)MOTOR_POSITION_MIN_SPEED_PERCENT;
+	if (pair_owned) {
+		uint16_t slowdown_degrees = motor_position_slowdown_degrees(
+			control->type,
+			(uint8_t)(control->requested_speed < 0 ?
+			-control->requested_speed : control->requested_speed));
+
+		target_speed = control->requested_speed;
+		if ((uint32_t)absolute_remaining < slowdown_degrees) {
+			target_speed = control->requested_speed < 0 ?
+				-(int8_t)MOTOR_POSITION_MIN_SPEED_PERCENT :
+				(int8_t)MOTOR_POSITION_MIN_SPEED_PERCENT;
+		}
+		target_speed = pair_adjust_position_speed(port, target_speed);
+		apply_closed_loop_speed(port, target_speed, &control->pwm_x100);
+		return;
 	}
-	target_speed = pair_adjust_position_speed(port, target_speed);
-	apply_closed_loop_speed(port, target_speed, &control->pwm_x100);
+
+	settling_entry = (int32_t)motor_position_slowdown_degrees(control->type,
+		(uint8_t)(control->requested_speed < 0 ?
+		-control->requested_speed : control->requested_speed)) * 2;
+	if (control->phase == MOTOR_POSITION_PHASE_TRACKING &&
+	    (absolute_remaining <= settling_entry ||
+	     (control->requested_speed > 0 && remaining <= 0) ||
+	     (control->requested_speed < 0 && remaining >= 0))) {
+		control->phase = MOTOR_POSITION_PHASE_SETTLING;
+		control->stable_samples = 0U;
+		control->recovery_drive_samples = 0U;
+		control->recovery_cooldown_samples = 0U;
+		control->recovery_direction = 0;
+		control->recovery_pwm_x100 = 0;
+	}
+	if (control->phase == MOTOR_POSITION_PHASE_TRACKING) {
+		target_speed = motor_position_tracking_speed(control->type,
+			control->requested_speed, remaining,
+			measured_speed_percent[(uint8_t)port]);
+		apply_closed_loop_speed(port, target_speed, &control->pwm_x100);
+		return;
+	}
+	update_position_settling(port, now_ms, remaining, velocity);
 }
 
 static void update_position_control(uint32_t now_ms)
@@ -1918,6 +2214,7 @@ void board_motor_init(void)
 		speed_sample_ms[port_index] = 0U;
 		speed_measurement_valid[port_index] = false;
 		position_controls[port_index].state = BOARD_MOTOR_POSITION_IDLE;
+		position_controls[port_index].phase = MOTOR_POSITION_PHASE_TRACKING;
 		position_controls[port_index].type = BOARD_MOTOR_TYPE_UNKNOWN;
 		position_controls[port_index].requested_speed = 0;
 		position_controls[port_index].start_count = 0;
@@ -1926,7 +2223,13 @@ void board_motor_init(void)
 		position_controls[port_index].timeout_ms = 0U;
 		position_controls[port_index].finished_ms = 0U;
 		position_controls[port_index].last_control_ms = 0U;
+		position_controls[port_index].last_count = 0;
 		position_controls[port_index].pwm_x100 = 0;
+		position_controls[port_index].stable_samples = 0U;
+		position_controls[port_index].recovery_drive_samples = 0U;
+		position_controls[port_index].recovery_cooldown_samples = 0U;
+		position_controls[port_index].recovery_direction = 0;
+		position_controls[port_index].recovery_pwm_x100 = 0;
 		position_controls[port_index].completion_stop_mode =
 			BOARD_MOTOR_STOP_LOW_OPEN_DRAIN;
 		speed_controls[port_index].state = BOARD_MOTOR_SPEED_IDLE;
@@ -2200,7 +2503,14 @@ bool board_motor_start_position(uint32_t now_ms, enum board_motor_port port,
 	control->started_ms = now_ms;
 	control->finished_ms = 0U;
 	control->last_control_ms = now_ms - MOTOR_SPEED_CONTROL_INTERVAL_MS;
+	control->last_count = control->start_count;
 	control->pwm_x100 = 0;
+	control->phase = MOTOR_POSITION_PHASE_TRACKING;
+	control->stable_samples = 0U;
+	control->recovery_drive_samples = 0U;
+	control->recovery_cooldown_samples = 0U;
+	control->recovery_direction = 0;
+	control->recovery_pwm_x100 = 0;
 	control->completion_stop_mode = stop_mode;
 	speed_sample_count[(uint8_t)port] = control->start_count;
 	speed_sample_ms[(uint8_t)port] = now_ms;
@@ -2243,8 +2553,14 @@ bool board_motor_stop_position(enum board_motor_port port,
 	}
 	control = &position_controls[(uint8_t)port];
 	control->state = BOARD_MOTOR_POSITION_IDLE;
+	control->phase = MOTOR_POSITION_PHASE_TRACKING;
 	control->requested_speed = 0;
 	control->pwm_x100 = 0;
+	control->stable_samples = 0U;
+	control->recovery_drive_samples = 0U;
+	control->recovery_cooldown_samples = 0U;
+	control->recovery_direction = 0;
+	control->recovery_pwm_x100 = 0;
 	motor_apply_completion_stop_mode(port, stop_mode,
 		tacho_count[(uint8_t)port]);
 	return true;
@@ -2394,11 +2710,23 @@ bool board_motor_stop_pair_position(enum board_motor_stop_mode stop_mode)
 	left = &position_controls[(uint8_t)pair_position_control.left_port];
 	right = &position_controls[(uint8_t)pair_position_control.right_port];
 	left->state = BOARD_MOTOR_POSITION_IDLE;
+	left->phase = MOTOR_POSITION_PHASE_TRACKING;
 	left->requested_speed = 0;
 	left->pwm_x100 = 0;
+	left->stable_samples = 0U;
+	left->recovery_drive_samples = 0U;
+	left->recovery_cooldown_samples = 0U;
+	left->recovery_direction = 0;
+	left->recovery_pwm_x100 = 0;
 	right->state = BOARD_MOTOR_POSITION_IDLE;
+	right->phase = MOTOR_POSITION_PHASE_TRACKING;
 	right->requested_speed = 0;
 	right->pwm_x100 = 0;
+	right->stable_samples = 0U;
+	right->recovery_drive_samples = 0U;
+	right->recovery_cooldown_samples = 0U;
+	right->recovery_direction = 0;
+	right->recovery_pwm_x100 = 0;
 	motor_apply_completion_stop_mode(pair_position_control.left_port,
 		stop_mode,
 		tacho_count[(uint8_t)pair_position_control.left_port]);
@@ -2864,8 +3192,14 @@ void board_motor_stop(void)
 	pair_speed_control.elapsed_ms = 0U;
 	for (port_index = 0U; port_index < BOARD_MOTOR_PORT_COUNT; port_index++) {
 		position_controls[port_index].state = BOARD_MOTOR_POSITION_IDLE;
+		position_controls[port_index].phase = MOTOR_POSITION_PHASE_TRACKING;
 		position_controls[port_index].requested_speed = 0;
 		position_controls[port_index].pwm_x100 = 0;
+		position_controls[port_index].stable_samples = 0U;
+		position_controls[port_index].recovery_drive_samples = 0U;
+		position_controls[port_index].recovery_cooldown_samples = 0U;
+		position_controls[port_index].recovery_direction = 0;
+		position_controls[port_index].recovery_pwm_x100 = 0;
 		speed_controls[port_index].state = BOARD_MOTOR_SPEED_IDLE;
 		speed_controls[port_index].requested_speed = 0;
 		speed_controls[port_index].started_ms = 0U;
