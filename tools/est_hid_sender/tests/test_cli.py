@@ -17,6 +17,12 @@ from test_protocol import FakeTransport  # noqa: E402
 
 
 class CliTests(unittest.TestCase):
+    def test_motor_stall_capability_has_a_stable_cli_name(self) -> None:
+        self.assertIn(
+            (1 << 25, "motor-stall-detection"),
+            cli.DEVICE_CAPABILITY_NAMES,
+        )
+
     def test_basic_event_hats_capability_has_a_stable_cli_name(self) -> None:
         self.assertIn(
             (1 << 24, "runtime-basic-event-hats"),
@@ -78,7 +84,7 @@ class CliTests(unittest.TestCase):
         self.assertIn("protocol=1.0", text)
         self.assertIn("firmware-update,motor-control,motor-tacho", text)
         self.assertIn("battery_level=4/4", text)
-        self.assertIn("battery_percent=100", text)
+        self.assertIn("battery_percent=7", text)
         self.assertIn("motor_A=state:coast power:0 tacho:12", text)
         self.assertIn("motor_C=state:drive power:-30 tacho:-456", text)
         self.assertIn("input_1=state:streaming model:EST/EV3-color", text)
@@ -218,6 +224,17 @@ class CliTests(unittest.TestCase):
         self.assertIn("test_address=0x01FFF000", output.getvalue())
         self.assertIn("device_supported=yes", output.getvalue())
         self.assertIn("test_sector_empty=yes", output.getvalue())
+
+    def test_flash_scan_accepts_an_aligned_address(self) -> None:
+        output = io.StringIO()
+        transport = FakeTransport(jedec_id=bytes.fromhex("EF4019"))
+        with mock.patch.object(cli.HidTransport, "open", return_value=transport):
+            with contextlib.redirect_stdout(output):
+                self.assertEqual(
+                    cli.main(["flash-scan", "--address", "0x01FCE000"]), 0
+                )
+        self.assertIn("test_address=0x01FCE000", output.getvalue())
+        self.assertEqual(transport.reports[-1][5:9], bytes.fromhex("00 E0 FC 01"))
 
     def test_flash_test_runs_only_after_empty_scan(self) -> None:
         output = io.StringIO()

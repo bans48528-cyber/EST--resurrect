@@ -62,6 +62,20 @@ class PackageTests(unittest.TestCase):
                 len(build_packages(self.valid_image(), DEFAULT_PACKAGE_SIZE)[1]),
             )
 
+    def test_current_makefile_builds_a_320_kib_package(self) -> None:
+        makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+        config = (ROOT / "include" / "app_config.h").read_text(encoding="utf-8")
+        self.assertIn("PACKAGE_SIZE ?= 327680", makefile)
+        self.assertIn("--package-size $(PACKAGE_SIZE)", makefile)
+        self.assertIn("RELEASE_PACKAGE_SIZE            (320U * 1024U)", config)
+
+    def test_flash_scan_accepts_an_optional_read_only_address(self) -> None:
+        protocol = (SOURCE_DIR / "update_protocol.c").read_text(encoding="utf-8")
+        self.assertIn("static void queue_flash_scan(uint32_t address)", protocol)
+        self.assertIn("(data_length == 0U || data_length == 4U)", protocol)
+        self.assertIn("read_u32_le(&logical_frame[5])", protocol)
+        self.assertIn("board_flash_sector_is_erased_4byte(address)", protocol)
+
     def test_rejects_non_thumb_reset_handler(self) -> None:
         image = (0x20001000).to_bytes(4, "little") + APP_FLASH_START.to_bytes(
             4, "little"
@@ -232,6 +246,8 @@ class EstServiceApiTests(unittest.TestCase):
         display_source = (SOURCE_DIR / "est_display.c").read_text(
             encoding="utf-8"
         )
+        ui = (SOURCE_DIR / "est_ui.c").read_text(encoding="utf-8")
+        ui_text = (SOURCE_DIR / "est_ui_text.c").read_text(encoding="utf-8")
         protocol = (SOURCE_DIR / "update_protocol.c").read_text(encoding="utf-8")
         main = (SOURCE_DIR / "main.c").read_text(encoding="utf-8")
 
@@ -275,7 +291,11 @@ class EstServiceApiTests(unittest.TestCase):
         self.assertIn('#include "est_buttons.h"', protocol)
         self.assertIn("est_buttons_pressed_mask()", protocol)
         self.assertNotIn("board_keys_pressed_mask()", protocol)
-        self.assertIn("est_display_text(36U, 54U, app_version_text, 3U)", main)
+        self.assertIn("est_display_init();", main)
+        self.assertIn("est_ui_init(est_system_millis());", main)
+        self.assertIn("est_ui_tick(now_ms);", main)
+        self.assertIn("board_lcd_draw_ui_text", ui_text)
+        self.assertIn("est_key_events_tick();", ui)
 
     def test_battery_and_system_contracts_wrap_verified_board_services(self) -> None:
         battery_header = (ROOT / "include" / "est_battery.h").read_text(
@@ -421,9 +441,9 @@ class BoardModuleLayoutTests(unittest.TestCase):
         main = (SOURCE_DIR / "main.c").read_text(encoding="utf-8")
         interrupts = main.index("platform_enable_interrupts();")
         lcd_init = main.index("est_display_init();")
-        lcd_version = main.index("est_display_text(36U, 54U, app_version_text, 3U)")
+        ui_init = main.index("est_ui_init(est_system_millis());")
         self.assertLess(interrupts, lcd_init)
-        self.assertLess(lcd_init, lcd_version)
+        self.assertLess(lcd_init, ui_init)
 
     def test_lcd_uses_conservative_cold_start_reset_timing(self) -> None:
         lcd = (SOURCE_DIR / "board_lcd.c").read_text(encoding="utf-8")
@@ -577,7 +597,7 @@ class BoardModuleLayoutTests(unittest.TestCase):
 
     def test_motor_hotplug_hides_empty_data_and_resets_reconnected_count(self) -> None:
         motor = (SOURCE_DIR / "board_motor.c").read_text(encoding="utf-8")
-        main = (SOURCE_DIR / "main.c").read_text(encoding="utf-8")
+        ports = (SOURCE_DIR / "est_ui_ports.c").read_text(encoding="utf-8")
         self.assertIn("automatic_identification_allowed", motor)
         self.assertIn("start_identification_refresh(now_ms", motor)
         self.assertIn("if (motor_type[port_index] != identified_type)", motor)
@@ -586,8 +606,10 @@ class BoardModuleLayoutTests(unittest.TestCase):
         self.assertIn("measured_speed_percent[port_index] = 0", motor)
         self.assertIn("speed_sample_count[port_index] = 0", motor)
         self.assertIn("snapshot->tacho_count = identification_refresh_tacho_count", motor)
-        self.assertIn("snapshot->type == BOARD_MOTOR_TYPE_NONE", main)
-        self.assertIn("output[output_index++] = '-'", main)
+        self.assertIn("snapshot.type == BOARD_MOTOR_TYPE_NONE", ports)
+        self.assertIn("EST_UI_PORT_DISCONNECTED", ports)
+        self.assertIn("snapshot.type == BOARD_MOTOR_TYPE_UNKNOWN", ports)
+        self.assertIn("EST_UI_PORT_DETECTING", ports)
 
     def test_motor_test_is_command_only_and_update_forces_stop(self) -> None:
         protocol = (SOURCE_DIR / "update_protocol.c").read_text(encoding="utf-8")
@@ -683,7 +705,7 @@ class BoardModuleLayoutTests(unittest.TestCase):
         header = (ROOT / "include" / "board_motor.h").read_text(encoding="utf-8")
         config = (ROOT / "include" / "app_config.h").read_text(encoding="utf-8")
         self.assertIn("MOTOR_POSITION_COMMAND          0x1BU", config)
-        self.assertIn("DEVICE_PROTOCOL_MINOR           25U", config)
+        self.assertIn("DEVICE_PROTOCOL_MINOR           26U", config)
         self.assertIn("MOTOR_LARGE_COUNTS_PER_SPEED 12800U", motor)
         self.assertIn("MOTOR_MEDIUM_COUNTS_PER_SPEED 8100U", motor)
         self.assertIn("medium_samples[4] = {2U, 4U, 8U, 16U}", motor)
@@ -819,9 +841,8 @@ class BoardModuleLayoutTests(unittest.TestCase):
         self.assertNotIn("left_magnitude != right_magnitude", pair_position_start)
         self.assertIn("left_speed_percent", pair_position_start)
         self.assertIn("right_speed_percent", pair_position_start)
-        self.assertIn("control->timeout_ms != 0U", motor)
-        self.assertIn("position_controls[(uint8_t)left_port].timeout_ms = 0U", motor)
-        self.assertIn("position_controls[(uint8_t)right_port].timeout_ms = 0U", motor)
+        self.assertNotIn("control->timeout_ms != 0U", motor)
+        self.assertIn("update_position_stall(now_ms, port, remaining)", motor)
         pair_state = motor[motor.index("static void update_pair_position_state") :
                            motor.index("void board_motor_init")]
         self.assertNotIn("BOARD_MOTOR_POSITION_TIMEOUT", pair_state)
@@ -989,19 +1010,19 @@ class BoardModuleLayoutTests(unittest.TestCase):
     def test_touch_sensor_preserves_legacy_adc_thresholds_and_shows_state(self) -> None:
         sensor = (SOURCE_DIR / "board_sensor.c").read_text(encoding="utf-8")
         header = (ROOT / "include" / "board_sensor.h").read_text(encoding="utf-8")
-        main = (SOURCE_DIR / "main.c").read_text(encoding="utf-8")
+        ports = (SOURCE_DIR / "est_ui_ports.c").read_text(encoding="utf-8")
         self.assertIn("BOARD_SENSOR_TYPE_TOUCH 0x10U", header)
         self.assertIn("SENSOR_TOUCH_ID_MIN_RAW 82U", sensor)
         self.assertIn("SENSOR_TOUCH_ID_MAX_RAW 656U", sensor)
         self.assertIn("SENSOR_TOUCH_PRESS_MAX_RAW 655U", sensor)
         self.assertIn("SENSOR_TOUCH_RELEASE_MIN_RAW 1229U", sensor)
         self.assertIn("update_touch_detection(port, now_ms);", sensor)
-        self.assertIn('return snapshot->value != 0U ? "DOWN" : "UP";', main)
+        self.assertIn('snapshot->value != 0U ? "Pressed" : "Released"', ports)
 
     def test_ultrasonic_sensor_uses_existing_uart_modes_and_formats_distance(self) -> None:
         sensor = (SOURCE_DIR / "board_sensor.c").read_text(encoding="utf-8")
         header = (ROOT / "include" / "board_sensor.h").read_text(encoding="utf-8")
-        main = (SOURCE_DIR / "main.c").read_text(encoding="utf-8")
+        ports = (SOURCE_DIR / "est_ui_ports.c").read_text(encoding="utf-8")
         self.assertIn("BOARD_SENSOR_TYPE_ULTRASONIC 0x1EU", header)
         self.assertIn(
             "runtime->rx_message[1] == BOARD_SENSOR_TYPE_ULTRASONIC", sensor
@@ -1010,19 +1031,17 @@ class BoardModuleLayoutTests(unittest.TestCase):
         self.assertIn("BOARD_SENSOR_MODE_DISTANCE_INCH", header)
         self.assertIn("BOARD_SENSOR_MODE_PRESENCE", header)
         self.assertIn(
-            'format_tenths((int16_t)snapshot->value, "CM", formatted);', main
+            'format_tenths((int16_t)snapshot->value, "cm", view->value);', ports
         )
         self.assertIn(
-            'format_tenths((int16_t)snapshot->value, "IN", formatted);', main
+            'format_tenths((int16_t)snapshot->value, "in", view->value);', ports
         )
-        self.assertIn('return snapshot->value != 0U ? "YES" : "NO";', main)
-        for label in ("DIST CM", "DIST IN", "PRESENCE"):
-            self.assertIn(f'"{label}"', main)
+        self.assertIn('snapshot->value != 0U ? "Yes" : "No"', ports)
 
     def test_temperature_sensor_uses_original_i2c_protocol_and_signed_units(self) -> None:
         sensor = (SOURCE_DIR / "board_sensor.c").read_text(encoding="utf-8")
         header = (ROOT / "include" / "board_sensor.h").read_text(encoding="utf-8")
-        main = (SOURCE_DIR / "main.c").read_text(encoding="utf-8")
+        ports = (SOURCE_DIR / "est_ui_ports.c").read_text(encoding="utf-8")
         self.assertIn("BOARD_SENSOR_TYPE_TEMPERATURE 0x06U", header)
         self.assertIn("SENSOR_I2C_ADDRESS 0x4CU", sensor)
         self.assertIn("SENSOR_I2C_IDENTIFY_REGISTER 0x01U", sensor)
@@ -1041,9 +1060,8 @@ class BoardModuleLayoutTests(unittest.TestCase):
         self.assertIn("* 18) / 16 + 320", sensor)
         self.assertIn("BOARD_SENSOR_MODE_CELSIUS", header)
         self.assertIn("BOARD_SENSOR_MODE_FAHRENHEIT", header)
-        self.assertIn('"TEMP C"', main)
-        self.assertIn('"TEMP F"', main)
-        self.assertIn('? "F" : "C"', main)
+        self.assertIn('? "F" : "C"', ports)
+        self.assertIn("format_tenths((int16_t)snapshot->value", ports)
         for pin in (
             "SENSOR_A_DIGITAL0_PIN GPIO3",
             "SENSOR_A_DIGITAL1_PIN GPIO7",
@@ -1059,16 +1077,17 @@ class BoardModuleLayoutTests(unittest.TestCase):
     def test_gyro_sensor_uses_type_0x20_and_signed_angle_rate_values(self) -> None:
         sensor = (SOURCE_DIR / "board_sensor.c").read_text(encoding="utf-8")
         header = (ROOT / "include" / "board_sensor.h").read_text(encoding="utf-8")
-        main = (SOURCE_DIR / "main.c").read_text(encoding="utf-8")
+        ports = (SOURCE_DIR / "est_ui_ports.c").read_text(encoding="utf-8")
         self.assertIn("BOARD_SENSOR_TYPE_GYRO 0x20U", header)
         self.assertIn("BOARD_SENSOR_TYPE_GYRO", sensor)
         self.assertIn("mode > BOARD_SENSOR_MODE_GYRO_RATE", sensor)
-        self.assertIn("format_i32((int32_t)(int16_t)snapshot->value", main)
+        self.assertIn("format_int((int32_t)(int16_t)snapshot->value", ports)
+        self.assertIn('? "d/s" : "deg"', ports)
 
     def test_sound_sensor_uses_legacy_detect_and_original_adc_scale(self) -> None:
         sensor = (SOURCE_DIR / "board_sensor.c").read_text(encoding="utf-8")
         header = (ROOT / "include" / "board_sensor.h").read_text(encoding="utf-8")
-        main = (SOURCE_DIR / "main.c").read_text(encoding="utf-8")
+        ports = (SOURCE_DIR / "est_ui_ports.c").read_text(encoding="utf-8")
         self.assertIn("BOARD_SENSOR_TYPE_SOUND 0x03U", header)
         self.assertIn("(snapshot->digital_mask & 0x04U) == 0U", sensor)
         self.assertIn("(uint32_t)raw * 5000U / 4096U", sensor)
@@ -1077,19 +1096,24 @@ class BoardModuleLayoutTests(unittest.TestCase):
             sensor.index("update_sound_detection(port, now_ms);"),
             sensor.index("update_touch_detection(port, now_ms);"),
         )
-        self.assertIn('return "SOUND DB";', main)
+        self.assertIn('format_int(snapshot->value, "dB", view->value);', ports)
 
     def test_infrared_sensor_uses_type_0x21_and_three_uart_modes(self) -> None:
         sensor = (SOURCE_DIR / "board_sensor.c").read_text(encoding="utf-8")
         header = (ROOT / "include" / "board_sensor.h").read_text(encoding="utf-8")
-        main = (SOURCE_DIR / "main.c").read_text(encoding="utf-8")
+        ports = (SOURCE_DIR / "est_ui_ports.c").read_text(encoding="utf-8")
         self.assertIn("BOARD_SENSOR_TYPE_INFRARED 0x21U", header)
         self.assertIn("BOARD_SENSOR_MODE_IR_PROXIMITY", header)
         self.assertIn("BOARD_SENSOR_MODE_IR_BEACON", header)
         self.assertIn("BOARD_SENSOR_MODE_IR_REMOTE", header)
         self.assertIn("BOARD_SENSOR_TYPE_INFRARED", sensor)
-        self.assertIn('"IR PROX", "IR BEACON", "IR REMOTE"', main)
-        self.assertIn('return "NO BEACON";', main)
+        self.assertIn("value_bytes[4]", header)
+        self.assertIn("last_data_ms", header)
+        self.assertIn("runtime->snapshot.value_bytes[index]", sensor)
+        self.assertIn("snapshot->mode == BOARD_SENSOR_MODE_IR_BEACON", ports)
+        self.assertIn("snapshot->mode == BOARD_SENSOR_MODE_IR_REMOTE", ports)
+        self.assertIn('append_text(view->value, 0U, 20U, "H:")', ports)
+        self.assertIn('return "Infrared";', ports)
 
     def test_sensor_command_is_additive_and_update_stops_sensor(self) -> None:
         protocol = (SOURCE_DIR / "update_protocol.c").read_text(encoding="utf-8")
@@ -1116,50 +1140,40 @@ class BoardModuleLayoutTests(unittest.TestCase):
         self.assertIn("queue_device_status(now_ms);", protocol)
         self.assertIn("UPDATE_COMMAND                  0x05U", config)
 
-    def test_sensor_screen_shows_live_modes_and_cycles_with_a_key(self) -> None:
-        lcd = (SOURCE_DIR / "board_lcd.c").read_text(encoding="utf-8")
-        lcd_text = (SOURCE_DIR / "board_lcd_text.c").read_text(encoding="utf-8")
-        header = (ROOT / "include" / "board_lcd.h").read_text(encoding="utf-8")
+    def test_ports_page_uses_live_snapshots_and_explicit_mode_switching(self) -> None:
         main = (SOURCE_DIR / "main.c").read_text(encoding="utf-8")
-        self.assertIn("board_lcd_show_sensor", header)
-        self.assertIn("board_lcd_show_sensor_ports", header)
-        self.assertIn("board_lcd_show_io_ports", header)
-        self.assertIn("board_lcd_show_io_ports", main)
-        self.assertIn("format_motor_line", main)
-        self.assertIn('"MTR S% DEG REV"', lcd)
-        self.assertIn("LCD_MOTOR_COLUMN_X 72U", lcd)
-        self.assertIn("BOARD_LCD_MOTOR_LINE_CHARACTERS 18U", header)
-        self.assertIn("motor display column exceeds the LCD width", lcd)
-        self.assertIn("snapshot->speed_percent", main)
-        self.assertIn("rotation_tenths", main)
-        self.assertIn(
-            "MOTOR_DISPLAY_LINE_SIZE (BOARD_LCD_MOTOR_LINE_CHARACTERS + 1U)",
-            main,
-        )
-        self.assertIn("format_status_line", main)
-        self.assertIn('append_status_text(output, &output_index, "BAT:");', main)
-        self.assertIn('append_status_text(output, &output_index, " SND:");', main)
-        self.assertIn("glyph_percent", lcd_text)
-        self.assertIn("draw_text_centered(116U, status, 1U);", lcd)
-        self.assertIn("BOARD_SENSOR_PORT_COUNT", main)
-        self.assertIn("board_sensor_set_all_modes", main)
-        self.assertIn('draw_text_centered(112U, "ANY KEY", 1U);', lcd)
-        for label in ("REFLECT", "AMBIENT", "COLOR"):
-            self.assertIn(f'"{label}"', main)
-        for color in ("NONE", "BLACK", "BLUE", "GREEN", "YELLOW", "RED", "WHITE", "BROWN"):
-            self.assertIn(f'"{color}"', main)
-        self.assertIn("key_mask != 0U && last_key_mask == 0U", main)
-        self.assertIn("SENSOR_DISPLAY_INTERVAL_MS 100U", main)
+        ui = (SOURCE_DIR / "est_ui.c").read_text(encoding="utf-8")
+        ports = (SOURCE_DIR / "est_ui_ports.c").read_text(encoding="utf-8")
+        renderer = (SOURCE_DIR / "est_ui_renderer.c").read_text(encoding="utf-8")
+        state = (SOURCE_DIR / "est_ui_state.c").read_text(encoding="utf-8")
 
-    def test_startup_exercises_backlight_and_audio_without_blocking_main_loop(self) -> None:
+        self.assertIn("board_motor_control_snapshot", ports)
+        self.assertIn("board_sensor_get_snapshot", ports)
+        self.assertIn("snapshot.state == BOARD_SENSOR_OFF", ports)
+        self.assertIn("snapshot.state != BOARD_SENSOR_STREAMING", ports)
+        self.assertIn("EST_UI_PORT_REFRESH_MS 100U", ui)
+        self.assertIn("est_ui_ports_capture(&ui_view.ports);", ui)
+        self.assertIn("EST_UI_PAGE_PORTS", renderer)
+        self.assertIn("index < 8U", renderer)
+        self.assertIn("state->port_item < 4U", renderer)
+        self.assertIn("button == EST_BUTTON_LEFT", state)
+        self.assertIn("button == EST_BUTTON_RIGHT", state)
+        self.assertIn("button == EST_BUTTON_CONFIRM && state->port_item >= 4U", state)
+        self.assertIn("board_sensor_set_mode", ports)
+        self.assertNotIn("board_sensor_set_all_modes", ui)
+        self.assertNotIn("board_sensor_set_all_modes", main)
+
+    def test_menu_applies_backlight_and_audio_without_startup_self_test(self) -> None:
         main = (SOURCE_DIR / "main.c").read_text(encoding="utf-8")
+        ui = (SOURCE_DIR / "est_ui.c").read_text(encoding="utf-8")
         runtime = (SOURCE_DIR / "est_runtime.c").read_text(encoding="utf-8")
         backlight = (SOURCE_DIR / "board_backlight.c").read_text(encoding="utf-8")
         audio = (SOURCE_DIR / "board_audio.c").read_text(encoding="utf-8")
-        self.assertIn("est_backlight_set_percent(20U);", main)
-        self.assertIn("est_backlight_set_percent(0U);", main)
-        self.assertIn("est_backlight_set_percent(100U);", main)
-        self.assertIn("board_audio_start_test(now_ms)", main)
+        self.assertNotIn("est_backlight_set_percent(20U);", main)
+        self.assertNotIn("est_backlight_set_percent(0U);", main)
+        self.assertNotIn("board_audio_start_test", main)
+        self.assertIn("est_backlight_set_percent(ui_state.backlight_percent)", ui)
+        self.assertIn("board_audio_set_volume_percent(ui_state.volume_percent)", ui)
         self.assertIn("board_audio_tick(now_ms);", runtime)
         self.assertIn("BACKLIGHT_PORT GPIOA", backlight)
         self.assertIn("BACKLIGHT_PIN GPIO8", backlight)
@@ -1261,6 +1275,7 @@ class MicroPythonIntegrationTests(unittest.TestCase):
 
     def test_vm_starts_after_interrupts_and_deinitializes_before_poweroff(self) -> None:
         main = (SOURCE_DIR / "main.c").read_text(encoding="utf-8")
+        ui = (SOURCE_DIR / "est_ui.c").read_text(encoding="utf-8")
         self.assertLess(
             main.index("platform_enable_interrupts();"),
             main.index("est_micropython_init();"),
@@ -1269,13 +1284,14 @@ class MicroPythonIntegrationTests(unittest.TestCase):
             main.index("est_micropython_deinit();"),
             main.index("est_system_power_off();"),
         )
-        self.assertIn('append_status_text(output, &output_index, " PY:");', main)
+        self.assertLess(main.index("est_ui_tick(now_ms);"), main.index("est_micropython_tick();"))
+        self.assertIn("est_micropython_program_get_status(&status)", ui)
 
     def test_protocol_exposes_micropython_health_status(self) -> None:
         config = (ROOT / "include" / "app_config.h").read_text(encoding="utf-8")
         protocol = (SOURCE_DIR / "update_protocol.c").read_text(encoding="utf-8")
         self.assertIn("MICROPYTHON_STATUS_COMMAND      0x23U", config)
-        self.assertIn("DEVICE_PROTOCOL_MINOR           25U", config)
+        self.assertIn("DEVICE_PROTOCOL_MINOR           26U", config)
         self.assertIn("DEVICE_CAPABILITY_MICROPYTHON", config)
         self.assertIn("DEVICE_CAPABILITY_FROZEN_EST_RUNTIME", config)
         self.assertIn("DEVICE_CAPABILITY_UNLIMITED_PYTHON_RUN", config)
@@ -1290,6 +1306,9 @@ class MicroPythonIntegrationTests(unittest.TestCase):
         self.assertIn(
             "DEVICE_CAPABILITY_RUNTIME_BASIC_EVENT_HATS (1UL << 24U)", config
         )
+        self.assertIn(
+            "DEVICE_CAPABILITY_MOTOR_STALL_DETECTION (1UL << 25U)", config
+        )
         self.assertIn("DEVICE_CAPABILITY_FROZEN_EST_RUNTIME", protocol)
         self.assertIn("DEVICE_CAPABILITY_UNLIMITED_PYTHON_RUN", protocol)
         self.assertIn("DEVICE_CAPABILITY_DISPLAY_FONT_STYLES", protocol)
@@ -1297,6 +1316,7 @@ class MicroPythonIntegrationTests(unittest.TestCase):
         self.assertIn("DEVICE_CAPABILITY_RUNTIME_TEMPERATURE", protocol)
         self.assertIn("DEVICE_CAPABILITY_COOPERATIVE_MULTITASK", protocol)
         self.assertIn("DEVICE_CAPABILITY_RUNTIME_BASIC_EVENT_HATS", protocol)
+        self.assertIn("DEVICE_CAPABILITY_MOTOR_STALL_DETECTION", protocol)
         self.assertIn("MICROPYTHON_STATUS_PAYLOAD_LENGTH 28U", protocol)
         self.assertIn("queue_micropython_status", protocol)
         self.assertIn("status.maximum_gc_pause_us", protocol)
@@ -1799,32 +1819,42 @@ class MicroPythonIntegrationTests(unittest.TestCase):
         self.assertIn("(void)est_system_cleanup();", runtime)
         self.assertIn("restart_sensors();", runtime)
 
-    def test_ram_program_switches_to_running_screen_and_restores_status(self) -> None:
+    def test_ui_owns_running_screen_and_restores_menu_after_program(self) -> None:
         runtime = (ROOT / "micropython_port" / "est_micropython.c").read_text(
             encoding="utf-8"
         )
         main = (ROOT / "src" / "main.c").read_text(encoding="utf-8")
-        tick = runtime.split("void est_micropython_tick(void)", 1)[1].split(
-            "bool est_micropython_get_status", 1
-        )[0]
+        ui = (ROOT / "src" / "est_ui.c").read_text(encoding="utf-8")
 
-        self.assertIn('#include "est_display.h"', runtime)
-        self.assertIn("est_display_clear();", tick)
-        self.assertIn(
-            '(void)est_display_text(45U, 60U, "Program Running", 1U);', tick
-        )
-        self.assertIn("est_display_refresh();", tick)
+        self.assertNotIn('#include "est_display.h"', runtime)
+        self.assertNotIn("Program Running", runtime)
+        self.assertIn("status.state == EST_MICROPYTHON_PROGRAM_QUEUED", ui)
+        self.assertIn("est_ui_state_set_running(&ui_state);", ui)
+        self.assertIn("est_screen_set_owner(EST_SCREEN_OWNER_PROGRAM);", ui)
+        self.assertIn("est_screen_set_owner(EST_SCREEN_OWNER_MENU);", ui)
+        self.assertIn("est_key_events_reset();", ui)
+        self.assertIn("est_ui_state_set_home(&ui_state);", ui)
         self.assertLess(
-            tick.index('est_display_text(45U, 60U, "Program Running", 1U)'),
-            tick.index("execute_script((const char *)program_source"),
-        )
-        self.assertIn(
-            "python_program.state == EST_MICROPYTHON_PROGRAM_QUEUED", main
-        )
-        self.assertLess(
-            main.index("display_initialized = false;"),
+            main.index("est_ui_tick(now_ms);"),
             main.index("est_micropython_tick();"),
         )
+
+    def test_program_transfer_overlay_uses_live_progress_and_blocks_keys(self) -> None:
+        ui = (ROOT / "src" / "est_ui.c").read_text(encoding="utf-8")
+        renderer = (ROOT / "src" / "est_ui_renderer.c").read_text(
+            encoding="utf-8"
+        )
+        state = (ROOT / "src" / "est_ui_state.c").read_text(encoding="utf-8")
+
+        self.assertIn("status.state == EST_MICROPYTHON_PROGRAM_RECEIVING", ui)
+        self.assertIn("status.received_length * 100U", ui)
+        self.assertIn("ui_view.transfer_active", ui)
+        self.assertIn("if (ui_view.transfer_active)", ui)
+        self.assertIn("est_key_events_reset();", ui)
+        self.assertIn("draw_program_transfer(state, view);", renderer)
+        self.assertIn("view->transfer_progress", renderer)
+        self.assertIn("EST_UI_ACTION_STOP_PROGRAM", state)
+        self.assertIn("case EST_UI_PAGE_RUNNING", state)
 
 
 if __name__ == "__main__":

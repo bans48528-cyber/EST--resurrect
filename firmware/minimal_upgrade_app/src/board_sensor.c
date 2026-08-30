@@ -849,6 +849,7 @@ static void handle_data_message(struct sensor_runtime *runtime,
 {
 	uint8_t mode = header & 0x07U;
 	uint8_t size = message_data_size(header);
+	uint8_t index;
 	uint16_t value;
 
 	if (runtime->snapshot.state != BOARD_SENSOR_STREAMING || mode > 2U ||
@@ -862,7 +863,13 @@ static void handle_data_message(struct sensor_runtime *runtime,
 	}
 	runtime->snapshot.mode = mode;
 	runtime->snapshot.value = value;
+	runtime->snapshot.value_size = size < sizeof(runtime->snapshot.value_bytes) ?
+		size : (uint8_t)sizeof(runtime->snapshot.value_bytes);
+	for (index = 0U; index < runtime->snapshot.value_size; index++) {
+		runtime->snapshot.value_bytes[index] = runtime->rx_message[index + 1U];
+	}
 	runtime->snapshot.value_valid = true;
+	runtime->snapshot.last_data_ms = now_ms;
 	runtime->last_rx_ms = now_ms;
 }
 

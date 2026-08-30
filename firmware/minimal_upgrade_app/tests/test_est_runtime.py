@@ -49,6 +49,7 @@ def make_fake_est() -> types.ModuleType:
             self.port = port
             self.states = []
             self.timed_until_ms = None
+            self.stalled_value = False
 
         def run_speed(self, speed):
             self.states = []
@@ -74,6 +75,9 @@ def make_fake_est() -> types.ModuleType:
             if self.states:
                 return self.states.pop(0)
             return self.STATE_IDLE
+
+        def stalled(self):
+            return self.stalled_value
 
         def stop(self, stop_mode=0):
             self.states = []
@@ -424,6 +428,14 @@ class RuntimeHardwareTests(unittest.TestCase):
         runtime.motor_set_stop_action("A", "hold")
         runtime.motor_stop("A")
         self.assertIn(("motor.stop", "A", 2), fake_est.events)
+
+    def test_motor_stalled_reports_native_position_control_state(self) -> None:
+        runtime, _ = load_runtime()
+        motor = runtime.motor("A")
+
+        self.assertFalse(runtime.motor_stalled("A"))
+        motor.stalled_value = True
+        self.assertTrue(runtime.motor_stalled("A"))
 
     def test_motor_start_forwards_20_zero_75_without_interrupting(self) -> None:
         runtime, fake_est = load_runtime()
@@ -903,7 +915,7 @@ class RuntimeContractTests(unittest.TestCase):
             "drive_start_dual_speed", "drive_start_steer",
             "drive_steer_for", "drive_stop", "gyro", "infrared",
             "ir_beacon_compare", "motor", "motor_run_for",
-            "motor_set_speed", "motor_set_stop_action", "motor_start",
+            "motor_set_speed", "motor_set_stop_action", "motor_stalled", "motor_start",
             "motor_stop", "on_brick_button", "on_broadcast", "on_color",
             "on_condition", "on_gyro_angle", "on_ir_beacon_button",
             "on_ir_proximity", "on_start", "on_timer_gt", "on_touch",

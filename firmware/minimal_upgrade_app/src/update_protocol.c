@@ -249,12 +249,12 @@ static bool flash_supports_4byte_test(void)
 		identity.capacity == 0x19U;
 }
 
-static void queue_flash_scan(void)
+static void queue_flash_scan(uint32_t address)
 {
 	uint8_t report[USB_HID_REPORT_SIZE] = {0};
 	bool supported = flash_supports_4byte_test();
 	bool erased = supported &&
-		board_flash_sector_is_erased_4byte(EXTERNAL_FLASH_TEST_ADDRESS);
+		board_flash_sector_is_erased_4byte(address);
 
 	report[0] = FRAME_START_BYTE;
 	report[1] = DEVICE_FRAME_DIRECTION;
@@ -263,10 +263,10 @@ static void queue_flash_scan(void)
 	report[4] = 0U;
 	report[5] = supported ? 1U : 0U;
 	report[6] = erased ? 1U : 0U;
-	report[7] = (uint8_t)EXTERNAL_FLASH_TEST_ADDRESS;
-	report[8] = (uint8_t)(EXTERNAL_FLASH_TEST_ADDRESS >> 8U);
-	report[9] = (uint8_t)(EXTERNAL_FLASH_TEST_ADDRESS >> 16U);
-	report[10] = (uint8_t)(EXTERNAL_FLASH_TEST_ADDRESS >> 24U);
+	report[7] = (uint8_t)address;
+	report[8] = (uint8_t)(address >> 8U);
+	report[9] = (uint8_t)(address >> 16U);
+	report[10] = (uint8_t)(address >> 24U);
 	report[11] = checksum(report, 11U);
 	report[12] = FRAME_END_BYTE;
 	(void)usb_hid_queue_report(report, false);
@@ -738,7 +738,8 @@ static void queue_device_status(uint32_t now_ms)
 		DEVICE_CAPABILITY_HOLD_POSITION_CONTROL |
 		DEVICE_CAPABILITY_RUNTIME_TEMPERATURE |
 		DEVICE_CAPABILITY_COOPERATIVE_MULTITASK |
-		DEVICE_CAPABILITY_RUNTIME_BASIC_EVENT_HATS;
+		DEVICE_CAPABILITY_RUNTIME_BASIC_EVENT_HATS |
+		DEVICE_CAPABILITY_MOTOR_STALL_DETECTION;
 
 	(void)est_battery_get_status(&battery);
 	report[0] = FRAME_START_BYTE;
@@ -1556,8 +1557,12 @@ static void handle_logical_frame(uint32_t now_ms)
 		queue_key_status();
 	} else if (logical_frame[2] == FLASH_ID_COMMAND && data_length == 0U) {
 		queue_flash_identity();
-	} else if (logical_frame[2] == FLASH_SCAN_COMMAND && data_length == 0U) {
-		queue_flash_scan();
+	} else if (logical_frame[2] == FLASH_SCAN_COMMAND &&
+		   (data_length == 0U || data_length == 4U)) {
+		uint32_t address = data_length == 4U ?
+			read_u32_le(&logical_frame[5]) : EXTERNAL_FLASH_TEST_ADDRESS;
+
+		queue_flash_scan(address);
 	} else if (logical_frame[2] == FLASH_TEST_COMMAND && data_length == 0U) {
 		queue_flash_test();
 	} else if (logical_frame[2] == FLASH_STATUS_COMMAND && data_length == 0U) {

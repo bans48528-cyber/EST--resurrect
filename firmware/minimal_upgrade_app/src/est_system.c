@@ -1,7 +1,9 @@
 #include <stdint.h>
 
 #include "board_power.h"
+#include "board_audio.h"
 #include "board_sensor.h"
+#include "est_backlight.h"
 #include "est_led.h"
 #include "est_motor.h"
 #include "est_system.h"
@@ -41,7 +43,9 @@ est_result_t est_system_reboot(void)
 void est_system_power_off(void)
 {
 	(void)est_system_cleanup();
-	platform_disable_interrupts();
+	(void)board_audio_set_volume_percent(0U);
+	(void)est_backlight_set_percent(0U);
 	(void)est_led_set(EST_LED_OFF);
+	platform_disable_interrupts();
 	board_power_off();
 }

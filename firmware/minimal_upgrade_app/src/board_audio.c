@@ -45,6 +45,7 @@ static bool audio_is_ready;
 static enum audio_test_state test_state;
 static uint32_t test_deadline_ms;
 static uint32_t stream_offset;
+static uint8_t current_volume_percent;
 
 static const uint8_t wav_header[AUDIO_WAV_HEADER_SIZE] = {
 	'R', 'I', 'F', 'F', 0x64U, 0x9CU, 0x00U, 0x00U,
@@ -225,6 +226,7 @@ void board_audio_init(void)
 	test_state = AUDIO_TEST_IDLE;
 	test_deadline_ms = 0U;
 	stream_offset = 0U;
+	current_volume_percent = 80U;
 }
 
 bool board_audio_ready(void)
@@ -249,6 +251,29 @@ bool board_audio_start_test(uint32_t now_ms)
 bool board_audio_test_active(void)
 {
 	return test_state != AUDIO_TEST_IDLE;
+}
+
+bool board_audio_set_volume_percent(uint8_t percent)
+{
+	uint8_t attenuation;
+	uint16_t register_value;
+
+	if (!audio_is_ready || percent > 100U) {
+		return false;
+	}
+	attenuation = percent == 0U ? 0xFEU :
+		(uint8_t)((100U - percent) * 2U);
+	register_value = (uint16_t)(((uint16_t)attenuation << 8U) | attenuation);
+	if (!write_register(AUDIO_VOLUME_REGISTER, register_value)) {
+		return false;
+	}
+	current_volume_percent = percent;
+	return true;
+}
+
+uint8_t board_audio_volume_percent(void)
+{
+	return current_volume_percent;
 }
 
 void board_audio_tick(uint32_t now_ms)

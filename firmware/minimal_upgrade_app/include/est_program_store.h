@@ -77,5 +77,7 @@ est_result_t est_program_store_save(uint8_t program_slot_id,
 	const uint8_t *name, uint8_t name_length);
 est_result_t est_program_store_load(uint8_t program_slot_id);
 est_result_t est_program_store_clear(uint8_t program_slot_id);
+bool est_program_store_last_change(uint32_t *sequence, uint8_t *program_slot_id,
+	est_program_store_record_type_t *record_type);
 
 #endif

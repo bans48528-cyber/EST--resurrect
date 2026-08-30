@@ -67,6 +67,7 @@ python tools/est_hid_sender/est_hid_sender.py flash-id
 
 ```powershell
 python tools/est_hid_sender/est_hid_sender.py flash-scan
+python tools/est_hid_sender/est_hid_sender.py flash-scan --address 0x01FCE000
 python tools/est_hid_sender/est_hid_sender.py flash-status
 python tools/est_hid_sender/est_hid_sender.py flash-mode-probe
 ```
@@ -77,7 +78,7 @@ python tools/est_hid_sender/est_hid_sender.py flash-mode-probe
 python tools/est_hid_sender/est_hid_sender.py flash-test
 ```
 
-`flash-test` 不是只读命令。它会先确认设备为 W25Q256JV 且最后一个 4 KiB 扇区为空，再临时写入 32 字节、读回核对、检查低地址没有被误写，最后擦除并复查为空。
+`flash-scan --address` 只读取指定的 4 KiB 对齐扇区；省略地址时继续检查旧测试扇区。`flash-test` 不是只读命令。它会先确认设备为 W25Q256JV 且最后一个 4 KiB 扇区为空，再临时写入 32 字节、读回核对、检查低地址没有被误写，最后擦除并复查为空。
 
 测试输出 A 口马达：
 

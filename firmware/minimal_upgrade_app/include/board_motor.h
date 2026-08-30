@@ -200,6 +200,8 @@ bool board_motor_brake(enum board_motor_port port);
 bool board_motor_reset_tacho(enum board_motor_port port);
 bool board_motor_control_snapshot(enum board_motor_port port,
 	struct board_motor_control_snapshot *snapshot);
+bool board_motor_connection_present(enum board_motor_port port,
+	bool *connected);
 bool board_motor_refresh_identification(uint32_t now_ms,
 	enum board_motor_port port);
 bool board_motor_start_position(uint32_t now_ms, enum board_motor_port port,
@@ -209,6 +211,7 @@ bool board_motor_stop_position(enum board_motor_port port,
 	enum board_motor_stop_mode stop_mode);
 bool board_motor_position_snapshot_for_port(enum board_motor_port port,
 	struct board_motor_position_snapshot *snapshot);
+bool board_motor_position_stalled(enum board_motor_port port, bool *stalled);
 struct board_motor_position_snapshot board_motor_position_snapshot(void);
 bool board_motor_hold_snapshot_for_port(enum board_motor_port port,
 	struct board_motor_hold_snapshot *snapshot);

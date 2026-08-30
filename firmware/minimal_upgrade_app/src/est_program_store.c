@@ -53,6 +53,9 @@ struct bank_info {
 
 static est_program_store_error_t
 	last_errors[EST_PROGRAM_STORE_PROGRAM_SLOT_COUNT];
+static uint32_t change_sequence;
+static uint8_t last_changed_slot;
+static est_program_store_record_type_t last_changed_record_type;
 
 static uint16_t read_u16_le(const uint8_t *bytes)
 {
@@ -524,7 +527,22 @@ static est_result_t commit_record(uint8_t program_slot_id,
 		return fail(program_slot_id, EST_PROGRAM_STORE_ERROR_VERIFY, EST_ERR_IO);
 	}
 	last_errors[program_slot_id] = EST_PROGRAM_STORE_ERROR_NONE;
+	change_sequence++;
+	last_changed_slot = program_slot_id;
+	last_changed_record_type = type;
 	return EST_OK;
+}
+
+bool est_program_store_last_change(uint32_t *sequence, uint8_t *program_slot_id,
+	est_program_store_record_type_t *record_type)
+{
+	if (sequence == NULL || program_slot_id == NULL || record_type == NULL) {
+		return false;
+	}
+	*sequence = change_sequence;
+	*program_slot_id = last_changed_slot;
+	*record_type = last_changed_record_type;
+	return true;
 }
 
 est_result_t est_program_store_save(uint8_t program_slot_id,

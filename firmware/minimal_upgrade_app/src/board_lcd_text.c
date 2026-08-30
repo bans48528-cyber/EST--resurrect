@@ -14,6 +14,12 @@ static const uint8_t glyph_dot[5] = {0x00U, 0x60U, 0x60U, 0x00U, 0x00U};
 static const uint8_t glyph_colon[5] = {0x00U, 0x36U, 0x36U, 0x00U, 0x00U};
 static const uint8_t glyph_dash[5] = {0x08U, 0x08U, 0x08U, 0x08U, 0x08U};
 static const uint8_t glyph_percent[5] = {0x63U, 0x13U, 0x08U, 0x64U, 0x63U};
+static const uint8_t glyph_slash[5] = {0x40U, 0x30U, 0x08U, 0x06U, 0x01U};
+static const uint8_t glyph_greater[5] = {0x00U, 0x22U, 0x14U, 0x08U, 0x00U};
+static const uint8_t glyph_less[5] = {0x00U, 0x08U, 0x14U, 0x22U, 0x00U};
+static const uint8_t glyph_question[5] = {0x02U, 0x01U, 0x51U, 0x09U, 0x06U};
+static const uint8_t glyph_underscore[5] = {0x40U, 0x40U, 0x40U, 0x40U, 0x40U};
+static const uint8_t glyph_plus[5] = {0x08U, 0x08U, 0x3EU, 0x08U, 0x08U};
 static const uint8_t glyph_digits[10][5] = {
 	{0x3EU, 0x51U, 0x49U, 0x45U, 0x3EU},
 	{0x00U, 0x42U, 0x7FU, 0x40U, 0x00U},
@@ -97,6 +103,24 @@ static const uint8_t *glyph_for(char character)
 	}
 	if (character == '%') {
 		return glyph_percent;
+	}
+	if (character == '/') {
+		return glyph_slash;
+	}
+	if (character == '>') {
+		return glyph_greater;
+	}
+	if (character == '<') {
+		return glyph_less;
+	}
+	if (character == '?') {
+		return glyph_question;
+	}
+	if (character == '_') {
+		return glyph_underscore;
+	}
+	if (character == '+') {
+		return glyph_plus;
 	}
 	return glyph_blank;
 }

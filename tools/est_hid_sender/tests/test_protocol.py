@@ -23,6 +23,7 @@ from est_hid_sender.errors import (  # noqa: E402
     HeartbeatTimeoutError,
 )
 from est_hid_sender.protocol import (  # noqa: E402
+    battery_percent_from_sample_mv,
     build_frame,
     build_drive_steer_frame,
     build_drive_steer_for_frame,
@@ -685,11 +686,20 @@ class ProtocolTests(unittest.TestCase):
 
     def test_flash_scan_query_and_response(self) -> None:
         self.assertEqual(build_flash_scan_frame(), build_frame(0x0F))
+        self.assertEqual(
+            build_flash_scan_frame(0x01FCE000),
+            build_frame(0x0F, bytes.fromhex("00 E0 FC 01")),
+        )
         result = parse_flash_scan_response(build_flash_diagnostic(0x0F, 1, 1))
         self.assertIsNotNone(result)
         self.assertTrue(result.supported)
         self.assertTrue(result.erased)
         self.assertEqual(result.address, 0x01FFF000)
+
+    def test_flash_scan_rejects_invalid_addresses(self) -> None:
+        for address in (-1, 0x01FCE001, 0x02000000):
+            with self.assertRaises(ValueError):
+                build_flash_scan_frame(address)
 
     def test_flash_test_query_and_response(self) -> None:
         self.assertEqual(build_flash_test_frame(), build_frame(0x10))
@@ -1072,12 +1082,22 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(status.battery_level, 4)
         self.assertEqual(status.battery_adc_raw, 2800)
         self.assertEqual(status.battery_sample_mv, 1708)
+        self.assertEqual(status.battery_percent, 7)
         self.assertEqual(status.capabilities, 0x3F)
         self.assertEqual(status.uptime_ms, 123456)
         self.assertEqual(status.motors[1].power_percent, 40)
         self.assertEqual(status.motors[2].tacho_count, -456)
         self.assertEqual(status.sensors[0].sensor_type, 0x1D)
         self.assertEqual(status.sensors[2].value, 235)
+
+    def test_battery_percent_uses_voltage_curve_and_is_monotonic(self) -> None:
+        self.assertEqual(battery_percent_from_sample_mv(1400), 0)
+        self.assertEqual(battery_percent_from_sample_mv(1805), 10)
+        self.assertEqual(battery_percent_from_sample_mv(1910), 50)
+        self.assertEqual(battery_percent_from_sample_mv(2100), 100)
+        self.assertEqual(battery_percent_from_sample_mv(2200), 100)
+        percentages = [battery_percent_from_sample_mv(mv) for mv in range(1400, 2201)]
+        self.assertTrue(all(a <= b for a, b in zip(percentages, percentages[1:])))
 
     def test_micropython_status_returns_heap_and_gc_metrics(self) -> None:
         self.assertEqual(
@@ -1365,9 +1385,17 @@ class FakeTransport:
             return
         if report[0:3] == b"\x68\x11\x0f":
             supported = 1 if self.jedec_id == bytes.fromhex("EF4019") else 0
+            address = (
+                int.from_bytes(report[5:9], "little")
+                if report[3:5] == b"\x04\x00"
+                else 0x01FFF000
+            )
             self.acks.append(
                 build_flash_diagnostic(
-                    0x0F, supported, 1 if self.flash_sector_empty else 0
+                    0x0F,
+                    supported,
+                    1 if self.flash_sector_empty else 0,
+                    address,
                 )
             )
             return

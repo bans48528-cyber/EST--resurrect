@@ -433,8 +433,8 @@ class FirmwareUpdater:
             "设备没有返回外部 Flash ID；请确认固件支持 flash-id 命令"
         )
 
-    def scan_flash_test_sector(self) -> FlashScanResult:
-        report = build_flash_scan_frame().ljust(LEGACY_REPORT_SIZE, b"\x00")
+    def scan_flash_test_sector(self, address: int | None = None) -> FlashScanResult:
+        report = build_flash_scan_frame(address).ljust(LEGACY_REPORT_SIZE, b"\x00")
         self.transport.write_report(report)
         deadline = time.monotonic() + FLASH_DIAGNOSTIC_TIMEOUT_SECONDS
         while time.monotonic() < deadline:

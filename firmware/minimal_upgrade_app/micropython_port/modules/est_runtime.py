@@ -594,6 +594,10 @@ def motor(port):
     return _motors[port]
 
 
+def motor_stalled(port):
+    return bool(motor(str(port)).stalled())
+
+
 def motor_set_speed(port, speed):
     _motor_speeds[str(port)] = _speed_magnitude(speed)
 

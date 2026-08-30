@@ -4,6 +4,7 @@ OPENCM3_DIR := third_party/libopencm3
 MICROPYTHON_DIR := third_party/micropython
 MICROPYTHON_PORT_DIR := micropython_port
 APP_VERSION ?= M0.01A
+PACKAGE_SIZE ?= 327680
 
 PREFIX ?= arm-none-eabi
 CC := $(PREFIX)-gcc
@@ -83,7 +84,8 @@ $(LST): $(ELF)
 
 $(PACKAGE): $(BIN) tools/package_firmware.py
 	$(PYTHON) tools/package_firmware.py --input $(BIN) \
-		--output-dir $(BUILD_DIR) --stem $(PROJECT) --version $(APP_VERSION)
+		--output-dir $(BUILD_DIR) --stem $(PROJECT) --version $(APP_VERSION) \
+		--package-size $(PACKAGE_SIZE)
 
 verify: $(ELF) $(BIN) $(PACKAGE) tools/verify_build.py
 	$(PYTHON) tools/verify_build.py --objdump $(OBJDUMP) --elf $(ELF) \

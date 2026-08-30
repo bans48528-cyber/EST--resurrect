@@ -319,6 +319,49 @@ class DeviceSensorStatus:
     value: int
 
 
+_BATTERY_SOC_CURVE = (
+    (6000, 0),
+    (6540, 5),
+    (7220, 10),
+    (7380, 15),
+    (7420, 20),
+    (7460, 25),
+    (7500, 30),
+    (7540, 35),
+    (7580, 40),
+    (7600, 45),
+    (7640, 50),
+    (7700, 55),
+    (7740, 60),
+    (7820, 65),
+    (7900, 70),
+    (7960, 75),
+    (8040, 80),
+    (8160, 85),
+    (8220, 90),
+    (8300, 95),
+    (8400, 100),
+)
+
+
+def battery_percent_from_sample_mv(sample_mv: int) -> int:
+    """Estimate a two-cell Li-ion pack state of charge from divider voltage."""
+    pack_mv = max(sample_mv, 0) * 4
+    if pack_mv <= _BATTERY_SOC_CURVE[0][0]:
+        return 0
+    for (lower_mv, lower_percent), (upper_mv, upper_percent) in zip(
+        _BATTERY_SOC_CURVE, _BATTERY_SOC_CURVE[1:]
+    ):
+        if pack_mv <= upper_mv:
+            span_mv = upper_mv - lower_mv
+            offset_mv = pack_mv - lower_mv
+            span_percent = upper_percent - lower_percent
+            return lower_percent + (
+                offset_mv * span_percent + span_mv // 2
+            ) // span_mv
+    return 100
+
+
 @dataclass(frozen=True)
 class DeviceStatus:
     protocol_major: int
@@ -334,6 +377,10 @@ class DeviceStatus:
     uptime_ms: int
     motors: tuple[DeviceMotorStatus, ...]
     sensors: tuple[DeviceSensorStatus, ...]
+
+    @property
+    def battery_percent(self) -> int:
+        return battery_percent_from_sample_mv(self.battery_sample_mv)
 
 
 @dataclass(frozen=True)
@@ -534,8 +581,16 @@ def build_flash_id_frame() -> bytes:
     return build_frame(FLASH_ID_COMMAND)
 
 
-def build_flash_scan_frame() -> bytes:
-    return build_frame(FLASH_SCAN_COMMAND)
+def build_flash_scan_frame(address: int | None = None) -> bytes:
+    if address is None:
+        return build_frame(FLASH_SCAN_COMMAND)
+    if not isinstance(address, int) or isinstance(address, bool):
+        raise ValueError("flash scan address must be an integer")
+    if not 0 <= address <= 0x01FFF000:
+        raise ValueError("flash scan address is outside the 32 MiB device")
+    if address & 0xFFF:
+        raise ValueError("flash scan address must be 4 KiB aligned")
+    return build_frame(FLASH_SCAN_COMMAND, address.to_bytes(4, "little"))
 
 
 def build_flash_test_frame() -> bytes:

@@ -1070,18 +1070,14 @@ html&gt;body{padding:0}&lt;/style&gt;
     }
 
     #est-menu-preview .est-lcd {
-      position: relative;
+      display: block;
       width: 100%;
+      height: auto;
       aspect-ratio: 180 / 128;
-      box-sizing: border-box;
-      overflow: hidden;
-      border: 1px solid #1f2925;
       background: #dbe6d3;
-      color: #172019;
-      font-family: &quot;Courier New&quot;, &quot;Microsoft YaHei&quot;, ui-monospace, monospace;
-      font-size: 12px;
-      line-height: 1.2;
+      outline: 1px solid #1f2925;
       image-rendering: pixelated;
+      image-rendering: crisp-edges;
     }
 
     #est-menu-preview .est-screen {
@@ -1403,7 +1399,6 @@ html&gt;body{padding:0}&lt;/style&gt;
       }
 
       #est-menu-preview .est-lcd-bezel { padding: 8px; }
-      #est-menu-preview .est-lcd { font-size: 11px; }
       #est-menu-preview .est-controls { margin-top: 14px; }
       #est-menu-preview .est-simulator { width: calc(100% - 8px); }
     }
@@ -1419,7 +1414,7 @@ html&gt;body{padding:0}&lt;/style&gt;
     &lt;/div&gt;
 
     &lt;div class=&quot;est-lcd-bezel&quot;&gt;
-      &lt;div class=&quot;est-lcd&quot; id=&quot;est-lcd&quot; role=&quot;img&quot; aria-live=&quot;polite&quot;&gt;&lt;/div&gt;
+      &lt;canvas class=&quot;est-lcd&quot; id=&quot;est-lcd&quot; width=&quot;180&quot; height=&quot;128&quot; role=&quot;img&quot; aria-live=&quot;polite&quot;&gt;&lt;/canvas&gt;
     &lt;/div&gt;
 
     &lt;div class=&quot;est-controls&quot; aria-label=&quot;EST six-key controls&quot;&gt;
@@ -1437,11 +1432,15 @@ html&gt;body{padding:0}&lt;/style&gt;
     &lt;select class=&quot;est-simulator-select&quot; id=&quot;est-preview-scenario&quot; data-scenario&gt;
       &lt;option value=&quot;normal&quot;&gt;正常&lt;/option&gt;
       &lt;option value=&quot;no-recent&quot;&gt;无最近程序&lt;/option&gt;
+      &lt;option value=&quot;program-transfer&quot;&gt;程序传输中&lt;/option&gt;
       &lt;option value=&quot;program-error&quot;&gt;程序运行异常&lt;/option&gt;
       &lt;option value=&quot;storage-error&quot;&gt;Flash / 槽位读取失败&lt;/option&gt;
       &lt;option value=&quot;identifying&quot;&gt;端口识别中&lt;/option&gt;
       &lt;option value=&quot;low-battery&quot;&gt;低电量&lt;/option&gt;
       &lt;option value=&quot;disconnected&quot;&gt;设备突然拔出&lt;/option&gt;
+      &lt;option value=&quot;remote-no-ir&quot;&gt;红外：端口 4 未识别&lt;/option&gt;
+      &lt;option value=&quot;remote-signal-lost&quot;&gt;红外：信号丢失&lt;/option&gt;
+      &lt;option value=&quot;remote-device-lost&quot;&gt;红外：设备断开&lt;/option&gt;
     &lt;/select&gt;
   &lt;/div&gt;
 
@@ -1449,54 +1448,138 @@ html&gt;body{padding:0}&lt;/style&gt;
     (() =&gt; {
       const root = document.getElementById(&#x27;est-menu-preview&#x27;);
       const lcd = root.querySelector(&#x27;#est-lcd&#x27;);
+      const lcdContext = lcd.getContext(&#x27;2d&#x27;, { alpha: false });
+      lcdContext.imageSmoothingEnabled = false;
       const keys = Array.from(root.querySelectorAll(&#x27;[data-key]&#x27;));
       const scenarioSelect = root.querySelector(&#x27;[data-scenario]&#x27;);
-      const mainActions = [&#x27;quick&#x27;, &#x27;programs&#x27;, &#x27;ports&#x27;, &#x27;settings&#x27;];
+      const mainActions = [&#x27;quick&#x27;, &#x27;programs&#x27;, &#x27;ports&#x27;, &#x27;remote&#x27;, &#x27;motor&#x27;, &#x27;settings&#x27;];
       const uiText = {
         English: {
-          recent: &#x27;RECENT&#x27;, noRecent: &#x27;No recent program&#x27;, programs: &#x27;Programs&#x27;, ports: &#x27;Ports&#x27;,
-          settings: &#x27;Settings&#x27;, deviceInfo: &#x27;Device Info&#x27;, backlight: &#x27;Backlight&#x27;, volume: &#x27;Volume&#x27;,
-          language: &#x27;Language&#x27;, okRun: &#x27;OK Run&#x27;, okOpen: &#x27;OK Open&#x27;, usbConnected: &#x27;USB Connected&#x27;,
-          adjust: &#x27;LR Adjust&#x27;, back: &#x27;BACK&#x27;, empty: &#x27;Empty&#x27;, deleteProgram: &#x27;Delete program?&#x27;,
-          cancel: &#x27;Cancel&#x27;, delete: &#x27;Delete&#x27;, deleteHint: &#x27;&gt; Delete&#x27;, running: &#x27;RUNNING&#x27;,
-          programActive: &#x27;Program active&#x27;, backStop: &#x27;BACK Stop&#x27;,
-          motors: &#x27;Motors A-D&#x27;, sensors: &#x27;Sensors 1-4&#x27;, portHint: &#x27;UP/DN Group  LR Port&#x27;,
-          device: &#x27;Device&#x27;, status: &#x27;Status&#x27;, value: &#x27;Value&#x27;, model: &#x27;Model&#x27;,
-          firmware: &#x27;Firmware&#x27;, protocol: &#x27;Protocol&#x27;, bootloader: &#x27;Bootloader&#x27;, usb: &#x27;USB&#x27;,
-          connected: &#x27;Connected&#x27;, powerOffPrompt: &#x27;Power off?&#x27;, powerOffCopy: &#x27;Shut down EST?&#x27;,
-          backCancel: &#x27;BACK Cancel&#x27;, okPowerOff: &#x27;OK Power Off&#x27;, poweredOff: &#x27;POWER OFF&#x27;,
-          programStopped: &#x27;Program stopped&#x27;, motorsStopped: &#x27;Motors stopped safely&#x27;,
-          storageError: &#x27;Storage error&#x27;, storageReadFailed: &#x27;Programs unavailable&#x27;,
-          okRetry: &#x27;OK Retry&#x27;, programsReturn: &#x27;OK/BACK Programs&#x27;,
-          lowBattery: &#x27;LOW BATTERY&#x27;, chargeBeforeRun: &#x27;Charge before running&#x27;,
-          batteryLow: &#x27;BAT LOW 5%&#x27;, identifying: &#x27;Identifying&#x27;, detecting: &#x27;Detecting&#x27;,
-          notConnected: &#x27;Not connected&#x27;
+          recent: &#x27;Recent&#x27;, noRecent: &#x27;No recent program&#x27;, programs: &#x27;Programs&#x27;, ports: &#x27;Ports&#x27;, portsTitle: &#x27;Ports&#x27;,
+          settings: &#x27;Settings&#x27;, remote: &#x27;Remote&#x27;, remoteTitle: &#x27;Remote&#x27;, motor: &#x27;Motor&#x27;, motorOutputTitle: &#x27;Motor Out&#x27;, deviceInfo: &#x27;Device Info&#x27;, backlight: &#x27;Backlight&#x27;, volume: &#x27;Volume&#x27;,
+          language: &#x27;Language&#x27;, chinese: &#x27;Chinese&#x27;, portuguese: &#x27;Portuguese BR&#x27;, noPrograms: &#x27;No programs&#x27;, loading: &#x27;Loading&#x27;,
+          deleteProgram: &#x27;Delete program?&#x27;, deleteIrreversible: &#x27;Cannot be undone&#x27;, deleteHint: &#x27;&gt;Del&#x27;,
+          cancel: &#x27;Cancel&#x27;, delete: &#x27;Delete&#x27;, running: &#x27;RUNNING&#x27;,
+          motors: &#x27;Motors&#x27;, sensors: &#x27;Sensors&#x27;, device: &#x27;Device&#x27;, state: &#x27;State&#x27;, value: &#x27;Value&#x27;,
+          disconnected: &#x27;Disconnected&#x27;, detecting: &#x27;Detecting&#x27;, stopped: &#x27;Stopped&#x27;,
+          active: &#x27;Running&#x27;, braking: &#x27;Brake&#x27;, largeMotor: &#x27;Large motor&#x27;, mediumMotor: &#x27;Medium motor&#x27;,
+          model: &#x27;Model&#x27;, firmware: &#x27;Firmware&#x27;, bootloader: &#x27;Bootloader&#x27;, usb: &#x27;USB&#x27;,
+          battery: &#x27;Battery&#x27;, connected: &#x27;Connected&#x27;, lowBattery: &#x27;Low battery&#x27;,
+          powerOffPrompt: &#x27;Power off?&#x27;, powerOffCopy: &#x27;Off?&#x27;,
+          backCancel: &#x27;Cancel&#x27;, okPowerOff: &#x27;Off&#x27;,
+          programStopped: &#x27;Program stopped&#x27;, motorsStopped: &#x27;Motors safely stopped&#x27;,
+          storageError: &#x27;Storage error&#x27;, storageReadFailed: &#x27;Cannot read program list&#x27;,
+          programUnreadable: &#x27;Cannot read program&#x27;, chargeBeforeRun: &#x27;Charge before running&#x27;,
+          retry: &#x27;Confirm: Retry&#x27;, remoteOk: &#x27;OK&#x27;, remoteConnectIr: &#x27;Connect IR to 4&#x27;,
+          remoteSignalLost: &#x27;Signal lost&#x27;, remoteDeviceLost: &#x27;Device disconnected&#x27;, remoteBrakeAll: &#x27;A-D BRAKE&#x27;,
+          motorStop: &#x27;Stop&#x27;, motorForward: &#x27;Fwd&#x27;, motorReverse: &#x27;Rev&#x27;, motorPower: &#x27;Power&#x27;,
+          transferTitle: &#x27;Receiving program&#x27;, transferBody: &#x27;USB -&gt; EST&#x27;
         },
         Chinese: {
-          recent: &#x27;最近&#x27;, noRecent: &#x27;暂无最近程序&#x27;, programs: &#x27;程序&#x27;, ports: &#x27;端口&#x27;,
-          settings: &#x27;设置&#x27;, deviceInfo: &#x27;设备信息&#x27;, backlight: &#x27;背光&#x27;, volume: &#x27;音量&#x27;,
-          language: &#x27;语言&#x27;, okRun: &#x27;OK 运行&#x27;, okOpen: &#x27;OK 打开&#x27;, usbConnected: &#x27;USB 已连接&#x27;,
-          adjust: &#x27;左右 调节&#x27;, back: &#x27;返回&#x27;, empty: &#x27;空&#x27;, deleteProgram: &#x27;删除程序？&#x27;,
-          cancel: &#x27;取消&#x27;, delete: &#x27;删除&#x27;, deleteHint: &#x27;&gt; 删除&#x27;, running: &#x27;运行中&#x27;,
-          programActive: &#x27;程序正在运行&#x27;, backStop: &#x27;返回 停止&#x27;,
-          motors: &#x27;马达 A-D&#x27;, sensors: &#x27;传感器 1-4&#x27;, portHint: &#x27;上下分区 左右端口&#x27;,
-          device: &#x27;设备&#x27;, status: &#x27;状态&#x27;, value: &#x27;数值&#x27;, model: &#x27;型号&#x27;,
-          firmware: &#x27;固件&#x27;, protocol: &#x27;协议&#x27;, bootloader: &#x27;引导程序&#x27;, usb: &#x27;USB&#x27;,
-          connected: &#x27;已连接&#x27;, powerOffPrompt: &#x27;确认关机？&#x27;, powerOffCopy: &#x27;是否关闭 EST？&#x27;,
-          backCancel: &#x27;返回 取消&#x27;, okPowerOff: &#x27;确认 关机&#x27;, poweredOff: &#x27;已关机&#x27;,
+          recent: &#x27;最近&#x27;, noRecent: &#x27;暂无最近程序&#x27;, programs: &#x27;程序&#x27;, ports: &#x27;端口&#x27;, portsTitle: &#x27;端口查看&#x27;,
+          settings: &#x27;设置&#x27;, remote: &#x27;遥控&#x27;, remoteTitle: &#x27;红外遥控&#x27;, motor: &#x27;马达&#x27;, motorOutputTitle: &#x27;端口输出&#x27;, deviceInfo: &#x27;设备信息&#x27;, backlight: &#x27;背光&#x27;, volume: &#x27;音量&#x27;,
+          language: &#x27;语言&#x27;, chinese: &#x27;中文&#x27;, portuguese: &#x27;Português BR&#x27;, noPrograms: &#x27;没有程序&#x27;, loading: &#x27;正在读取&#x27;,
+          deleteProgram: &#x27;删除程序？&#x27;, deleteIrreversible: &#x27;操作无法恢复&#x27;, deleteHint: &#x27;&gt;删除&#x27;,
+          cancel: &#x27;取消&#x27;, delete: &#x27;删除&#x27;, running: &#x27;运行中&#x27;,
+          motors: &#x27;马达&#x27;, sensors: &#x27;传感器&#x27;, device: &#x27;设备&#x27;, state: &#x27;状态&#x27;, value: &#x27;数值&#x27;,
+          disconnected: &#x27;未连接&#x27;, detecting: &#x27;识别中&#x27;, stopped: &#x27;停止&#x27;,
+          active: &#x27;运行&#x27;, braking: &#x27;制动&#x27;, largeMotor: &#x27;大型马达&#x27;, mediumMotor: &#x27;中型马达&#x27;,
+          model: &#x27;型号&#x27;, firmware: &#x27;固件&#x27;, bootloader: &#x27;引导&#x27;, usb: &#x27;USB&#x27;,
+          battery: &#x27;电量&#x27;, connected: &#x27;已连接&#x27;, lowBattery: &#x27;低电量&#x27;,
+          powerOffPrompt: &#x27;关机?&#x27;, powerOffCopy: &#x27;关机?&#x27;,
+          backCancel: &#x27;取消&#x27;, okPowerOff: &#x27;关机&#x27;,
           programStopped: &#x27;程序已停止&#x27;, motorsStopped: &#x27;马达已安全停止&#x27;,
           storageError: &#x27;存储错误&#x27;, storageReadFailed: &#x27;程序列表无法读取&#x27;,
-          okRetry: &#x27;确认 重试&#x27;, programsReturn: &#x27;确认/返回 程序列表&#x27;,
-          lowBattery: &#x27;电量过低&#x27;, chargeBeforeRun: &#x27;充电后再运行程序&#x27;,
-          batteryLow: &#x27;低电量 5%&#x27;, identifying: &#x27;识别中&#x27;, detecting: &#x27;检测中&#x27;,
-          notConnected: &#x27;未连接&#x27;
+          programUnreadable: &#x27;程序无法读取&#x27;, chargeBeforeRun: &#x27;充电后再运行程序&#x27;,
+          retry: &#x27;确认 重试&#x27;, remoteOk: &#x27;确认&#x27;, remoteConnectIr: &#x27;请连接红外到端口4&#x27;,
+          remoteSignalLost: &#x27;信号丢失&#x27;, remoteDeviceLost: &#x27;设备未连接&#x27;, remoteBrakeAll: &#x27;A-D 制动&#x27;,
+          motorStop: &#x27;停止&#x27;, motorForward: &#x27;正转&#x27;, motorReverse: &#x27;反转&#x27;, motorPower: &#x27;功率&#x27;,
+          transferTitle: &#x27;程序传输中&#x27;, transferBody: &#x27;USB -&gt; EST&#x27;
+        },
+        Portuguese: {
+          recent: &#x27;Recente&#x27;, noRecent: &#x27;Sem programa recente&#x27;, programs: &#x27;Programas&#x27;, ports: &#x27;Portas&#x27;, portsTitle: &#x27;Portas&#x27;,
+          settings: &#x27;Configurações&#x27;, remote: &#x27;Remoto&#x27;, remoteTitle: &#x27;Controle IR&#x27;, motor: &#x27;Motor&#x27;, motorOutputTitle: &#x27;Saída motor&#x27;, deviceInfo: &#x27;Info. do disp.&#x27;, backlight: &#x27;Luz de fundo&#x27;, volume: &#x27;Volume&#x27;,
+          language: &#x27;Idioma&#x27;, chinese: &#x27;Chinês&#x27;, portuguese: &#x27;Português BR&#x27;, noPrograms: &#x27;Sem programas&#x27;, loading: &#x27;Carregando&#x27;,
+          deleteProgram: &#x27;Excluir programa?&#x27;, deleteIrreversible: &#x27;Não pode ser desfeito&#x27;, deleteHint: &#x27;&gt;Excluir&#x27;,
+          cancel: &#x27;Cancelar&#x27;, delete: &#x27;Excluir&#x27;, running: &#x27;EXECUTANDO&#x27;,
+          motors: &#x27;Motores&#x27;, sensors: &#x27;Sensores&#x27;, device: &#x27;Dispositivo&#x27;, state: &#x27;Estado&#x27;, value: &#x27;Valor&#x27;,
+          disconnected: &#x27;Desconectado&#x27;, detecting: &#x27;Detectando&#x27;, stopped: &#x27;Parado&#x27;,
+          active: &#x27;Ativo&#x27;, braking: &#x27;Freio&#x27;, largeMotor: &#x27;Motor grande&#x27;, mediumMotor: &#x27;Motor médio&#x27;,
+          model: &#x27;Modelo&#x27;, firmware: &#x27;Firmware&#x27;, bootloader: &#x27;Bootloader&#x27;, usb: &#x27;USB&#x27;,
+          battery: &#x27;Bateria&#x27;, connected: &#x27;Conectado&#x27;, lowBattery: &#x27;Bateria fraca&#x27;,
+          powerOffPrompt: &#x27;Desligar?&#x27;, powerOffCopy: &#x27;Desligar EST?&#x27;,
+          backCancel: &#x27;Cancelar&#x27;, okPowerOff: &#x27;Desligar&#x27;,
+          programStopped: &#x27;Programa parado&#x27;, motorsStopped: &#x27;Motores parados&#x27;,
+          storageError: &#x27;Erro de memória&#x27;, storageReadFailed: &#x27;Falha ao ler programas&#x27;,
+          programUnreadable: &#x27;Falha ao ler programa&#x27;, chargeBeforeRun: &#x27;Carregue antes de executar&#x27;,
+          retry: &#x27;Confirmar: Tentar de novo&#x27;, remoteOk: &#x27;OK&#x27;, remoteConnectIr: &#x27;Conecte IR à porta 4&#x27;,
+          remoteSignalLost: &#x27;Sinal perdido&#x27;, remoteDeviceLost: &#x27;Dispositivo desconectado&#x27;, remoteBrakeAll: &#x27;A-D FREIO&#x27;,
+          motorStop: &#x27;Parar&#x27;, motorForward: &#x27;Fte&#x27;, motorReverse: &#x27;Ré&#x27;, motorPower: &#x27;Potência&#x27;,
+          transferTitle: &#x27;Recebendo prog.&#x27;, transferBody: &#x27;USB -&gt; EST&#x27;
         }
       };
-      const mainIconData = {
-        quick: &#x27;data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgAQMAAABJtOi3AAAABlBMVEVMaXEAAACaXKEdAAAAAXRSTlMAQObYZgAAAAlwSFlzAAAD6AAAA+gBtXtSawAAAFdJREFUCJlFzisOgDAQRdHXVHTbTRDILoGtkGBZBCgcVOIeuSNKxUnnm5HGS96l7FsqfoIKq4ovOMh1MOFggQYzbHBCh3f8IhfV6GsTszBWZbsq2f9N+gCsb0NehWLp2wAAAABJRU5ErkJggg==&#x27;,
-        programs: &#x27;data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgAQMAAABJtOi3AAAABlBMVEVMaXEAAACaXKEdAAAAAXRSTlMAQObYZgAAAAlwSFlzAAAD6AAAA+gBtXtSawAAAEVJREFUCJljYMAC5H8wMDDY/0El/v9vABEHIIQNSJ3l//8fGKz///8BIYyhxAcGczihDiUeQAh9OMEPMgVMyENZDdicAgDW/j4Wn/kIawAAAABJRU5ErkJggg==&#x27;,
-        ports: &#x27;data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgAQMAAABJtOi3AAAABlBMVEVMaXEAAACaXKEdAAAAAXRSTlMAQObYZgAAAAlwSFlzAAAD6AAAA+gBtXtSawAAAFVJREFUCJljYEAA+Q8MDAz2P2BE/R8owf///wMG+f//PzDY////A52wY2D4wWDDwFDBYFP/p4LB5v8/FOLcswoGmzNpMAKsDkRgMwpsB/v//wcQbgIAmZo/sDoQO+8AAAAASUVORK5CYII=&#x27;,
-        settings: &#x27;data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgAQMAAABJtOi3AAAABlBMVEVMaXEAAACaXKEdAAAAAXRSTlMAQObYZgAAAAlwSFlzAAAD6AAAA+gBtXtSawAAAFpJREFUeNpdi7ENgDAMBA8Tgbt4AzIqozFKBqBwaSSkUCQ0ueper4OJvSIAgtqw1fRatzstfSqYWDshx+ES4S4vVMHjb02RBEVUzciteT8Chr3lqZD9L2LYxAdliRl97iAJpgAAAABJRU5ErkJggg==&#x27;
+      const homeText = {
+        English: {
+          quick: &#x27;Recent&#x27;, programs: &#x27;Prog.&#x27;, ports: &#x27;Ports&#x27;,
+          remote: &#x27;Remote&#x27;, motor: &#x27;Motor&#x27;, settings: &#x27;Setup&#x27;
+        },
+        Chinese: {
+          quick: &#x27;最近&#x27;, programs: &#x27;程序&#x27;, ports: &#x27;端口&#x27;,
+          remote: &#x27;遥控&#x27;, motor: &#x27;马达&#x27;, settings: &#x27;设置&#x27;
+        },
+        Portuguese: {
+          quick: &#x27;Recente&#x27;, programs: &#x27;Prog.&#x27;, ports: &#x27;Portas&#x27;,
+          remote: &#x27;Remoto&#x27;, motor: &#x27;Motor&#x27;, settings: &#x27;Config.&#x27;
+        }
+      };
+      const firmwareIcons = {quick:[0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x01,0xFF,0xCC,0x00,0x03,0xFF,0xEE,0x00,0x07,0xFF,0xEF,0x00,0x07,0xFF,0xEF,0x80,0x07,0xFF,0xEF,0xC0,0x07,0xFF,0xE7,0xC0,0x07,0xFF,0xE0,0x00,0x07,0xFF,0xF0,0x00,0x07,0xFF,0xFF,0xC0,0x07,0xFF,0xFF,0xC0,0x07,0xFF,0xFF,0xC0,0x07,0x9F,0xFF,0xC0,0x07,0x8F,0xFF,0xC0,0x07,0x87,0xFF,0xC0,0x07,0xC3,0xFF,0xC0,0x07,0xE1,0xFF,0xC0,0x07,0xF0,0xFF,0xC0,0x07,0xF8,0xFF,0xC0,0x07,0xF0,0xFF,0xC0,0x07,0xE1,0xFF,0xC0,0x07,0xC3,0xFF,0xC0,0x07,0x87,0xFF,0xC0,0x07,0x8F,0x83,0xC0,0x07,0x9F,0x83,0xC0,0x07,0xFF,0xFF,0xC0,0x07,0xFF,0xFF,0xC0,0x03,0xFF,0xFF,0x80,0x01,0xFF,0xFF,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00],programs:[0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x1F,0xF8,0x00,0x00,0x3F,0xFC,0x00,0x00,0x3F,0xFC,0x00,0x00,0x3F,0xFC,0x00,0x00,0x3F,0xFF,0xFF,0x80,0x3F,0xFF,0xFF,0xC0,0x3F,0xFF,0xFF,0xC0,0x3C,0x00,0x00,0x00,0x39,0xFF,0xFF,0xF0,0x3B,0xFF,0xFF,0xF8,0x3B,0xFF,0xFF,0xF8,0x33,0xFF,0xFF,0xF8,0x33,0xFF,0xFF,0xF0,0x37,0xFF,0xFF,0xF0,0x37,0xFF,0xFF,0xF0,0x27,0xFF,0xFF,0xF0,0x27,0xFF,0xFF,0xE0,0x27,0xFF,0xFF,0xE0,0x2F,0xFF,0xFF,0xE0,0x2F,0xFF,0xFF,0xE0,0x0F,0xFF,0xFF,0xC0,0x0F,0xFF,0xFF,0xC0,0x1F,0xFF,0xFF,0xC0,0x0F,0xFF,0xFF,0x80,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00],ports:[0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x1F,0xF0,0x00,0x00,0x3F,0xF8,0x00,0x00,0x3F,0xF8,0x00,0x00,0x7F,0xFC,0x00,0x00,0x7F,0xFC,0x00,0x0F,0xFF,0xFF,0xE0,0x1F,0xFF,0xFF,0xF0,0x3F,0xFF,0xFF,0xF8,0x3F,0xFF,0xFF,0xF8,0x3F,0xFF,0xFF,0xF8,0x3F,0xFF,0xFF,0xF8,0x3E,0x00,0x00,0xF8,0x3C,0x00,0x00,0x78,0x3C,0x7F,0xFC,0x78,0x3C,0xFF,0xFE,0x78,0x3C,0xFF,0xFE,0x78,0x3C,0xFF,0xFE,0x78,0x3C,0xCE,0xE6,0x78,0x3C,0xCC,0x66,0x78,0x3C,0xCC,0x66,0x78,0x3C,0x00,0x00,0x78,0x3C,0x00,0x00,0x78,0x3F,0xFF,0xFF,0xF8,0x3F,0xFF,0xFF,0xF8,0x3F,0xFF,0xFF,0xF8,0x3F,0xFF,0xFF,0xF8,0x1F,0xFF,0xFF,0xF0,0x07,0xFF,0xFF,0xC0,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00],settings:[0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x07,0xE0,0x00,0x00,0x07,0xE0,0x00,0x00,0x0F,0xF0,0x00,0x00,0x0F,0xF0,0x00,0x03,0x1F,0xF8,0xC0,0x07,0xFF,0xFF,0xE0,0x07,0xFF,0xFF,0xE0,0x0F,0xFF,0xFF,0xF0,0x1F,0xFE,0x7F,0xF0,0x0F,0xF8,0x1F,0xF0,0x07,0xF0,0x0F,0xE0,0x03,0xF0,0x0F,0xC0,0x03,0xE0,0x07,0xC0,0x03,0xE0,0x07,0xC0,0x03,0xF0,0x0F,0xC0,0x07,0xF0,0x0F,0xE0,0x0F,0xF8,0x1F,0xF0,0x0F,0xFF,0xFF,0xF0,0x0F,0xFF,0xFF,0xF0,0x07,0xFF,0xFF,0xE0,0x07,0xFF,0xFF,0xE0,0x03,0x1F,0xF8,0xC0,0x00,0x0F,0xF0,0x00,0x00,0x0F,0xF0,0x00,0x00,0x07,0xE0,0x00,0x00,0x07,0xE0,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00]};
+      const cjkFontData = {0x4E2D:[0x0100,0x0100,0x0100,0x7FFC,0x610C,0x610C,0x610C,0x610C,0x610C,0x7FFC,0x610C,0x0100,0x0100,0x0100,0x0100,0x0000],0x4EF6:[0x0840,0x1B40,0x1240,0x33FC,0x3640,0x7440,0xF440,0x3040,0x37FC,0x3040,0x3040,0x3040,0x3040,0x3040,0x3040,0x0000],0x4F20:[0x0840,0x18C0,0x17FC,0x3080,0x3180,0x7FFC,0xF100,0x3100,0x33F8,0x3018,0x3030,0x31E0,0x30E0,0x3060,0x3020,0x0000],0x4F4E:[0x0818,0x1BF8,0x1320,0x3220,0x3220,0x7220,0xF3FC,0x3220,0x3230,0x3230,0x3230,0x3250,0x3256,0x37FC,0x372C,0x0000],0x4F5C:[0x0880,0x0980,0x1900,0x13FE,0x32C0,0x76C0,0x74FC,0x10C0,0x10C0,0x10C0,0x10FC,0x10C0,0x10C0,0x10C0,0x1040,0x0000],0x4FE1:[0x0880,0x18C0,0x1040,0x37FC,0x3000,0x73F8,0x7000,0x33F8,0x3000,0x3000,0x37F8,0x3608,0x3608,0x37F8,0x3008,0x0000],0x503C:[0x0840,0x1840,0x17FC,0x30C0,0x33F8,0x7208,0x7208,0x73F8,0x3208,0x33F8,0x3208,0x33F8,0x3208,0x3FFC,0x2000,0x0000],0x505C:[0x0840,0x1840,0x17FC,0x33F8,0x3208,0x7208,0x73F8,0x7000,0x37FC,0x3404,0x33F8,0x3040,0x3040,0x3040,0x31C0,0x0000],0x50A8:[0x1060,0x1464,0x35FC,0x2268,0x6070,0x6DFC,0xE460,0x24C0,0x25FC,0x25C4,0x24FC,0x25C4,0x27C4,0x24FC,0x2084,0x0000],0x5145:[0x0100,0x0100,0x0180,0x7FFC,0x0400,0x0860,0x1830,0x3FF8,0x24CC,0x04C0,0x0CC0,0x0CC4,0x18C4,0x707C,0x4000,0x0000],0x5149:[0x0100,0x3118,0x1118,0x1910,0x1920,0x0100,0x7FFC,0x0440,0x0440,0x0C40,0x0C40,0x0844,0x1844,0x3044,0x607C,0x0000],0x5168:[0x0000,0x0100,0x0380,0x06C0,0x0C60,0x1830,0x701C,0x5FFC,0x0100,0x0100,0x0100,0x1FF0,0x0100,0x0100,0x7FFC,0x0000],0x5173:[0x0000,0x0830,0x0C20,0x0C60,0x3FF8,0x0100,0x0100,0x0100,0x7FFC,0x0380,0x03C0,0x0660,0x1C30,0x781C,0x6004,0x0000],0x518D:[0x7FFC,0x0100,0x0100,0x3FF8,0x3118,0x3118,0x3FF8,0x3118,0x3118,0xFFFE,0x3018,0x3018,0x3018,0x3070,0x0000,0x0000],0x5206:[0x0000,0x0C60,0x0820,0x1830,0x3018,0x600C,0x7FF4,0x0610,0x0610,0x0610,0x0410,0x0C10,0x1830,0x3030,0x61E0,0x0000],0x5217:[0x0004,0x7F84,0x1824,0x1024,0x1024,0x3F24,0x2124,0x6324,0x5224,0x1E24,0x0E24,0x0C04,0x0804,0x300C,0x601C,0x0000],0x5220:[0x0000,0x7B84,0x6A94,0x6A94,0x6A94,0x6A94,0x7FF4,0x6AB4,0x6A94,0x6A94,0x6A94,0x4A84,0x4E84,0x4C84,0x5D9C,0x0000],0x522B:[0x0000,0x7E0C,0x626C,0x626C,0x626C,0x7E6C,0x006C,0x186C,0x7F6C,0x136C,0x136C,0x130C,0x320C,0x620C,0x4E38,0x0000],0x5236:[0x2804,0x2C24,0x7FA4,0x4C24,0x4C24,0x7FA4,0x0C24,0x0C24,0x7FA4,0x6DA4,0x4DA4,0x4D84,0x4D84,0x4F0C,0x0C1C,0x0000],0x52A8:[0x0020,0x7E20,0x0020,0x01FC,0x0064,0x7F64,0x1064,0x3064,0x3664,0x2244,0x2244,0x7FC4,0x738C,0x018C,0x0138,0x0000],0x53D6:[0x0000,0x7F00,0x27FC,0x26CC,0x3ECC,0x2648,0x2648,0x2658,0x3E30,0x2630,0x2730,0x7E70,0x4658,0x06CC,0x0504,0x0000],0x53E3:[0x0000,0x0000,0x3FF8,0x2008,0x2008,0x2008,0x2008,0x2008,0x2008,0x2008,0x2008,0x2008,0x3FF8,0x2008,0x2000,0x0000],0x53F7:[0x1FF0,0x1010,0x1010,0x1FF0,0x0000,0x0000,0x7FFC,0x0800,0x1FF0,0x0010,0x0010,0x0030,0x0030,0x01E0,0x0000,0x0000],0x540E:[0x0000,0x03F8,0x3F80,0x3000,0x3000,0x3FFC,0x2000,0x2000,0x27F8,0x2408,0x2408,0x6408,0x6408,0x47F8,0x4408,0x0000],0x5426:[0x0000,0x7FFC,0x0180,0x0300,0x0760,0x1D38,0x710C,0x4104,0x0100,0x1FF8,0x1018,0x1018,0x1018,0x1FF8,0x1010,0x0000],0x5668:[0x0000,0x3EF8,0x2688,0x2688,0x3EF8,0x0300,0x0230,0x7FFC,0x1C60,0x3038,0x7EFC,0x2688,0x2688,0x3EF8,0x2688,0x0000],0x56DE:[0x0000,0x7FFC,0x400C,0x400C,0x400C,0x4FCC,0x4C4C,0x4C4C,0x4C4C,0x4FCC,0x400C,0x400C,0x600C,0x7FFC,0x4004,0x0000],0x56FA:[0x0000,0x7FFC,0x600C,0x610C,0x610C,0x7FFC,0x610C,0x6FEC,0x6C2C,0x6C2C,0x6C2C,0x6FEC,0x600C,0x7FFC,0x600C,0x0000],0x5728:[0x0200,0x0600,0x0600,0x7FFC,0x0C00,0x0840,0x1840,0x3040,0x77FC,0x5040,0x1040,0x1040,0x1040,0x17FC,0x1000,0x0000],0x578B:[0x0008,0x7F6C,0x126C,0x126C,0x7FEC,0x126C,0x320C,0x620C,0x4138,0x0100,0x3FF8,0x0100,0x0100,0x7FFC,0x0000,0x0000],0x5907:[0x0400,0x0400,0x0FF0,0x1820,0x66C0,0x0380,0x1EF8,0x701C,0x3FF8,0x3118,0x3118,0x3FF8,0x3118,0x3FF8,0x1010,0x0000],0x590D:[0x1800,0x1FFC,0x2000,0x7FF0,0x1018,0x1FF8,0x1018,0x1FF8,0x0C00,0x1FF0,0x3830,0x2660,0x03C0,0x0FF0,0x783C,0x0000],0x5927:[0x0100,0x0100,0x0100,0x0100,0x0300,0x7FFC,0x0380,0x0380,0x02C0,0x06C0,0x0460,0x0C30,0x1838,0x701C,0x4004,0x0000],0x5B58:[0x0200,0x0600,0x7FFC,0x0C00,0x0800,0x1BF8,0x1018,0x3060,0x7040,0x17FC,0x1040,0x1040,0x1040,0x1040,0x11C0,0x0000],0x5B89:[0x0300,0x0100,0x7FFC,0x600C,0x620C,0x0600,0x7FFC,0x0C60,0x1860,0x1CC0,0x0F80,0x03C0,0x0670,0x3C18,0x2008,0x0000],0x5BFC:[0x0000,0x3FF0,0x2010,0x2010,0x3FF0,0x200C,0x3FF8,0x0020,0x0020,0x7FFC,0x1820,0x0C20,0x0420,0x0420,0x01E0,0x0000],0x5DF2:[0x0000,0x7FF0,0x0010,0x0010,0x2010,0x2010,0x3010,0x3FF0,0x2010,0x2000,0x2004,0x2004,0x300C,0x1FF8,0x0000,0x0000],0x5E38:[0x0110,0x1110,0x1930,0x7FFC,0x4004,0x5FF4,0x1830,0x1FF0,0x0100,0x0100,0x3FF8,0x3108,0x3108,0x2138,0x0100,0x0000],0x5E8F:[0x0100,0x0180,0x3FFC,0x2000,0x2FF8,0x2030,0x23E0,0x21C0,0x3FFC,0x208C,0x6098,0x6090,0x4080,0x4080,0x4780,0x0000],0x5F02:[0x0000,0x3FF8,0x2018,0x2018,0x3FF8,0x2004,0x3FF8,0x0000,0x0820,0x0820,0x7FFC,0x1820,0x1020,0x7020,0x4020,0x0000],0x5F15:[0x0008,0x7F08,0x0108,0x0108,0x0108,0x3F08,0x2008,0x2008,0x7F08,0x0108,0x0108,0x0108,0x0308,0x0308,0x1E08,0x0000],0x6001:[0x0100,0x0100,0x7FFC,0x0380,0x02C0,0x0460,0x1F30,0x719C,0x4004,0x2918,0x2988,0x689C,0x683C,0x4FE4,0x0000,0x0000],0x6062:[0x3180,0x3180,0x3180,0x3FFC,0x7900,0x7930,0x7174,0x73E4,0x32A8,0x36A8,0x3430,0x3C70,0x30D8,0x318C,0x3104,0x0000],0x606F:[0x0100,0x0300,0x1FF0,0x1010,0x1FF0,0x1010,0x1FF0,0x1010,0x1FF0,0x0300,0x2908,0x2888,0x683C,0x4834,0x0FE0,0x0000],0x611F:[0x00D0,0x0058,0x3FFC,0x2040,0x2F48,0x2078,0x2F70,0x6934,0x4F74,0x409C,0x0300,0x2908,0x28AC,0x4834,0x4FE0,0x0000],0x63A5:[0x2040,0x3040,0x33FC,0x3100,0xF910,0x30B0,0x37FC,0x3880,0xF7FE,0x3118,0x3310,0x33F0,0x30F0,0x31F8,0x670C,0x0000],0x64CD:[0x3000,0x31F8,0x3118,0x79F8,0x3000,0x37BC,0x34A4,0x3CA4,0x7FBC,0x7040,0x37FC,0x30F0,0x3358,0x364C,0x6444,0x0000],0x6570:[0x0840,0x2A40,0x2A40,0x7F7C,0x1CC8,0x3AC8,0x49C8,0x1178,0x7E30,0x3230,0x3630,0x1C78,0x1EC8,0x718C,0x4100,0x0000],0x6587:[0x0100,0x0100,0x0180,0x7FFC,0x1830,0x0820,0x0C60,0x0460,0x06C0,0x0380,0x0380,0x07C0,0x1C70,0x703C,0x4004,0x0000],0x65E0:[0x0000,0x3FFC,0x0300,0x0300,0x0300,0x0300,0x7FFC,0x0380,0x0280,0x0680,0x0480,0x0C84,0x3884,0x60FC,0x4000,0x0000],0x662F:[0x0000,0x3FF8,0x3018,0x3FF8,0x3018,0x3FF8,0x0000,0x7FFC,0x0100,0x1900,0x11F8,0x3900,0x6F00,0x63FC,0x0000,0x0000],0x6682:[0x1008,0x7FF8,0x20C0,0x6CC0,0x7FFC,0x0C98,0x7F98,0x4C98,0x0000,0x3FF8,0x3018,0x3FF8,0x3018,0x3FF8,0x1010,0x0000],0x6700:[0x1FF0,0x1018,0x1FF8,0x1018,0x1FF8,0x0000,0x7FFC,0x2200,0x3FFC,0x22C8,0x3E58,0x2270,0x3F30,0x7AFC,0x0284,0x0000],0x6709:[0x0200,0x0600,0x7FFC,0x0C00,0x0800,0x1FF0,0x1810,0x3810,0x6FF0,0x4810,0x0810,0x0FF0,0x0810,0x0810,0x0870,0x0000],0x672A:[0x0100,0x0100,0x0100,0x3FF8,0x0100,0x0100,0x0100,0x7FFC,0x0380,0x07C0,0x0D60,0x1930,0x711C,0x4104,0x0100,0x0000],0x673A:[0x1000,0x11F8,0x1198,0x1998,0x7F98,0x1198,0x3998,0x3998,0x3D98,0x7718,0x5118,0xD11A,0x131A,0x121A,0x160C,0x0000],0x67E5:[0x0100,0x0100,0x7FFC,0x07C0,0x0D60,0x1930,0x711C,0x5FF4,0x1830,0x1FF0,0x1830,0x1FF0,0x0000,0x7FFC,0x0000,0x0000],0x68C0:[0x1040,0x10E0,0x10B0,0x7918,0x330C,0x35F4,0x3800,0x3848,0x7248,0x5348,0x5158,0x1110,0x1030,0x17FC,0x1000,0x0000],0x6B62:[0x0000,0x0180,0x0180,0x0180,0x0180,0x1180,0x1180,0x11FC,0x1180,0x1180,0x1180,0x1180,0x1180,0x1180,0x7FFC,0x0000],0x6B63:[0x0000,0x7FFC,0x0180,0x0180,0x0180,0x1180,0x1180,0x11F8,0x1180,0x1180,0x1180,0x1180,0x1180,0x7FFC,0x0000,0x0000],0x6BD4:[0x2080,0x2080,0x2080,0x208C,0x209C,0x3EB0,0x20E0,0x2080,0x2080,0x2084,0x2084,0x2284,0x3E84,0x70FC,0x0000,0x0000],0x6CA1:[0x0000,0x71F0,0x1910,0x0310,0x0310,0x661C,0x3400,0x07F8,0x0218,0x1310,0x11B0,0x30E0,0x21E0,0x6F3C,0x0C0C,0x0000],0x6CD5:[0x2040,0x3040,0x1840,0x03FC,0x0040,0x6040,0x3040,0x07FC,0x00C0,0x1880,0x1190,0x3118,0x2378,0x67EC,0x0004,0x0000],0x6D4B:[0x0004,0x37C4,0x1C54,0x0554,0x0554,0x6554,0x3554,0x0554,0x0554,0x1554,0x3754,0x2204,0x6384,0x64C4,0x485C,0x0000],0x6D88:[0x0040,0x364C,0x1248,0x0358,0x0040,0x63FC,0x320C,0x020C,0x03FC,0x120C,0x13FC,0x320C,0x220C,0x620C,0x4238,0x0000],0x72B6:[0x0840,0x0858,0x4848,0x684C,0x3840,0x3FFC,0x0840,0x18E0,0x38E0,0x78A0,0x49B0,0x0910,0x0B18,0x0E0C,0x0C04,0x0000],0x7535:[0x0100,0x0100,0x0100,0x3FF8,0x2108,0x2108,0x3FF8,0x2108,0x2108,0x3FF8,0x2100,0x0104,0x0104,0x01FC,0x0000,0x0000],0x767E:[0x0000,0x7FFC,0x0300,0x0300,0x0300,0x1FF8,0x1018,0x1018,0x1018,0x1FF8,0x1018,0x1018,0x1018,0x1FF8,0x1018,0x0000],0x770B:[0x0038,0x3FF0,0x0200,0x3FF8,0x0600,0x7FFC,0x0C00,0x1FF8,0x3818,0x6FF8,0x4818,0x0FF8,0x0818,0x0FF8,0x0818,0x0000],0x786E:[0x0080,0x7DF0,0x3110,0x2330,0x27FC,0x2724,0x7D24,0x6DFC,0xED24,0x6F24,0x2FFC,0x2F24,0x3E24,0x2224,0x043C,0x0000],0x7A0B:[0x0000,0x3DFC,0x710C,0x110C,0x110C,0x7DFC,0x1000,0x3BFC,0x3C20,0x5020,0xD1FC,0x1020,0x1020,0x13FE,0x1000,0x0000],0x7AEF:[0x0040,0x1264,0x1264,0x7E64,0x03FC,0x4800,0x4FFC,0x6840,0x2BFC,0x2A94,0x3A94,0x3E94,0x7294,0x0294,0x029C,0x0000],0x7F6E:[0x0000,0x3FFC,0x244C,0x3FF8,0x0100,0x7FFC,0x0300,0x1FF0,0x1FF0,0x1010,0x1FF0,0x1FF0,0x1010,0x7FFC,0x0000,0x0000],0x80CC:[0x0480,0x0488,0x7CF8,0x04C0,0x3CC4,0x64FC,0x0000,0x1FF0,0x1010,0x1FF0,0x1010,0x1FF0,0x1010,0x1010,0x1070,0x0000],0x884C:[0x0800,0x13FC,0x3000,0x6000,0x4C00,0x1800,0x13FC,0x3010,0x7010,0x5010,0x1010,0x1010,0x1010,0x1010,0x10F0,0x0000],0x8868:[0x0100,0x0100,0x7FFC,0x0100,0x3FF8,0x0100,0x7FFC,0x0780,0x0C88,0x38D0,0x7860,0x0830,0x0B98,0x1E0C,0x0800,0x0000],0x8A00:[0x0300,0x0100,0x0180,0x7FFC,0x0000,0x1FF0,0x0000,0x1FF0,0x0000,0x0000,0x1FF0,0x1010,0x1010,0x1FF0,0x1010,0x0000],0x8BA4:[0x0060,0x3060,0x1860,0x0060,0x0040,0x7060,0x1060,0x1060,0x1060,0x10F0,0x1090,0x1C98,0x1988,0x330C,0x0204,0x0000],0x8BBE:[0x0000,0x31F0,0x1990,0x0110,0x0110,0x761C,0x1000,0x13F8,0x1308,0x1118,0x11B0,0x1CE0,0x38F0,0x33BC,0x060C,0x0000],0x8BC6:[0x0000,0x33FC,0x1B0C,0x030C,0x030C,0x730C,0x130C,0x13FC,0x1000,0x1000,0x1198,0x1D08,0x1B0C,0x320C,0x0204,0x0000],0x8BD5:[0x2028,0x302C,0x1824,0x07FC,0x0030,0x7030,0x1030,0x13F0,0x1130,0x1130,0x1110,0x15D4,0x1FD4,0x321C,0x000C,0x0000],0x8BED:[0x0000,0x27FC,0x1080,0x03F8,0x0088,0x7188,0x1198,0x17FC,0x1000,0x13F8,0x1208,0x1E08,0x1A08,0x33F8,0x0208,0x0000],0x8BEF:[0x0000,0x23FC,0x130C,0x030C,0x03FC,0x7000,0x1000,0x13FC,0x1040,0x1040,0x17FE,0x1060,0x1CB0,0x339C,0x0604,0x0000],0x8BFB:[0x0040,0x2040,0x33FC,0x1040,0x07FC,0xF00C,0x1168,0x12E0,0x1360,0x1160,0x17FC,0x1040,0x1890,0x330C,0x0604,0x0000],0x8FBE:[0x0040,0x2040,0x3040,0x17FC,0x00C0,0x00C0,0x70E0,0x10B0,0x1190,0x1318,0x160C,0x3400,0x6C00,0x47FC,0x0000,0x0000],0x8FD0:[0x0000,0x63F8,0x3000,0x1000,0x0000,0x07FC,0x7180,0x11B0,0x1110,0x1318,0x17F8,0x17CC,0x3000,0x7C00,0x47FC,0x0000],0x8FD1:[0x0018,0x63F0,0x3200,0x1200,0x0300,0x03FC,0x7230,0x1230,0x1230,0x1230,0x1630,0x3430,0x7C00,0x47FC,0x0000,0x0000],0x8FD4:[0x0018,0x63F8,0x3200,0x1200,0x03F8,0x0208,0x7618,0x36D0,0x3670,0x3470,0x3DD8,0x3108,0x7C00,0x47FC,0x0000,0x0000],0x8FDE:[0x0080,0x6180,0x37FC,0x1100,0x0360,0x0260,0x77FC,0x1060,0x1060,0x17FC,0x1060,0x3060,0x3060,0x6C40,0x47FC,0x0000],0x91CD:[0x0000,0x0030,0x3FE0,0x0100,0x7FFC,0x0100,0x3FF8,0x3118,0x3FF8,0x3118,0x3FF8,0x0100,0x3FF8,0x0100,0x7FFC,0x0000],0x91CF:[0x0000,0x1FF0,0x1FF0,0x1010,0x1FF0,0x7FFC,0x0000,0x3FF8,0x3FF8,0x3108,0x3FF8,0x0100,0x3FF8,0x7FFC,0x0000,0x0000],0x9519:[0x2090,0x2090,0x7DFC,0x4090,0x4090,0x7FFC,0x1000,0x1000,0x7DF8,0x1108,0x11F8,0x1108,0x1D08,0x39F8,0x0108,0x0000],0x95ED:[0x2000,0x37FC,0x100C,0x00CC,0x60CC,0x6FFC,0x61CC,0x61CC,0x62CC,0x6ECC,0x78CC,0x60CC,0x638C,0x600C,0x4018,0x0000],0x9664:[0x0020,0x7860,0x48F0,0x5998,0x530C,0x51F8,0x5860,0x4860,0x4FFC,0x4860,0x7968,0x436C,0x4264,0x4464,0x41C0,0x0000],0x97F3:[0x0100,0x0100,0x3FFC,0x0820,0x0C60,0x7FFC,0x0000,0x0000,0x1FF0,0x1010,0x1010,0x1FF0,0x1010,0x1FF0,0x1010,0x0000],0x9A6C:[0x0000,0x3FF0,0x0030,0x1030,0x1830,0x1020,0x1020,0x1FFC,0x000C,0x000C,0x7FEC,0x0008,0x0008,0x0018,0x0078,0x0000]};
+      cjkFontData[0x2713] = [0x0000,0x0000,0x0000,0x0002,0x0004,0x0008,0x0010,0x0820,0x0440,0x0280,0x0100,0x0000,0x0000,0x0000,0x0000,0x0000];
+      firmwareIcons.remote = [0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x1F,0xF0,0x00,0x00,0x7F,0xFC,0x00,0x01,0xFF,0xFF,0x00,0x03,0xF8,0x3F,0x80,0x07,0xC0,0x07,0xC0,0x0F,0x83,0x83,0xE0,0x1F,0x1F,0xF1,0xF0,0x1E,0x3F,0xF8,0xF0,0x0C,0x7F,0xFC,0x60,0x00,0xF8,0x3E,0x00,0x00,0xE0,0x0E,0x00,0x00,0x20,0x08,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x01,0xFF,0xFF,0x00,0x01,0xFF,0xFF,0x00,0x01,0xFF,0xFF,0x00,0x01,0xCF,0xFF,0x00,0x01,0xCF,0xFF,0x00,0x01,0xFF,0xFF,0x00,0x01,0xFF,0xFF,0x00,0x01,0xFF,0xFF,0x00,0x01,0xFF,0xFF,0x00,0x01,0xFF,0xFF,0x00,0x01,0xFF,0xFF,0x00,0x01,0xFF,0xFF,0x00,0x01,0xFF,0xFF,0x00,0x01,0xFF,0xFF,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00];
+      firmwareIcons.motor = [0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x1F,0xF8,0x00,0x00,0x7F,0xFE,0x00,0x00,0xFC,0x3F,0x00,0x03,0xF8,0x1F,0xC0,0x07,0xF8,0x1F,0xE0,0x07,0xF8,0x1F,0xE0,0x0F,0xF8,0x1F,0xF0,0x1F,0xFC,0x3F,0xF8,0x1F,0xFF,0xFF,0xF8,0x3F,0xFF,0xFF,0xFC,0x3F,0xFF,0xFF,0xFC,0x38,0x7E,0x7E,0x1C,0x30,0x3E,0x7C,0x0C,0x20,0x38,0x1C,0x04,0x20,0x38,0x1C,0x04,0x30,0x3E,0x7C,0x0C,0x38,0x7E,0x7E,0x1C,0x3F,0xFF,0xFF,0xFC,0x3F,0xFF,0xFF,0xFC,0x1F,0xFF,0xFF,0xF8,0x1F,0xFC,0x3F,0xF8,0x0F,0xF8,0x1F,0xF0,0x07,0xF8,0x1F,0xE0,0x07,0xF8,0x1F,0xE0,0x03,0xF8,0x1F,0xC0,0x00,0xFC,0x3F,0x00,0x00,0x7F,0xFE,0x00,0x00,0x1F,0xF8,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00];
+      cjkFontData[0x9065] = [0x0018,0x67F0,0x32C8,0x1250,0x0310,0x03F8,0x7440,0x1040,0x17FC,0x1248,0x1648,0x17F8,0x3000,0x6C00,0x47FC,0x0000];
+      cjkFontData[0x63A7] = [0x3040,0x3060,0x37FC,0x3604,0x7E84,0x3198,0x330C,0x3A00,0x7BF8,0x7040,0x3040,0x3040,0x3040,0x37FE,0x6000,0x0000];
+      cjkFontData[0x7EA2] = [0x0000,0x1800,0x1000,0x31FC,0x2620,0x6C20,0x7820,0x1820,0x3020,0x7C20,0x6020,0x0620,0x7FFC,0x61FC,0x0000,0x0000];
+      cjkFontData[0x5916] = [0x0000,0x18C0,0x1840,0x1840,0x3F40,0x2270,0x6250,0x5E48,0x0E4C,0x0C44,0x0840,0x1040,0x6040,0x4040,0x0000,0x0000];
+      cjkFontData[0x8BF7] = [0x0000,0x2040,0x37FC,0x1040,0x03F8,0x6060,0x77FC,0x33F8,0x3308,0x33F8,0x3B08,0x3BF8,0x3308,0x0318,0x0000,0x0000];
+      cjkFontData[0x5230] = [0x0000,0x000C,0x7F0C,0x186C,0x136C,0x336C,0x7FEC,0x086C,0x086C,0x7F6C,0x086C,0x080C,0x7F8C,0x701C,0x0010,0x0000];
+      cjkFontData[0x4E22] = [0x0000,0x0010,0x3FF8,0x0100,0x0100,0x3FF8,0x0100,0x0100,0x7FFC,0x0200,0x0460,0x0C20,0x1BF0,0x1FF8,0x0000,0x0000];
+      cjkFontData[0x5931] = [0x0000,0x0100,0x1900,0x1100,0x3FF8,0x3100,0x6100,0x0100,0x7FFC,0x0380,0x06C0,0x0C60,0x183C,0x700C,0x0000,0x0000];
+      cjkFontData[0x8F93] = [0x0000,0x30C0,0x30E0,0x7930,0x23FC,0x2604,0x53CC,0x7AFC,0x73FC,0x12FC,0x1BFC,0x73FC,0x12DC,0x12DC,0x1008,0x0000];
+      cjkFontData[0x51FA] = [0x0000,0x0100,0x2108,0x3118,0x3118,0x3118,0x3FF8,0x0100,0x2108,0x2108,0x2108,0x2108,0x7FF8,0x3FF8,0x0008,0x0000];
+      cjkFontData[0x8F6C] = [0x0000,0x1060,0x1040,0x7DFC,0x2040,0x28C0,0x4BFC,0x7C80,0x18F8,0x0818,0x7C10,0x59A0,0x08E0,0x0830,0x0000,0x0000];
+      cjkFontData[0x53CD] = [0x0000,0x0010,0x1FF8,0x1000,0x1000,0x1FF0,0x1FF0,0x1630,0x1620,0x3360,0x31C0,0x21C0,0x67F0,0x5E3C,0x0000,0x0000];
+      cjkFontData[0x529F] = [0x0000,0x0040,0x0040,0x7C40,0x19FC,0x18CC,0x184C,0x184C,0x18CC,0x18CC,0x3E8C,0x7188,0x0308,0x0638,0x0000,0x0000];
+      cjkFontData[0x7387] = [0x0000,0x0100,0x3FFC,0x0300,0x22C8,0x3790,0x0700,0x1258,0x6FEC,0x0100,0x7FFC,0x7FFC,0x0100,0x0100,0x0100,0x0000];
+      const asciiFontData = {
+        blank: [0x00,0x00,0x00,0x00,0x00], dot: [0x00,0x60,0x60,0x00,0x00],
+        colon: [0x00,0x36,0x36,0x00,0x00], dash: [0x08,0x08,0x08,0x08,0x08],
+        percent: [0x63,0x13,0x08,0x64,0x63], slash: [0x40,0x30,0x08,0x06,0x01],
+        greater: [0x00,0x22,0x14,0x08,0x00], less: [0x00,0x08,0x14,0x22,0x00],
+        question: [0x02,0x01,0x51,0x09,0x06], underscore: [0x40,0x40,0x40,0x40,0x40],
+        plus: [0x08,0x08,0x3E,0x08,0x08],
+        digits: [
+          [0x3E,0x51,0x49,0x45,0x3E],[0x00,0x42,0x7F,0x40,0x00],
+          [0x42,0x61,0x51,0x49,0x46],[0x21,0x41,0x45,0x4B,0x31],
+          [0x18,0x14,0x12,0x7F,0x10],[0x27,0x45,0x45,0x45,0x39],
+          [0x3C,0x4A,0x49,0x49,0x30],[0x01,0x71,0x09,0x05,0x03],
+          [0x36,0x49,0x49,0x49,0x36],[0x06,0x49,0x49,0x29,0x1E]
+        ],
+        letters: [
+          [0x7E,0x11,0x11,0x11,0x7E],[0x7F,0x49,0x49,0x49,0x36],
+          [0x3E,0x41,0x41,0x41,0x22],[0x7F,0x41,0x41,0x22,0x1C],
+          [0x7F,0x49,0x49,0x49,0x41],[0x7F,0x09,0x09,0x09,0x01],
+          [0x3E,0x41,0x49,0x49,0x7A],[0x7F,0x08,0x08,0x08,0x7F],
+          [0x00,0x41,0x7F,0x41,0x00],[0x20,0x40,0x41,0x3F,0x01],
+          [0x7F,0x08,0x14,0x22,0x41],[0x7F,0x40,0x40,0x40,0x40],
+          [0x7F,0x02,0x0C,0x02,0x7F],[0x7F,0x04,0x08,0x10,0x7F],
+          [0x3E,0x41,0x41,0x41,0x3E],[0x7F,0x09,0x09,0x09,0x06],
+          [0x3E,0x41,0x51,0x21,0x5E],[0x7F,0x09,0x19,0x29,0x46],
+          [0x46,0x49,0x49,0x49,0x31],[0x01,0x01,0x7F,0x01,0x01],
+          [0x3F,0x40,0x40,0x40,0x3F],[0x1F,0x20,0x40,0x20,0x1F],
+          [0x3F,0x40,0x38,0x40,0x3F],[0x63,0x14,0x08,0x14,0x63],
+          [0x07,0x08,0x70,0x08,0x07],[0x61,0x51,0x49,0x45,0x43]
+        ]
       };
       const programs = [
         { id: 0, name: &#x27;Line Follow&#x27;, saved: true },
@@ -1509,205 +1592,757 @@ html&gt;body{padding:0}&lt;/style&gt;
         { id: 7, name: &#x27;Empty&#x27;, saved: false }
       ];
       const motorPorts = [
-        { name: &#x27;A&#x27;, device: &#x27;Large Motor&#x27;, deviceZh: &#x27;大型马达&#x27;, status: &#x27;Stopped&#x27;, statusZh: &#x27;停止&#x27;, value: &#x27;Angle 0deg&#x27;, valueZh: &#x27;角度 0度&#x27; },
-        { name: &#x27;B&#x27;, device: &#x27;Not connected&#x27;, deviceZh: &#x27;未连接&#x27;, status: &#x27;--&#x27;, statusZh: &#x27;--&#x27;, value: &#x27;--&#x27;, valueZh: &#x27;--&#x27;, connected: false },
-        { name: &#x27;C&#x27;, device: &#x27;Large Motor&#x27;, deviceZh: &#x27;大型马达&#x27;, status: &#x27;Braked&#x27;, statusZh: &#x27;制动&#x27;, value: &#x27;Angle 0deg&#x27;, valueZh: &#x27;角度 0度&#x27; },
-        { name: &#x27;D&#x27;, device: &#x27;Medium Motor&#x27;, deviceZh: &#x27;中型马达&#x27;, status: &#x27;Stopped&#x27;, statusZh: &#x27;停止&#x27;, value: &#x27;Angle 0deg&#x27;, valueZh: &#x27;角度 0度&#x27; }
+        { connection: &#x27;connected&#x27;, kind: &#x27;largeMotor&#x27;, state: &#x27;stopped&#x27;, speed: 0, angle: 0 },
+        { connection: &#x27;disconnected&#x27;, kind: null, state: null, speed: 0, angle: 0 },
+        { connection: &#x27;connected&#x27;, kind: &#x27;largeMotor&#x27;, state: &#x27;braking&#x27;, speed: 0, angle: 0 },
+        { connection: &#x27;connected&#x27;, kind: &#x27;mediumMotor&#x27;, state: &#x27;stopped&#x27;, speed: 0, angle: 0 }
       ];
       const sensorPorts = [
-        { name: &#x27;1&#x27;, device: &#x27;Infrared&#x27;, deviceZh: &#x27;红外&#x27;, status: &#x27;Connected&#x27;, statusZh: &#x27;已连接&#x27;, value: &#x27;Proximity 100&#x27;, valueZh: &#x27;接近度 100&#x27; },
-        { name: &#x27;2&#x27;, device: &#x27;Sound&#x27;, deviceZh: &#x27;声音&#x27;, status: &#x27;Connected&#x27;, statusZh: &#x27;已连接&#x27;, value: &#x27;Level 5dB&#x27;, valueZh: &#x27;音量 5dB&#x27; },
-        { name: &#x27;3&#x27;, device: &#x27;Gyro&#x27;, deviceZh: &#x27;陀螺仪&#x27;, status: &#x27;Connected&#x27;, statusZh: &#x27;已连接&#x27;, value: &#x27;Angle -140deg&#x27;, valueZh: &#x27;角度 -140度&#x27; },
-        { name: &#x27;4&#x27;, device: &#x27;Ultrasonic&#x27;, deviceZh: &#x27;超声波&#x27;, status: &#x27;Connected&#x27;, statusZh: &#x27;已连接&#x27;, value: &#x27;Distance 180cm&#x27;, valueZh: &#x27;距离 180cm&#x27; }
+        { connection: &#x27;connected&#x27;, model: &#x27;Infrared&#x27;, value: &#x27;100&#x27;, modes: [{ label: &#x27;PROX&#x27;, value: &#x27;100&#x27; }, { label: &#x27;REMOTE&#x27;, value: &#x27;--&#x27; }, { label: &#x27;RAW&#x27;, value: &#x27;2380&#x27; }] },
+        { connection: &#x27;connected&#x27;, model: &#x27;Sound&#x27;, value: &#x27;5dB&#x27;, modes: [{ label: &#x27;DB&#x27;, value: &#x27;5dB&#x27; }, { label: &#x27;DBA&#x27;, value: &#x27;4dBA&#x27; }, { label: &#x27;RAW&#x27;, value: &#x27;512&#x27; }] },
+        { connection: &#x27;connected&#x27;, model: &#x27;Gyro&#x27;, value: &#x27;-140deg&#x27;, modes: [{ label: &#x27;ANGLE&#x27;, value: &#x27;-140deg&#x27; }, { label: &#x27;RATE&#x27;, value: &#x27;0dps&#x27; }, { label: &#x27;RAW&#x27;, value: &#x27;-140&#x27; }] },
+        { connection: &#x27;connected&#x27;, model: &#x27;Ultrasonic&#x27;, value: &#x27;18.0cm&#x27;, modes: [{ label: &#x27;CM&#x27;, value: &#x27;18.0cm&#x27; }, { label: &#x27;IN&#x27;, value: &#x27;7.1in&#x27; }, { label: &#x27;PRES&#x27;, value: &#x27;YES&#x27; }] }
       ];
 
       let page = &#x27;main&#x27;;
       let mainIndex = 0;
+      let homeFirstIndex = 0;
       let programIndex = 0;
-      let programOffset = 0;
       let quickProgramIndex = 0;
-      let recentProgramOrder = [0, 1];
       let settingsIndex = 0;
       let backlight = 100;
       let volume = 80;
-      let language = &#x27;Chinese&#x27;;
+      let language = &#x27;English&#x27;;
+      const languages = [&#x27;Chinese&#x27;, &#x27;English&#x27;, &#x27;Portuguese&#x27;];
       let portGroup = &#x27;motors&#x27;;
       let motorPortIndex = 0;
       let sensorPortIndex = 0;
-      let dialog = null;
-      let dialogIndex = 0;
-      let runStartedAt = 0;
-      let clockTimer = null;
+      const sensorViewIndices = [0, 0, 0, 0];
+      let deleteChoice = 0;
+      let errorCode = 0;
+      let errorReturn = &#x27;main&#x27;;
       let previewScenario = &#x27;normal&#x27;;
-
-      const esc = (value) =&gt; String(value)
-        .replaceAll(&#x27;&amp;&#x27;, &#x27;&amp;amp;&#x27;)
-        .replaceAll(&#x27;&lt;&#x27;, &#x27;&amp;lt;&#x27;)
-        .replaceAll(&#x27;&gt;&#x27;, &#x27;&amp;gt;&#x27;)
-        .replaceAll(&#x27;&quot;&#x27;, &#x27;&amp;quot;&#x27;);
+      let transferActive = false;
+      let transferProgress = 0;
+      let transferTimer = null;
+      const remoteChannelGroups = [
+        { label: &#x27;1/2&#x27;, channels: [{ label: &#x27;CH1&#x27;, motors: &#x27;B / C&#x27; }, { label: &#x27;CH2&#x27;, motors: &#x27;A / D&#x27; }] },
+        { label: &#x27;3/4&#x27;, channels: [{ label: &#x27;CH3&#x27;, motors: &#x27;B / C&#x27; }, { label: &#x27;CH4&#x27;, motors: &#x27;A / D&#x27; }] }
+      ];
+      const REMOTE_SIGNAL_TIMEOUT_MS = 500;
+      let remoteChannelGroupIndex = 0;
+      let remoteOutputEnabled = false;
+      let remoteMotorsBraked = true;
+      let remoteBrakeReason = &#x27;idle&#x27;;
+      const motorOutputPowerLevels = [25, 50, 75, 100];
+      const motorOutputStateOrder = [&#x27;stop&#x27;, &#x27;forward&#x27;, &#x27;reverse&#x27;];
+      const motorOutputPorts = [
+        { port: &#x27;A&#x27;, key: &#x27;up&#x27;, x: 66, y: 27, state: &#x27;stop&#x27; },
+        { port: &#x27;B&#x27;, key: &#x27;left&#x27;, x: 12, y: 55, state: &#x27;stop&#x27; },
+        { port: &#x27;C&#x27;, key: &#x27;right&#x27;, x: 120, y: 55, state: &#x27;stop&#x27; },
+        { port: &#x27;D&#x27;, key: &#x27;down&#x27;, x: 66, y: 83, state: &#x27;stop&#x27; }
+      ];
+      let motorOutputPowerIndex = 1;
 
       const t = (key) =&gt; uiText[language][key];
-      const portText = (port, field) =&gt; language === &#x27;Chinese&#x27; ? port[`${field}Zh`] : port[field];
 
-      const scenarioPort = (group, items, selectedIndex) =&gt; {
-        const port = items[selectedIndex];
-        if (previewScenario === &#x27;identifying&#x27; &amp;&amp; group === &#x27;motors&#x27; &amp;&amp; selectedIndex === 0) {
-          return {
-            ...port, device: &#x27;Identifying&#x27;, deviceZh: &#x27;识别中&#x27;,
-            status: &#x27;Detecting&#x27;, statusZh: &#x27;检测中&#x27;, value: &#x27;--&#x27;, valueZh: &#x27;--&#x27;
-          };
+      const LCD_WIDTH = 180;
+      const LCD_HEIGHT = 128;
+      const lcdPixels = new Uint8Array(LCD_WIDTH * LCD_HEIGHT);
+
+      function setPixel(x, y, on) {
+        if (x &lt; 0 || y &lt; 0 || x &gt;= LCD_WIDTH || y &gt;= LCD_HEIGHT) return;
+        lcdPixels[y * LCD_WIDTH + x] = on ? 1 : 0;
+      }
+
+      function fillRegion(x, y, width, height, on) {
+        for (let offsetY = 0; offsetY &lt; height &amp;&amp; y + offsetY &lt; LCD_HEIGHT; offsetY += 1) {
+          for (let offsetX = 0; offsetX &lt; width &amp;&amp; x + offsetX &lt; LCD_WIDTH; offsetX += 1) {
+            setPixel(x + offsetX, y + offsetY, on);
+          }
         }
-        if (previewScenario === &#x27;disconnected&#x27; &amp;&amp; group === &#x27;sensors&#x27; &amp;&amp; selectedIndex === 0) {
-          return {
-            ...port, device: &#x27;Not connected&#x27;, deviceZh: &#x27;未连接&#x27;,
-            status: &#x27;--&#x27;, statusZh: &#x27;--&#x27;, value: &#x27;--&#x27;, valueZh: &#x27;--&#x27;, connected: false
-          };
+      }
+
+      function drawLine(x0, y0, x1, y1, on = true) {
+        let x = x0;
+        let y = y0;
+        const dx = Math.abs(x1 - x0);
+        const sx = x0 &lt; x1 ? 1 : -1;
+        const dy = -Math.abs(y1 - y0);
+        const sy = y0 &lt; y1 ? 1 : -1;
+        let error = dx + dy;
+        while (true) {
+          setPixel(x, y, on);
+          if (x === x1 &amp;&amp; y === y1) break;
+          const twice = error * 2;
+          if (twice &gt;= dy) { error += dy; x += sx; }
+          if (twice &lt;= dx) { error += dx; y += sy; }
         }
-        return port;
+      }
+
+      function glyphFor(character) {
+        const code = character.codePointAt(0);
+        if (code &gt;= 48 &amp;&amp; code &lt;= 57) return asciiFontData.digits[code - 48];
+        if (code &gt;= 65 &amp;&amp; code &lt;= 90) return asciiFontData.letters[code - 65];
+        if (code &gt;= 97 &amp;&amp; code &lt;= 122) return asciiFontData.letters[code - 97];
+        const special = {
+          &#x27;.&#x27;: &#x27;dot&#x27;, &#x27;:&#x27;: &#x27;colon&#x27;, &#x27;-&#x27;: &#x27;dash&#x27;, &#x27;%&#x27;: &#x27;percent&#x27;,
+          &#x27;/&#x27;: &#x27;slash&#x27;, &#x27;&gt;&#x27;: &#x27;greater&#x27;, &#x27;&lt;&#x27;: &#x27;less&#x27;, &#x27;?&#x27;: &#x27;question&#x27;,
+          &#x27;_&#x27;: &#x27;underscore&#x27;, &#x27;+&#x27;: &#x27;plus&#x27;
+        };
+        return asciiFontData[special[character] || &#x27;blank&#x27;];
+      }
+
+      const latinAccentGlyphs = {
+        0x00C0: [&#x27;A&#x27;, &#x27;grave&#x27;], 0x00C1: [&#x27;A&#x27;, &#x27;acute&#x27;], 0x00C2: [&#x27;A&#x27;, &#x27;circumflex&#x27;],
+        0x00C3: [&#x27;A&#x27;, &#x27;tilde&#x27;], 0x00C4: [&#x27;A&#x27;, &#x27;diaeresis&#x27;], 0x00C7: [&#x27;C&#x27;, &#x27;cedilla&#x27;],
+        0x00C8: [&#x27;E&#x27;, &#x27;grave&#x27;], 0x00C9: [&#x27;E&#x27;, &#x27;acute&#x27;], 0x00CA: [&#x27;E&#x27;, &#x27;circumflex&#x27;],
+        0x00CB: [&#x27;E&#x27;, &#x27;diaeresis&#x27;], 0x00CC: [&#x27;I&#x27;, &#x27;grave&#x27;], 0x00CD: [&#x27;I&#x27;, &#x27;acute&#x27;],
+        0x00CE: [&#x27;I&#x27;, &#x27;circumflex&#x27;], 0x00CF: [&#x27;I&#x27;, &#x27;diaeresis&#x27;], 0x00D2: [&#x27;O&#x27;, &#x27;grave&#x27;],
+        0x00D3: [&#x27;O&#x27;, &#x27;acute&#x27;], 0x00D4: [&#x27;O&#x27;, &#x27;circumflex&#x27;], 0x00D5: [&#x27;O&#x27;, &#x27;tilde&#x27;],
+        0x00D6: [&#x27;O&#x27;, &#x27;diaeresis&#x27;], 0x00D9: [&#x27;U&#x27;, &#x27;grave&#x27;], 0x00DA: [&#x27;U&#x27;, &#x27;acute&#x27;],
+        0x00DB: [&#x27;U&#x27;, &#x27;circumflex&#x27;], 0x00DC: [&#x27;U&#x27;, &#x27;diaeresis&#x27;],
+        0x00E0: [&#x27;a&#x27;, &#x27;grave&#x27;], 0x00E1: [&#x27;a&#x27;, &#x27;acute&#x27;], 0x00E2: [&#x27;a&#x27;, &#x27;circumflex&#x27;],
+        0x00E3: [&#x27;a&#x27;, &#x27;tilde&#x27;], 0x00E4: [&#x27;a&#x27;, &#x27;diaeresis&#x27;], 0x00E7: [&#x27;c&#x27;, &#x27;cedilla&#x27;],
+        0x00E8: [&#x27;e&#x27;, &#x27;grave&#x27;], 0x00E9: [&#x27;e&#x27;, &#x27;acute&#x27;], 0x00EA: [&#x27;e&#x27;, &#x27;circumflex&#x27;],
+        0x00EB: [&#x27;e&#x27;, &#x27;diaeresis&#x27;], 0x00EC: [&#x27;i&#x27;, &#x27;grave&#x27;], 0x00ED: [&#x27;i&#x27;, &#x27;acute&#x27;],
+        0x00EE: [&#x27;i&#x27;, &#x27;circumflex&#x27;], 0x00EF: [&#x27;i&#x27;, &#x27;diaeresis&#x27;], 0x00F2: [&#x27;o&#x27;, &#x27;grave&#x27;],
+        0x00F3: [&#x27;o&#x27;, &#x27;acute&#x27;], 0x00F4: [&#x27;o&#x27;, &#x27;circumflex&#x27;], 0x00F5: [&#x27;o&#x27;, &#x27;tilde&#x27;],
+        0x00F6: [&#x27;o&#x27;, &#x27;diaeresis&#x27;], 0x00F9: [&#x27;u&#x27;, &#x27;grave&#x27;], 0x00FA: [&#x27;u&#x27;, &#x27;acute&#x27;],
+        0x00FB: [&#x27;u&#x27;, &#x27;circumflex&#x27;], 0x00FC: [&#x27;u&#x27;, &#x27;diaeresis&#x27;]
+      };
+      const latinSymbols = new Set([0x00AA, 0x00BA, 0x00AB, 0x00BB, 0x00B0, 0x20AC]);
+      const combiningAccents = {
+        0x0300: &#x27;grave&#x27;, 0x0301: &#x27;acute&#x27;, 0x0302: &#x27;circumflex&#x27;,
+        0x0303: &#x27;tilde&#x27;, 0x0308: &#x27;diaeresis&#x27;, 0x0327: &#x27;cedilla&#x27;
       };
 
-      const row = (marker, label, suffix, selected) =&gt; `
-        &lt;div class=&quot;est-menu-row${selected ? &#x27; est-menu-row-selected&#x27; : &#x27;&#x27;}&quot;&gt;
-          &lt;span&gt;${marker}&lt;/span&gt;&lt;span&gt;${esc(label)}&lt;/span&gt;&lt;span&gt;${esc(suffix || &#x27;&#x27;)}&lt;/span&gt;
-        &lt;/div&gt;`;
+      const compactStyle = (style) =&gt; style === &#x27;compact&#x27; || style === &#x27;compact-inverse&#x27;;
+      const inverseStyle = (style) =&gt; style === &#x27;inverse&#x27; || style === &#x27;compact-inverse&#x27;;
+      const asciiCellWidth = (style) =&gt; compactStyle(style) ? 6 : 7;
+      const latinCell = (codepoint) =&gt; codepoint &lt; 0x80 || latinAccentGlyphs[codepoint] || latinSymbols.has(codepoint);
 
-      const programFileName = (program) =&gt;
-        program.name.toLowerCase().endsWith(&#x27;.py&#x27;) ? program.name : `${program.name}.py`;
-
-      const portSection = (title, group, items, selectedIndex, active) =&gt; {
-        const port = scenarioPort(group, items, selectedIndex);
-        return `&lt;div class=&quot;est-port-section${active ? &#x27; est-port-section-active&#x27; : &#x27;&#x27;}&quot;&gt;
-        &lt;div class=&quot;est-port-heading&quot;&gt;${esc(title)}&lt;/div&gt;
-        &lt;div class=&quot;est-port-tabs&quot;&gt;${items.map((item, index) =&gt; `&lt;div class=&quot;est-port-tab${index === selectedIndex ? &#x27; est-port-tab-selected&#x27; : &#x27;&#x27;}&quot;&gt;${esc(item.name)}&lt;/div&gt;`).join(&#x27;&#x27;)}&lt;/div&gt;
-        &lt;div class=&quot;est-port-detail${port.connected === false ? &#x27; est-port-muted&#x27; : &#x27;&#x27;}&quot;&gt;
-          &lt;span&gt;${esc(t(&#x27;device&#x27;))}&lt;/span&gt;&lt;strong&gt;${esc(portText(port, &#x27;device&#x27;))}&lt;/strong&gt;
-          &lt;span&gt;${esc(t(&#x27;status&#x27;))}&lt;/span&gt;&lt;strong&gt;${esc(portText(port, &#x27;status&#x27;))}&lt;/strong&gt;
-          &lt;span&gt;${esc(t(&#x27;value&#x27;))}&lt;/span&gt;&lt;strong&gt;${esc(portText(port, &#x27;value&#x27;))}&lt;/strong&gt;
-        &lt;/div&gt;
-      &lt;/div&gt;`;
-      };
-
-      function shell(title, body, footerLeft, footerRight) {
-        const battery = previewScenario === &#x27;low-battery&#x27; ? t(&#x27;batteryLow&#x27;) : &#x27;BAT 100%&#x27;;
-        return `&lt;div class=&quot;est-screen&quot;&gt;
-          &lt;div class=&quot;est-screen-header&quot;&gt;&lt;span&gt;${esc(title)}&lt;/span&gt;&lt;span&gt;${esc(battery)}&lt;/span&gt;&lt;/div&gt;
-          &lt;div class=&quot;est-screen-body&quot;&gt;${body}&lt;/div&gt;
-          &lt;div class=&quot;est-screen-footer&quot;&gt;&lt;span&gt;${esc(footerLeft)}&lt;/span&gt;&lt;span&gt;${esc(footerRight)}&lt;/span&gt;&lt;/div&gt;
-        &lt;/div&gt;`;
+      function textWidth(text, style = &#x27;normal&#x27;) {
+        const asciiWidth = asciiCellWidth(style);
+        return Array.from(String(text)).reduce((width, character) =&gt;
+          combiningAccents[character.codePointAt(0)] ? width :
+            width + (latinCell(character.codePointAt(0)) ? asciiWidth : 16), 0);
       }
 
-      function elapsedText() {
-        const elapsed = Math.max(0, Math.floor((Date.now() - runStartedAt) / 1000));
-        const hours = Math.floor(elapsed / 3600);
-        const minutes = Math.floor((elapsed % 3600) / 60);
-        const seconds = elapsed % 60;
-        return [hours, minutes, seconds].map(value =&gt; String(value).padStart(2, &#x27;0&#x27;)).join(&#x27;:&#x27;);
+      function drawAscii(x, y, character, on) {
+        const glyph = glyphFor(character);
+        for (let column = 0; column &lt; 5; column += 1) {
+          for (let row = 0; row &lt; 7; row += 1) {
+            if ((glyph[column] &amp; (1 &lt;&lt; row)) !== 0) setPixel(x + column, y + 4 + row, on);
+          }
+        }
       }
 
-      function renderDialog() {
-        if (!dialog) return &#x27;&#x27;;
-        const isShutdown = dialog === &#x27;shutdown&#x27;;
-        const title = isShutdown ? t(&#x27;powerOffPrompt&#x27;) : t(&#x27;deleteProgram&#x27;);
-        const copy = isShutdown ? t(&#x27;powerOffCopy&#x27;) : `${programs[programIndex].id}  ${programs[programIndex].name}`;
-        const actions = isShutdown
-          ? `&lt;div class=&quot;est-dialog-action&quot;&gt;${esc(t(&#x27;backCancel&#x27;))}&lt;/div&gt;
-            &lt;div class=&quot;est-dialog-action&quot;&gt;${esc(t(&#x27;okPowerOff&#x27;))}&lt;/div&gt;`
-          : `&lt;div class=&quot;est-dialog-action${dialogIndex === 0 ? &#x27; est-dialog-action-selected&#x27; : &#x27;&#x27;}&quot;&gt;${esc(t(&#x27;cancel&#x27;))}&lt;/div&gt;
-            &lt;div class=&quot;est-dialog-action${dialogIndex === 1 ? &#x27; est-dialog-action-selected&#x27; : &#x27;&#x27;}&quot;&gt;${esc(t(&#x27;delete&#x27;))}&lt;/div&gt;`;
-        return `&lt;div class=&quot;est-dialog&quot; role=&quot;dialog&quot; aria-label=&quot;${esc(title)}&quot;&gt;
-          &lt;div class=&quot;est-dialog-title&quot;&gt;${esc(title)}&lt;/div&gt;
-          &lt;div class=&quot;est-dialog-copy&quot;&gt;${esc(copy)}&lt;/div&gt;
-          &lt;div class=&quot;est-dialog-actions&quot;&gt;
-            ${actions}
-          &lt;/div&gt;
-        &lt;/div&gt;`;
+      function drawCjk(x, y, codepoint, on) {
+        const rows = cjkFontData[codepoint];
+        if (!rows) {
+          for (let index = 2; index &lt; 14; index += 1) {
+            setPixel(x + index, y + 2, on);
+            setPixel(x + index, y + 13, on);
+            setPixel(x + 2, y + index, on);
+            setPixel(x + 13, y + index, on);
+          }
+          return;
+        }
+        for (let row = 0; row &lt; 16; row += 1) {
+          for (let column = 0; column &lt; 16; column += 1) {
+            if ((rows[row] &amp; (1 &lt;&lt; (15 - column))) !== 0) setPixel(x + column, y + row, on);
+          }
+        }
       }
 
-      const stateBody = (title, copy, code) =&gt; `&lt;div class=&quot;est-center-state&quot;&gt;
-        &lt;div class=&quot;est-state-title&quot;&gt;${esc(title)}&lt;/div&gt;
-        &lt;div&gt;${esc(copy)}&lt;/div&gt;
-        ${code ? `&lt;div class=&quot;est-state-time&quot;&gt;${esc(code)}&lt;/div&gt;` : &#x27;&#x27;}
-      &lt;/div&gt;`;
+      function drawLatinAccent(x, y, accent, on) {
+        if (accent === &#x27;acute&#x27;) {
+          setPixel(x + 3, y, on); setPixel(x + 2, y + 1, on); setPixel(x + 1, y + 2, on);
+        } else if (accent === &#x27;grave&#x27;) {
+          setPixel(x + 1, y, on); setPixel(x + 2, y + 1, on); setPixel(x + 3, y + 2, on);
+        } else if (accent === &#x27;circumflex&#x27;) {
+          setPixel(x + 2, y, on); setPixel(x + 1, y + 1, on); setPixel(x + 3, y + 1, on);
+        } else if (accent === &#x27;tilde&#x27;) {
+          setPixel(x + 1, y + 1, on); setPixel(x + 2, y, on); setPixel(x + 3, y, on); setPixel(x + 4, y + 1, on);
+        } else if (accent === &#x27;cedilla&#x27;) {
+          setPixel(x + 2, y + 11, on); setPixel(x + 3, y + 12, on); setPixel(x + 2, y + 13, on); setPixel(x + 1, y + 13, on);
+        } else if (accent === &#x27;diaeresis&#x27;) {
+          setPixel(x + 1, y + 1, on); setPixel(x + 3, y + 1, on);
+        }
+      }
+
+      function drawLatinSymbol(x, y, codepoint, on) {
+        if (codepoint === 0x00B0) {
+          setPixel(x + 2, y, on); setPixel(x + 1, y + 1, on); setPixel(x + 3, y + 1, on); setPixel(x + 2, y + 2, on);
+        } else if (codepoint === 0x00AA) {
+          setPixel(x + 2, y + 2, on); setPixel(x + 3, y + 2, on); setPixel(x + 1, y + 3, on);
+          setPixel(x + 3, y + 3, on); setPixel(x + 2, y + 4, on); setPixel(x + 3, y + 4, on);
+          for (let row = 1; row &lt; 5; row += 1) setPixel(x + row, y + 6, on);
+        } else if (codepoint === 0x00BA) {
+          setPixel(x + 2, y + 2, on); setPixel(x + 1, y + 3, on); setPixel(x + 3, y + 3, on); setPixel(x + 2, y + 4, on);
+          for (let row = 1; row &lt; 5; row += 1) setPixel(x + row, y + 6, on);
+        } else if (codepoint === 0x00AB || codepoint === 0x00BB) {
+          const left = codepoint === 0x00AB ? 0 : 4;
+          const direction = codepoint === 0x00AB ? 1 : -1;
+          for (let row = 0; row &lt; 3; row += 1) {
+            const column = left + direction * row;
+            setPixel(x + column, y + 5 + row, on);
+            setPixel(x + column, y + 9 - row, on);
+          }
+        } else if (codepoint === 0x20AC) {
+          for (let row = 4; row &lt;= 10; row += 1) setPixel(x + 1, y + row, on);
+          for (let row = 1; row &lt; 5; row += 1) {
+            setPixel(x + row, y + 4, on);
+            setPixel(x + row, y + 10, on);
+          }
+          for (let row = 0; row &lt; 4; row += 1) {
+            setPixel(x + row, y + 6, on);
+            setPixel(x + row, y + 8, on);
+          }
+        }
+      }
+
+      function drawLatin(x, y, codepoint, on) {
+        const accentGlyph = latinAccentGlyphs[codepoint];
+        if (accentGlyph) {
+          drawAscii(x, y, accentGlyph[0], on);
+          drawLatinAccent(x, y, accentGlyph[1], on);
+        } else {
+          drawLatinSymbol(x, y, codepoint, on);
+        }
+      }
+
+      function drawText(x, y, text, style = &#x27;normal&#x27;) {
+        const value = String(text);
+        const inverse = inverseStyle(style);
+        const asciiWidth = asciiCellWidth(style);
+        if (inverse) fillRegion(x, y, textWidth(value, style), 16, true);
+        let currentX = x;
+        for (const character of Array.from(value)) {
+          const codepoint = character.codePointAt(0);
+          if (codepoint &lt; 0x80) {
+            drawAscii(currentX, y, character, !inverse);
+            currentX += asciiWidth;
+          } else if (latinAccentGlyphs[codepoint] || latinSymbols.has(codepoint)) {
+            drawLatin(currentX, y, codepoint, !inverse);
+            currentX += asciiWidth;
+          } else if (combiningAccents[codepoint]) {
+            if (currentX &gt;= x + asciiWidth) drawLatinAccent(currentX - asciiWidth, y, combiningAccents[codepoint], !inverse);
+          } else {
+            drawCjk(currentX, y, codepoint, !inverse);
+            currentX += 16;
+          }
+          if (currentX &gt;= LCD_WIDTH) break;
+        }
+      }
+
+      function drawCentered(y, text, style = &#x27;normal&#x27;) {
+        drawText(Math.max(0, Math.floor((LCD_WIDTH - textWidth(text, style)) / 2)), y, text, style);
+      }
+
+      function textFittingWidth(text, maxWidth, style = &#x27;normal&#x27;) {
+        let output = &#x27;&#x27;;
+        for (const character of Array.from(String(text))) {
+          const next = output + character;
+          if (textWidth(next, style) &gt; maxWidth) break;
+          output = next;
+        }
+        return output;
+      }
+
+      function drawBitmap(x, y, bitmap, inverse) {
+        for (let iconY = 0; iconY &lt; 32; iconY += 1) {
+          for (let iconX = 0; iconX &lt; 32; iconX += 1) {
+            const on = (bitmap[iconY * 4 + Math.floor(iconX / 8)] &amp; (0x80 &gt;&gt; (iconX % 8))) !== 0;
+            setPixel(x + iconX, y + iconY, inverse ? !on : on);
+          }
+        }
+      }
+
+      function flushLcd() {
+        const image = lcdContext.createImageData(LCD_WIDTH, LCD_HEIGHT);
+        const off = [216, 228, 207];
+        const on = [23, 32, 25];
+        for (let index = 0; index &lt; lcdPixels.length; index += 1) {
+          const color = lcdPixels[index] ? on : off;
+          const target = index * 4;
+          image.data[target] = color[0];
+          image.data[target + 1] = color[1];
+          image.data[target + 2] = color[2];
+          image.data[target + 3] = 255;
+        }
+        lcdContext.putImageData(image, 0, 0);
+      }
+
+      const visiblePrograms = () =&gt; programs.filter(program =&gt; program.saved);
+      const selectedProgram = () =&gt; visiblePrograms()[programIndex] || null;
+      const batteryPercent = () =&gt; previewScenario === &#x27;low-battery&#x27; ? 5 : 100;
+
+      function drawHeader() {
+        const battery = `BAT ${batteryPercent()}%`;
+        const batteryStyle = previewScenario === &#x27;low-battery&#x27; ? &#x27;compact-inverse&#x27; : &#x27;compact&#x27;;
+        drawText(3, 1, &#x27;EST&#x27;);
+        drawText(LCD_WIDTH - textWidth(battery, &#x27;compact&#x27;) - 3, 1, battery, batteryStyle);
+        drawLine(0, 18, LCD_WIDTH - 1, 18);
+      }
+
+      function drawStatus() {
+        const version = &#x27;M1.18A&#x27;;
+        drawText(3, 115, &#x27;USB:ON&#x27;, &#x27;compact&#x27;);
+        drawText(LCD_WIDTH - textWidth(version, &#x27;compact&#x27;) - 3, 115, version, &#x27;compact&#x27;);
+      }
+
+      function drawHome() {
+        const labels = homeText[language];
+        const firstIndex = homeFirstIndex;
+        drawHeader();
+        mainActions.slice(firstIndex, firstIndex + 4).forEach((action, slotIndex) =&gt; {
+          const actionIndex = firstIndex + slotIndex;
+          const zoneX = 2 + slotIndex * 44;
+          const selected = actionIndex === mainIndex;
+          const style = selected ? &#x27;compact-inverse&#x27; : &#x27;compact&#x27;;
+          const label = textFittingWidth(labels[action], 42, style);
+          const labelWidth = textWidth(label, style);
+          if (selected) fillRegion(zoneX, 23, 44, 55, true);
+          drawBitmap(zoneX + 6, 26, firmwareIcons[action], selected);
+          drawText(zoneX + Math.floor((44 - labelWidth) / 2), 59, label, style);
+        });
+        if (mainIndex === 0) {
+          const recent = quickProgramIndex &gt;= 0 ? programs[quickProgramIndex] : null;
+          drawCentered(84, recent &amp;&amp; recent.saved ? recent.name : t(&#x27;noRecent&#x27;), &#x27;compact&#x27;);
+        }
+        [0, 1, 2].forEach(index =&gt; {
+          const x = 76 + index * 14;
+          if (index === firstIndex) fillRegion(x, 105, 8, 3, true);
+          else drawLine(x, 106, x + 7, 106);
+        });
+        drawStatus();
+      }
+
+      function drawControlPlaceholder(action) {
+        drawPageTitle(t(action));
+        drawBitmap(74, 35, firmwareIcons[action], false);
+        drawCentered(82, &#x27;--&#x27;);
+        drawStatus();
+      }
+
+      function drawPageTitle(title) {
+        drawText(3, 1, title);
+        drawLine(0, 18, LCD_WIDTH - 1, 18);
+      }
+
+      function remoteChannelLabel() {
+        return remoteChannelGroups[remoteChannelGroupIndex].label;
+      }
+
+      function nextRemoteChannelLabel() {
+        return remoteChannelGroups[(remoteChannelGroupIndex + 1) % remoteChannelGroups.length].label;
+      }
+
+      function isRemoteFaultScenario(scenario) {
+        return scenario === &#x27;remote-no-ir&#x27; || scenario === &#x27;remote-signal-lost&#x27; || scenario === &#x27;remote-device-lost&#x27;;
+      }
+
+      function currentRemoteFault() {
+        if (previewScenario === &#x27;remote-no-ir&#x27;) return { message: t(&#x27;remoteConnectIr&#x27;), reason: &#x27;no-ir&#x27; };
+        if (previewScenario === &#x27;remote-signal-lost&#x27;) return { message: t(&#x27;remoteSignalLost&#x27;), reason: `signal-timeout-${REMOTE_SIGNAL_TIMEOUT_MS}ms` };
+        if (previewScenario === &#x27;remote-device-lost&#x27;) return { message: t(&#x27;remoteDeviceLost&#x27;), reason: &#x27;device-lost&#x27; };
+        return null;
+      }
+
+      function brakeRemoteMotors(reason) {
+        remoteOutputEnabled = false;
+        remoteMotorsBraked = true;
+        remoteBrakeReason = reason;
+      }
+
+      function resetRemoteControl() {
+        remoteChannelGroupIndex = 0;
+        brakeRemoteMotors(&#x27;reset&#x27;);
+      }
+
+      function enterRemoteControl() {
+        resetRemoteControl();
+        page = &#x27;remote&#x27;;
+      }
+
+      function switchRemoteChannelGroup() {
+        brakeRemoteMotors(&#x27;channel-switch&#x27;);
+        remoteChannelGroupIndex = (remoteChannelGroupIndex + 1) % remoteChannelGroups.length;
+      }
+
+      function leaveRemoteControl() {
+        brakeRemoteMotors(&#x27;back&#x27;);
+        page = &#x27;main&#x27;;
+      }
+
+      function drawRemoteHeader() {
+        const battery = `BAT ${batteryPercent()}%`;
+        const batteryStyle = previewScenario === &#x27;low-battery&#x27; ? &#x27;compact-inverse&#x27; : &#x27;compact&#x27;;
+        const batteryWidth = textWidth(battery, &#x27;compact&#x27;);
+        const channel = remoteChannelLabel();
+        const channelX = LCD_WIDTH - batteryWidth - textWidth(channel, &#x27;compact&#x27;) - 12;
+        drawText(3, 1, t(&#x27;remoteTitle&#x27;));
+        drawText(channelX, 1, channel, &#x27;compact&#x27;);
+        drawText(LCD_WIDTH - batteryWidth - 3, 1, battery, batteryStyle);
+        drawLine(0, 18, LCD_WIDTH - 1, 18);
+      }
+
+      function drawRemoteRow(y, label, value) {
+        drawLabelPrefix(4, y, label);
+        drawTextRight(y, value);
+      }
+
+      function drawRemoteControl() {
+        const fault = currentRemoteFault();
+        const group = remoteChannelGroups[remoteChannelGroupIndex];
+        drawRemoteHeader();
+        if (fault) {
+          brakeRemoteMotors(fault.reason);
+          drawCentered(43, fault.message);
+          drawCentered(71, t(&#x27;remoteBrakeAll&#x27;), &#x27;compact&#x27;);
+          drawCentered(94, &#x27;PWR: --&#x27;, &#x27;compact&#x27;);
+        } else {
+          drawRemoteRow(25, &#x27;IR 4&#x27;, t(&#x27;connected&#x27;));
+          drawRemoteRow(42, group.channels[0].label, group.channels[0].motors);
+          drawRemoteRow(59, group.channels[1].label, group.channels[1].motors);
+          drawRemoteRow(76, &#x27;PWR&#x27;, &#x27;100%&#x27;);
+          drawRemoteRow(93, &#x27;STOP&#x27;, &#x27;BRAKE&#x27;);
+        }
+        const hint = `${t(&#x27;remoteOk&#x27;)} ${nextRemoteChannelLabel()}`;
+        drawText(LCD_WIDTH - textWidth(hint, &#x27;compact&#x27;) - 4, 112, hint, &#x27;compact&#x27;);
+      }
+
+      function motorOutputStateText(state) {
+        if (state === &#x27;forward&#x27;) return t(&#x27;motorForward&#x27;);
+        if (state === &#x27;reverse&#x27;) return t(&#x27;motorReverse&#x27;);
+        return t(&#x27;motorStop&#x27;);
+      }
+
+      function motorOutputPower() {
+        return motorOutputPowerLevels[motorOutputPowerIndex];
+      }
+
+      function cycleMotorOutput(portKey) {
+        const motor = motorOutputPorts.find(item =&gt; item.key === portKey);
+        if (!motor) return;
+        const nextIndex = (motorOutputStateOrder.indexOf(motor.state) + 1) % motorOutputStateOrder.length;
+        motor.state = motorOutputStateOrder[nextIndex];
+      }
+
+      function cycleMotorOutputPower() {
+        motorOutputPowerIndex = (motorOutputPowerIndex + 1) % motorOutputPowerLevels.length;
+      }
+
+      function stopMotorOutput() {
+        motorOutputPorts.forEach(motor =&gt; { motor.state = &#x27;stop&#x27;; });
+      }
+
+      function drawMotorOutputBox(motor) {
+        const width = 48;
+        const height = 21;
+        const active = motor.state !== &#x27;stop&#x27;;
+        const style = active ? &#x27;compact-inverse&#x27; : &#x27;compact&#x27;;
+        if (active) fillRegion(motor.x + 1, motor.y + 1, width - 2, height - 2, true);
+        drawLine(motor.x, motor.y, motor.x + width - 1, motor.y);
+        drawLine(motor.x, motor.y + height - 1, motor.x + width - 1, motor.y + height - 1);
+        drawLine(motor.x, motor.y, motor.x, motor.y + height - 1);
+        drawLine(motor.x + width - 1, motor.y, motor.x + width - 1, motor.y + height - 1);
+        const label = `${motor.port} ${motorOutputStateText(motor.state)}`;
+        drawText(motor.x + Math.max(3, Math.floor((width - textWidth(label, &#x27;compact&#x27;)) / 2)), motor.y + 3, label, style);
+      }
+
+      function drawMotorOutput() {
+        drawPageTitle(t(&#x27;motorOutputTitle&#x27;));
+        motorOutputPorts.forEach(drawMotorOutputBox);
+        const hint = `${t(&#x27;remoteOk&#x27;)} ${t(&#x27;motorPower&#x27;)} ${motorOutputPower()}%`;
+        drawCentered(111, hint, &#x27;compact&#x27;);
+      }
+
+      function drawPanel(x, y, width, height) {
+        fillRegion(x + 3, y + 3, width, height, true);
+        fillRegion(x, y, width, height, false);
+        drawLine(x, y, x + width - 1, y);
+        drawLine(x, y + height - 1, x + width - 1, y + height - 1);
+        drawLine(x, y, x, y + height - 1);
+        drawLine(x + width - 1, y, x + width - 1, y + height - 1);
+      }
+
+      function drawCenteredIn(x, width, y, text, style = &#x27;normal&#x27;) {
+        drawText(x + Math.max(0, Math.floor((width - textWidth(text, style)) / 2)), y, text, style);
+      }
+
+      function drawPowerConfirm() {
+        const x = 18;
+        const y = 38;
+        const width = 144;
+        const title = t(&#x27;powerOffPrompt&#x27;);
+        const labelY = y + 34;
+        const backX = x + 18;
+        const okX = x + 85;
+        drawPanel(x, y, width, 52);
+        drawCenteredIn(x, width, y + 8, title);
+        drawLine(x + 7, y + 31, x + width - 8, y + 31);
+        drawText(backX, labelY, &#x27;&lt;&#x27;, &#x27;compact&#x27;);
+        drawText(backX + 12, labelY, t(&#x27;backCancel&#x27;), &#x27;compact&#x27;);
+        drawText(okX - 2, labelY, &#x27;✓&#x27;);
+        drawText(okX + 14, labelY, t(&#x27;okPowerOff&#x27;), &#x27;compact&#x27;);
+      }
+
+      function drawProgressBar(x, y, width, height, progress) {
+        const fillWidth = Math.max(0, Math.min(width - 2, Math.round((width - 2) * progress)));
+        drawLine(x, y, x + width - 1, y);
+        drawLine(x, y + height - 1, x + width - 1, y + height - 1);
+        drawLine(x, y, x, y + height - 1);
+        drawLine(x + width - 1, y, x + width - 1, y + height - 1);
+        if (fillWidth &gt; 0) fillRegion(x + 1, y + 1, fillWidth, height - 2, true);
+      }
+
+      function drawProgramTransferPopup() {
+        const x = 20;
+        const y = 39;
+        const width = 140;
+        drawPanel(x, y, width, 52);
+        drawCenteredIn(x, width, y + 8, t(&#x27;transferTitle&#x27;));
+        drawCenteredIn(x, width, y + 25, t(&#x27;transferBody&#x27;), &#x27;compact&#x27;);
+        drawProgressBar(x + 16, y + 40, width - 32, 5, transferProgress);
+      }
+
+      function drawPrograms() {
+        drawPageTitle(t(&#x27;programs&#x27;));
+        if (previewScenario === &#x27;storage-error&#x27;) {
+          drawCentered(38, t(&#x27;storageError&#x27;));
+          drawCentered(62, t(&#x27;storageReadFailed&#x27;), &#x27;compact&#x27;);
+          drawCentered(88, &#x27;E:1002&#x27;);
+          return;
+        }
+        const items = visiblePrograms();
+        if (items.length === 0) {
+          drawCentered(56, t(&#x27;noPrograms&#x27;));
+          return;
+        }
+        const deleteHint = t(&#x27;deleteHint&#x27;);
+        drawText(LCD_WIDTH - textWidth(deleteHint, &#x27;compact&#x27;) - 3, 1, deleteHint, &#x27;compact&#x27;);
+        const first = programIndex &lt; 5 ? 0 : programIndex - 4;
+        items.slice(first, first + 5).forEach((program, rowIndex) =&gt; {
+          const index = first + rowIndex;
+          const y = 22 + rowIndex * 20;
+          const selected = index === programIndex;
+          const style = selected ? &#x27;compact-inverse&#x27; : &#x27;compact&#x27;;
+          if (selected) fillRegion(1, y, LCD_WIDTH - 2, 16, true);
+          drawText(4, y, `${program.id}:`, style);
+          drawText(22, y, program.name, style);
+        });
+      }
+
+      function drawDeleteConfirm() {
+        const program = selectedProgram();
+        drawPageTitle(t(&#x27;deleteProgram&#x27;));
+        if (program) drawCentered(27, program.name, &#x27;compact&#x27;);
+        drawCentered(49, t(&#x27;deleteIrreversible&#x27;), &#x27;compact&#x27;);
+        drawText(23, 94, t(&#x27;cancel&#x27;), deleteChoice === 0 ? &#x27;inverse&#x27; : &#x27;normal&#x27;);
+        drawText(112, 94, t(&#x27;delete&#x27;), deleteChoice === 1 ? &#x27;inverse&#x27; : &#x27;normal&#x27;);
+      }
+
+      function drawRunning() {
+        drawCentered(56, t(&#x27;running&#x27;));
+      }
+
+      function drawLabelPrefix(x, y, label) {
+        const width = textWidth(label, &#x27;compact&#x27;);
+        drawText(x, y, label, &#x27;compact&#x27;);
+        drawText(x + width, y, &#x27;:&#x27;, &#x27;compact&#x27;);
+        return x + width + 9;
+      }
+
+      function drawTextRight(y, text) {
+        drawText(LCD_WIDTH - textWidth(text, &#x27;compact&#x27;) - 3, y, text, &#x27;compact&#x27;);
+      }
+
+      function currentMotor() {
+        const motor = { ...motorPorts[motorPortIndex] };
+        if (previewScenario === &#x27;identifying&#x27; &amp;&amp; motorPortIndex === 0) motor.connection = &#x27;detecting&#x27;;
+        return motor;
+      }
+
+      function currentSensor() {
+        const sensor = { ...sensorPorts[sensorPortIndex] };
+        if (previewScenario === &#x27;disconnected&#x27; &amp;&amp; sensorPortIndex === 0) sensor.connection = &#x27;disconnected&#x27;;
+        return sensor;
+      }
+
+      const portLabels = [&#x27;A&#x27;, &#x27;B&#x27;, &#x27;C&#x27;, &#x27;D&#x27;, &#x27;1&#x27;, &#x27;2&#x27;, &#x27;3&#x27;, &#x27;4&#x27;];
+
+      function selectedPortPosition() {
+        return portGroup === &#x27;motors&#x27; ? motorPortIndex : sensorPortIndex + 4;
+      }
+
+      function setPortPosition(position) {
+        if (position &lt; 4) {
+          portGroup = &#x27;motors&#x27;;
+          motorPortIndex = position;
+        } else {
+          portGroup = &#x27;sensors&#x27;;
+          sensorPortIndex = position - 4;
+        }
+      }
+
+      function movePort(delta) {
+        setPortPosition((selectedPortPosition() + delta + portLabels.length) % portLabels.length);
+      }
+
+      function selectedPortLabel() {
+        return portLabels[selectedPortPosition()];
+      }
+
+      function drawPortSelector() {
+        const selected = selectedPortPosition();
+        for (let index = 0; index &lt; portLabels.length; index += 1) {
+          const x = 2 + index * 22;
+          const label = portLabels[index];
+          const style = index === selected ? &#x27;compact-inverse&#x27; : &#x27;compact&#x27;;
+          if (index === selected) fillRegion(x, 21, 20, 16, true);
+          drawText(x + Math.floor((20 - textWidth(label, &#x27;compact&#x27;)) / 2), 21, label, style);
+        }
+        drawLine(0, 38, LCD_WIDTH - 1, 38);
+      }
+
+      function drawMotorDetail() {
+        const motor = currentMotor();
+        let state = t(&#x27;disconnected&#x27;);
+        let kind = &#x27;--&#x27;;
+        let speed = &#x27;--&#x27;;
+        let angle = &#x27;--&#x27;;
+        if (motor.connection === &#x27;detecting&#x27;) {
+          state = t(&#x27;detecting&#x27;);
+        } else if (motor.connection === &#x27;connected&#x27;) {
+          kind = t(motor.kind);
+          state = t(motor.state);
+          speed = `${motor.speed}%`;
+          angle = `${Math.max(-999, Math.min(999, motor.angle))}`;
+        }
+        drawText(4, 47, `${selectedPortLabel()}:`, &#x27;compact&#x27;);
+        drawText(24, 47, kind, &#x27;compact&#x27;);
+        drawTextRight(47, state);
+        drawLabelPrefix(4, 70, &#x27;SPEED&#x27;);
+        drawTextRight(70, speed);
+        drawLabelPrefix(4, 94, &#x27;ANGLE&#x27;);
+        drawTextRight(94, angle);
+      }
+
+      function currentSensorMode(sensor) {
+        const modes = sensor.modes || [{ label: &#x27;VALUE&#x27;, value: sensor.value || &#x27;--&#x27; }];
+        return modes[sensorViewIndices[sensorPortIndex] % modes.length];
+      }
+
+      function drawSensorDetail() {
+        const sensor = currentSensor();
+        let connection = t(&#x27;disconnected&#x27;);
+        let model = &#x27;--&#x27;;
+        let mode = { label: &#x27;VALUE&#x27;, value: &#x27;--&#x27; };
+        if (sensor.connection === &#x27;detecting&#x27;) {
+          connection = t(&#x27;detecting&#x27;);
+        } else if (sensor.connection === &#x27;connected&#x27;) {
+          connection = t(&#x27;connected&#x27;);
+          model = sensor.model;
+          mode = currentSensorMode(sensor);
+        }
+        drawText(4, 47, `${selectedPortLabel()}:`, &#x27;compact&#x27;);
+        drawText(24, 47, model, &#x27;compact&#x27;);
+        drawTextRight(47, connection);
+        drawLabelPrefix(4, 68, &#x27;TYPE&#x27;);
+        drawTextRight(68, mode.label);
+        drawCentered(87, mode.value);
+        if (sensor.connection === &#x27;connected&#x27;) {
+          drawText(LCD_WIDTH - textWidth(&#x27;OK TYPE&#x27;, &#x27;compact&#x27;) - 4, 107, &#x27;OK TYPE&#x27;, &#x27;compact&#x27;);
+        }
+      }
+
+      function drawPorts() {
+        drawPageTitle(t(&#x27;portsTitle&#x27;));
+        drawPortSelector();
+        if (portGroup === &#x27;motors&#x27;) drawMotorDetail();
+        else drawSensorDetail();
+      }
+
+      function drawSettingRow(index, label, value) {
+        const y = 21 + index * 23;
+        const selected = settingsIndex === index;
+        const style = selected ? &#x27;inverse&#x27; : &#x27;normal&#x27;;
+        if (selected) fillRegion(1, y, LCD_WIDTH - 2, 16, true);
+        drawText(4, y, label, style);
+        drawText(LCD_WIDTH - textWidth(value, style) - 4, y, value, style);
+      }
+
+      function currentLanguageLabel() {
+        if (language === &#x27;Chinese&#x27;) return t(&#x27;chinese&#x27;);
+        if (language === &#x27;Portuguese&#x27;) return t(&#x27;portuguese&#x27;);
+        return &#x27;English&#x27;;
+      }
+
+      function drawSettings() {
+        drawPageTitle(t(&#x27;settings&#x27;));
+        drawSettingRow(0, t(&#x27;backlight&#x27;), `${backlight}%`);
+        drawSettingRow(1, t(&#x27;volume&#x27;), `${volume}%`);
+        drawSettingRow(2, t(&#x27;language&#x27;), currentLanguageLabel());
+        drawSettingRow(3, t(&#x27;deviceInfo&#x27;), &#x27;&gt;&#x27;);
+      }
+
+      function drawInfoRow(y, label, value) {
+        drawText(5, y, label, &#x27;compact&#x27;);
+        drawText(80, y, value, &#x27;compact&#x27;);
+      }
+
+      function drawDeviceInfo() {
+        drawPageTitle(t(&#x27;deviceInfo&#x27;));
+        drawInfoRow(24, t(&#x27;model&#x27;), &#x27;EST 3.0&#x27;);
+        drawInfoRow(44, t(&#x27;firmware&#x27;), &#x27;M1.18A&#x27;);
+        drawInfoRow(64, t(&#x27;bootloader&#x27;), &#x27;03.00B&#x27;);
+        drawInfoRow(84, t(&#x27;usb&#x27;), &#x27;USB ON&#x27;);
+        drawInfoRow(104, t(&#x27;battery&#x27;), `${batteryPercent()}%`);
+      }
+
+      function drawError() {
+        drawCentered(30, t(&#x27;programStopped&#x27;));
+        drawCentered(53, t(&#x27;motorsStopped&#x27;), &#x27;compact&#x27;);
+        drawCentered(78, `E:${errorCode}`);
+        drawCentered(105, t(&#x27;retry&#x27;), &#x27;compact&#x27;);
+      }
 
       function render() {
-        lcd.style.filter = `brightness(${0.55 + backlight * 0.0045})`;
-        let content = &#x27;&#x27;;
-        if (page === &#x27;main&#x27;) {
-          const quickProgram = quickProgramIndex &gt;= 0 ? programs[quickProgramIndex] : null;
-          const mainItems = [
-            { action: &#x27;quick&#x27;, label: quickProgram ? programFileName(quickProgram) : t(&#x27;noRecent&#x27;) },
-            { action: &#x27;programs&#x27;, label: t(&#x27;programs&#x27;) },
-            { action: &#x27;ports&#x27;, label: t(&#x27;ports&#x27;) },
-            { action: &#x27;settings&#x27;, label: t(&#x27;settings&#x27;) }
-          ];
-          const body = `&lt;div class=&quot;est-main-grid&quot;&gt;${mainItems.map((item, index) =&gt; `
-            &lt;div class=&quot;est-main-item${index === mainIndex ? &#x27; est-main-item-selected&#x27; : &#x27;&#x27;}&quot;&gt;
-              &lt;img class=&quot;est-main-icon&quot; src=&quot;${mainIconData[item.action]}&quot; alt=&quot;&quot;&gt;
-              &lt;div class=&quot;est-main-label&quot;&gt;${esc(item.label)}&lt;/div&gt;
-            &lt;/div&gt;`).join(&#x27;&#x27;)}&lt;/div&gt;`;
-          content = shell(&#x27;EST&#x27;, body, mainIndex === 0 &amp;&amp; quickProgram ? t(&#x27;okRun&#x27;) : t(&#x27;usbConnected&#x27;), &#x27;M1.14A&#x27;);
-        } else if (page === &#x27;off&#x27;) {
-          content = `&lt;div class=&quot;est-power-off&quot;&gt;${esc(t(&#x27;poweredOff&#x27;))}&lt;/div&gt;`;
-        } else if (page === &#x27;programs&#x27;) {
-          const visible = programs.slice(programOffset, programOffset + 4);
-          const body = `&lt;div class=&quot;est-menu-list&quot;&gt;${visible.map((item, index) =&gt; {
-            const absolute = programOffset + index;
-            const label = item.saved ? item.name : t(&#x27;empty&#x27;);
-            return row(absolute === programIndex ? &#x27;&amp;gt;&#x27; : &#x27;&#x27;, `${item.id}  ${label}`, item.saved ? &#x27;&#x27; : &#x27;--&#x27;, absolute === programIndex);
-          }).join(&#x27;&#x27;)}&lt;/div&gt;`;
-          content = shell(t(&#x27;programs&#x27;), body, t(&#x27;okRun&#x27;), t(&#x27;deleteHint&#x27;));
-        } else if (page === &#x27;running&#x27;) {
-          const body = `&lt;div class=&quot;est-center-state&quot;&gt;
-            &lt;div class=&quot;est-state-title&quot;&gt;${esc(t(&#x27;running&#x27;))}&lt;/div&gt;
-            &lt;div class=&quot;est-state-time&quot;&gt;${elapsedText()}&lt;/div&gt;
-            &lt;div&gt;${esc(t(&#x27;programActive&#x27;))}&lt;/div&gt;
-          &lt;/div&gt;`;
-          content = shell(programs[programIndex].name, body, &#x27;&#x27;, t(&#x27;backStop&#x27;));
-        } else if (page === &#x27;program-error&#x27;) {
-          content = shell(t(&#x27;programStopped&#x27;), stateBody(t(&#x27;programStopped&#x27;), t(&#x27;motorsStopped&#x27;), &#x27;E-RUN 01&#x27;), t(&#x27;programsReturn&#x27;), &#x27;&#x27;);
-        } else if (page === &#x27;storage-error&#x27;) {
-          content = shell(t(&#x27;storageError&#x27;), stateBody(t(&#x27;storageError&#x27;), t(&#x27;storageReadFailed&#x27;), &#x27;E-STORAGE 01&#x27;), t(&#x27;okRetry&#x27;), t(&#x27;back&#x27;));
-        } else if (page === &#x27;low-battery&#x27;) {
-          content = shell(t(&#x27;lowBattery&#x27;), stateBody(t(&#x27;lowBattery&#x27;), t(&#x27;chargeBeforeRun&#x27;), &#x27;5%&#x27;), &#x27;&#x27;, t(&#x27;back&#x27;));
-        } else if (page === &#x27;ports&#x27;) {
-          const body = `&lt;div class=&quot;est-port-overview&quot;&gt;
-            ${portSection(t(&#x27;motors&#x27;), &#x27;motors&#x27;, motorPorts, motorPortIndex, portGroup === &#x27;motors&#x27;)}
-            ${portSection(t(&#x27;sensors&#x27;), &#x27;sensors&#x27;, sensorPorts, sensorPortIndex, portGroup === &#x27;sensors&#x27;)}
-          &lt;/div&gt;`;
-          content = shell(t(&#x27;ports&#x27;), body, t(&#x27;portHint&#x27;), t(&#x27;back&#x27;));
-        } else if (page === &#x27;settings&#x27;) {
-          const settingsItems = [
-            { label: t(&#x27;backlight&#x27;), suffix: `${backlight}%` },
-            { label: t(&#x27;volume&#x27;), suffix: `${volume}%` },
-            { label: t(&#x27;language&#x27;), suffix: language === &#x27;English&#x27; ? &#x27;English&#x27; : &#x27;中文&#x27; },
-            { label: t(&#x27;deviceInfo&#x27;), suffix: &#x27;&gt;&#x27; }
-          ];
-          const body = `&lt;div class=&quot;est-menu-list&quot;&gt;${settingsItems.map((item, index) =&gt;
-            row(index === settingsIndex ? &#x27;&amp;gt;&#x27; : &#x27;&#x27;, item.label, item.suffix, index === settingsIndex)).join(&#x27;&#x27;)}&lt;/div&gt;`;
-          content = shell(t(&#x27;settings&#x27;), body, settingsIndex === 3 ? t(&#x27;okOpen&#x27;) : t(&#x27;adjust&#x27;), t(&#x27;back&#x27;));
-        } else if (page === &#x27;info&#x27;) {
-          const body = `&lt;div class=&quot;est-detail-grid&quot;&gt;
-            &lt;span&gt;${esc(t(&#x27;model&#x27;))}&lt;/span&gt;&lt;strong&gt;EST 3.0&lt;/strong&gt;
-            &lt;span&gt;${esc(t(&#x27;firmware&#x27;))}&lt;/span&gt;&lt;strong&gt;M1.14A&lt;/strong&gt;
-            &lt;span&gt;${esc(t(&#x27;protocol&#x27;))}&lt;/span&gt;&lt;strong&gt;1.22&lt;/strong&gt;
-            &lt;span&gt;${esc(t(&#x27;bootloader&#x27;))}&lt;/span&gt;&lt;strong&gt;03.00B&lt;/strong&gt;
-            &lt;span&gt;${esc(t(&#x27;usb&#x27;))}&lt;/span&gt;&lt;strong&gt;${esc(t(&#x27;connected&#x27;))}&lt;/strong&gt;
-          &lt;/div&gt;`;
-          content = shell(t(&#x27;deviceInfo&#x27;), body, &#x27;&#x27;, t(&#x27;back&#x27;));
-        }
-        lcd.innerHTML = content + renderDialog();
-        lcd.setAttribute(&#x27;aria-label&#x27;, `${page} screen`);
+        lcdPixels.fill(0);
+        lcd.style.filter = page === &#x27;off&#x27; ? &#x27;brightness(0.2)&#x27; : `brightness(${0.55 + backlight * 0.0045})`;
+        if (page === &#x27;main&#x27; || page === &#x27;power&#x27;) drawHome();
+        if (page === &#x27;power&#x27;) drawPowerConfirm();
+        if (page === &#x27;programs&#x27;) drawPrograms();
+        if (page === &#x27;delete&#x27;) drawDeleteConfirm();
+        if (page === &#x27;running&#x27;) drawRunning();
+        if (page === &#x27;remote&#x27;) drawRemoteControl();
+        if (page === &#x27;motor&#x27;) drawMotorOutput();
+        if (page === &#x27;ports&#x27;) drawPorts();
+        if (page === &#x27;settings&#x27;) drawSettings();
+        if (page === &#x27;info&#x27;) drawDeviceInfo();
+        if (page === &#x27;error&#x27;) drawError();
+        if (transferActive) drawProgramTransferPopup();
+        flushLcd();
+        lcd.setAttribute(&#x27;aria-label&#x27;, `EST LCD ${transferActive ? `${page} transfer` : page}, 180 by 128 pixels`);
+      }
+
+      function moveMain(delta) {
+        mainIndex = (mainIndex + delta + mainActions.length) % mainActions.length;
+        if (mainIndex &lt; homeFirstIndex) homeFirstIndex = mainIndex;
+        if (mainIndex &gt;= homeFirstIndex + 4) homeFirstIndex = mainIndex - 3;
       }
 
       function moveProgram(delta) {
-        programIndex = Math.max(0, Math.min(programs.length - 1, programIndex + delta));
-        if (programIndex &lt; programOffset) programOffset = programIndex;
-        if (programIndex &gt; programOffset + 3) programOffset = programIndex - 3;
+        const count = visiblePrograms().length;
+        if (count === 0) return;
+        programIndex = (programIndex + delta + count) % count;
       }
 
-      function markProgramRecent(index) {
-        recentProgramOrder = [index, ...recentProgramOrder.filter(item =&gt; item !== index)];
-        quickProgramIndex = index;
+      function markProgramRecent(program) {
+        quickProgramIndex = programs.indexOf(program);
         if (previewScenario === &#x27;no-recent&#x27;) {
           previewScenario = &#x27;normal&#x27;;
           scenarioSelect.value = &#x27;normal&#x27;;
@@ -1717,168 +2352,199 @@ html&gt;body{padding:0}&lt;/style&gt;
       function adjustSetting(delta) {
         if (settingsIndex === 0) backlight = Math.max(10, Math.min(100, backlight + delta * 10));
         if (settingsIndex === 1) volume = Math.max(0, Math.min(100, volume + delta * 10));
-        if (settingsIndex === 2) language = language === &#x27;English&#x27; ? &#x27;Chinese&#x27; : &#x27;English&#x27;;
+        if (settingsIndex === 2) {
+          const current = languages.indexOf(language);
+          language = languages[(current + delta + languages.length) % languages.length];
+        }
       }
 
-      function setPreviewScenario(nextScenario) {
-        if (clockTimer) clearInterval(clockTimer);
-        clockTimer = null;
-        previewScenario = nextScenario;
-        scenarioSelect.value = nextScenario;
-        dialog = null;
-        dialogIndex = 0;
-        mainIndex = 0;
-        programIndex = Math.max(0, programs.findIndex(program =&gt; program.saved));
-        programOffset = 0;
-        recentProgramOrder = programs.map((program, index) =&gt; program.saved ? index : -1).filter(index =&gt; index &gt;= 0);
-        quickProgramIndex = recentProgramOrder[0] ?? -1;
-        page = &#x27;main&#x27;;
+      function clearTransferSimulation() {
+        if (transferTimer) clearInterval(transferTimer);
+        transferTimer = null;
+        transferActive = false;
+        transferProgress = 0;
+      }
 
-        if (nextScenario === &#x27;no-recent&#x27;) {
-          recentProgramOrder = [];
-          quickProgramIndex = -1;
-        }
-        if (nextScenario === &#x27;program-error&#x27;) page = &#x27;program-error&#x27;;
-        if (nextScenario === &#x27;storage-error&#x27;) page = &#x27;storage-error&#x27;;
-        if (nextScenario === &#x27;identifying&#x27;) {
-          page = &#x27;ports&#x27;;
-          portGroup = &#x27;motors&#x27;;
-          motorPortIndex = 0;
-        }
-        if (nextScenario === &#x27;disconnected&#x27;) {
-          page = &#x27;ports&#x27;;
-          portGroup = &#x27;sensors&#x27;;
-          sensorPortIndex = 0;
+      function finishProgramTransfer() {
+        clearTransferSimulation();
+        if (previewScenario === &#x27;program-transfer&#x27;) {
+          previewScenario = &#x27;normal&#x27;;
+          scenarioSelect.value = &#x27;normal&#x27;;
         }
         render();
       }
 
-      function startProgram() {
-        if (!programs[programIndex].saved) return;
+      function beginProgramTransfer() {
+        transferActive = true;
+        transferProgress = 0;
+        if (transferTimer) clearInterval(transferTimer);
+        transferTimer = setInterval(() =&gt; {
+          transferProgress = Math.min(1, transferProgress + 0.08);
+          if (transferProgress &gt;= 1) {
+            finishProgramTransfer();
+          } else {
+            render();
+          }
+        }, 160);
+      }
+
+      function setPreviewScenario(nextScenario) {
+        clearTransferSimulation();
+        previewScenario = nextScenario;
+        scenarioSelect.value = nextScenario;
+        page = &#x27;main&#x27;;
+        mainIndex = 0;
+        homeFirstIndex = 0;
+        programIndex = 0;
+        deleteChoice = 0;
+        errorCode = 0;
+        errorReturn = &#x27;main&#x27;;
+        portGroup = &#x27;motors&#x27;;
+        motorPortIndex = 0;
+        sensorPortIndex = 0;
+        sensorViewIndices.fill(0);
+        resetRemoteControl();
+        quickProgramIndex = programs.findIndex(program =&gt; program.saved);
+
+        if (nextScenario === &#x27;no-recent&#x27;) quickProgramIndex = -1;
+        if (nextScenario === &#x27;program-error&#x27;) {
+          page = &#x27;error&#x27;;
+          errorCode = 1101;
+          errorReturn = &#x27;programs&#x27;;
+        }
+        if (nextScenario === &#x27;storage-error&#x27;) page = &#x27;programs&#x27;;
+        if (nextScenario === &#x27;identifying&#x27;) page = &#x27;ports&#x27;;
+        if (nextScenario === &#x27;disconnected&#x27;) {
+          page = &#x27;ports&#x27;;
+          portGroup = &#x27;sensors&#x27;;
+        }
+        if (isRemoteFaultScenario(nextScenario)) {
+          enterRemoteControl();
+          brakeRemoteMotors(nextScenario);
+        }
+        if (nextScenario === &#x27;program-transfer&#x27;) beginProgramTransfer();
+        render();
+      }
+
+      function startProgram(program = selectedProgram()) {
+        if (!program) return;
         if (previewScenario === &#x27;low-battery&#x27;) {
-          page = &#x27;low-battery&#x27;;
+          errorCode = 1201;
+          errorReturn = &#x27;programs&#x27;;
+          page = &#x27;error&#x27;;
           render();
           return;
         }
-        markProgramRecent(programIndex);
+        markProgramRecent(program);
         page = &#x27;running&#x27;;
-        runStartedAt = Date.now();
-        if (clockTimer) clearInterval(clockTimer);
-        clockTimer = setInterval(render, 1000);
+        render();
       }
 
       function stopProgram() {
         page = &#x27;main&#x27;;
         mainIndex = 0;
-        dialog = null;
-        if (clockTimer) clearInterval(clockTimer);
-        clockTimer = null;
+        homeFirstIndex = 0;
         render();
       }
 
-      function activateDialog() {
-        if (dialog === &#x27;shutdown&#x27;) {
-          dialog = null;
-          page = &#x27;off&#x27;;
-          if (clockTimer) clearInterval(clockTimer);
-          clockTimer = null;
-          render();
-          return;
+      function deleteSelectedProgram() {
+        const program = selectedProgram();
+        if (!program) return;
+        if (programs.indexOf(program) === quickProgramIndex) quickProgramIndex = -1;
+        program.saved = false;
+        programIndex = Math.max(0, Math.min(programIndex, visiblePrograms().length - 1));
+      }
+
+      function leaveTransientScenario() {
+        if (previewScenario === &#x27;program-error&#x27;) {
+          previewScenario = &#x27;normal&#x27;;
+          scenarioSelect.value = &#x27;normal&#x27;;
         }
-        if (dialogIndex === 0) {
-          dialog = null;
-          render();
-          return;
-        }
-        if (dialog === &#x27;delete&#x27;) {
-          const deletedQuickProgram = programIndex === quickProgramIndex;
-          programs[programIndex].name = &#x27;Empty&#x27;;
-          programs[programIndex].saved = false;
-          recentProgramOrder = recentProgramOrder.filter(item =&gt; item !== programIndex);
-          if (deletedQuickProgram) {
-            quickProgramIndex = recentProgramOrder.find(item =&gt; programs[item].saved) ?? programs.findIndex(program =&gt; program.saved);
-          }
-          dialog = null;
-        }
-        render();
       }
 
       function press(key) {
-        if (dialog) {
-          if (dialog === &#x27;delete&#x27; &amp;&amp; key === &#x27;left&#x27;) dialogIndex = 0;
-          if (dialog === &#x27;delete&#x27; &amp;&amp; key === &#x27;right&#x27;) dialogIndex = 1;
-          if (key === &#x27;back&#x27;) dialog = null;
-          if (key === &#x27;ok&#x27;) {
-            activateDialog();
-            return;
-          }
-          render();
-          return;
-        }
+        if (page === &#x27;off&#x27;) return;
+        if (transferActive) return;
 
         if (page === &#x27;main&#x27;) {
-          if (key === &#x27;up&#x27; || key === &#x27;left&#x27;) mainIndex = (mainIndex + mainActions.length - 1) % mainActions.length;
-          if (key === &#x27;down&#x27; || key === &#x27;right&#x27;) mainIndex = (mainIndex + 1) % mainActions.length;
-          if (key === &#x27;ok&#x27; &amp;&amp; mainActions[mainIndex] === &#x27;quick&#x27; &amp;&amp; quickProgramIndex &gt;= 0) {
-            programIndex = quickProgramIndex;
-            startProgram();
+          if (key === &#x27;up&#x27; || key === &#x27;left&#x27;) moveMain(-1);
+          if (key === &#x27;down&#x27; || key === &#x27;right&#x27;) moveMain(1);
+          if (key === &#x27;back&#x27;) page = &#x27;power&#x27;;
+          if (key === &#x27;ok&#x27;) {
+            const action = mainActions[mainIndex];
+            if (action === &#x27;quick&#x27;) {
+              const program = quickProgramIndex &gt;= 0 ? programs[quickProgramIndex] : null;
+              if (program &amp;&amp; program.saved) startProgram(program);
+            } else if (action === &#x27;remote&#x27;) {
+              enterRemoteControl();
+            } else {
+              page = action;
+              if (action === &#x27;programs&#x27;) programIndex = 0;
+            }
           }
-          if (key === &#x27;ok&#x27; &amp;&amp; mainActions[mainIndex] !== &#x27;quick&#x27;) page = mainActions[mainIndex];
-          if (key === &#x27;back&#x27;) {
-            dialog = &#x27;shutdown&#x27;;
-            dialogIndex = 0;
-          }
-        } else if (page === &#x27;programs&#x27;) {
-          if (key === &#x27;up&#x27;) moveProgram(-1);
-          if (key === &#x27;down&#x27;) moveProgram(1);
-          if (key === &#x27;right&#x27; &amp;&amp; programs[programIndex].saved) {
-            dialog = &#x27;delete&#x27;;
-            dialogIndex = 0;
-          }
-          if (key === &#x27;ok&#x27;) startProgram();
+        } else if (page === &#x27;power&#x27;) {
           if (key === &#x27;back&#x27;) page = &#x27;main&#x27;;
+          if (key === &#x27;ok&#x27;) page = &#x27;off&#x27;;
+        } else if (page === &#x27;programs&#x27;) {
+          if (key === &#x27;back&#x27;) page = &#x27;main&#x27;;
+          if (previewScenario !== &#x27;storage-error&#x27;) {
+            if (key === &#x27;up&#x27;) moveProgram(-1);
+            if (key === &#x27;down&#x27;) moveProgram(1);
+            if (key === &#x27;right&#x27; &amp;&amp; visiblePrograms().length &gt; 0) {
+              deleteChoice = 0;
+              page = &#x27;delete&#x27;;
+            }
+            if (key === &#x27;ok&#x27;) startProgram();
+          }
+        } else if (page === &#x27;delete&#x27;) {
+          if (key === &#x27;back&#x27;) page = &#x27;programs&#x27;;
+          if (key === &#x27;left&#x27; || key === &#x27;right&#x27;) deleteChoice ^= 1;
+          if (key === &#x27;ok&#x27;) {
+            if (deleteChoice === 1) deleteSelectedProgram();
+            page = &#x27;programs&#x27;;
+          }
         } else if (page === &#x27;running&#x27;) {
           if (key === &#x27;back&#x27;) {
             stopProgram();
             return;
           }
-        } else if (page === &#x27;program-error&#x27;) {
-          if (key === &#x27;back&#x27; || key === &#x27;ok&#x27;) {
-            previewScenario = &#x27;normal&#x27;;
-            scenarioSelect.value = &#x27;normal&#x27;;
-            page = &#x27;programs&#x27;;
-          }
-        } else if (page === &#x27;storage-error&#x27;) {
-          if (key === &#x27;ok&#x27;) {
-            previewScenario = &#x27;normal&#x27;;
-            scenarioSelect.value = &#x27;normal&#x27;;
-            page = &#x27;programs&#x27;;
-          }
+        } else if (page === &#x27;remote&#x27;) {
+          if (key === &#x27;ok&#x27;) switchRemoteChannelGroup();
+          if (key === &#x27;back&#x27;) leaveRemoteControl();
+        } else if (page === &#x27;motor&#x27;) {
+          if (key === &#x27;up&#x27; || key === &#x27;left&#x27; || key === &#x27;right&#x27; || key === &#x27;down&#x27;) cycleMotorOutput(key);
+          if (key === &#x27;ok&#x27;) cycleMotorOutputPower();
           if (key === &#x27;back&#x27;) {
-            previewScenario = &#x27;normal&#x27;;
-            scenarioSelect.value = &#x27;normal&#x27;;
+            stopMotorOutput();
             page = &#x27;main&#x27;;
           }
-        } else if (page === &#x27;low-battery&#x27;) {
-          if (key === &#x27;back&#x27; || key === &#x27;ok&#x27;) page = &#x27;main&#x27;;
         } else if (page === &#x27;ports&#x27;) {
-          if (key === &#x27;up&#x27;) portGroup = &#x27;motors&#x27;;
-          if (key === &#x27;down&#x27;) portGroup = &#x27;sensors&#x27;;
+          if (key === &#x27;back&#x27;) page = &#x27;main&#x27;;
           if (key === &#x27;left&#x27; || key === &#x27;right&#x27;) {
             const delta = key === &#x27;left&#x27; ? -1 : 1;
-            if (portGroup === &#x27;motors&#x27;) motorPortIndex = (motorPortIndex + delta + motorPorts.length) % motorPorts.length;
-            if (portGroup === &#x27;sensors&#x27;) sensorPortIndex = (sensorPortIndex + delta + sensorPorts.length) % sensorPorts.length;
+            movePort(delta);
           }
-          if (key === &#x27;back&#x27;) page = &#x27;main&#x27;;
+          if (key === &#x27;ok&#x27; &amp;&amp; portGroup === &#x27;sensors&#x27;) {
+            const sensor = currentSensor();
+            const modes = sensor.modes || [];
+            if (sensor.connection === &#x27;connected&#x27; &amp;&amp; modes.length &gt; 1) {
+              sensorViewIndices[sensorPortIndex] = (sensorViewIndices[sensorPortIndex] + 1) % modes.length;
+            }
+          }
         } else if (page === &#x27;settings&#x27;) {
+          if (key === &#x27;back&#x27;) page = &#x27;main&#x27;;
           if (key === &#x27;up&#x27;) settingsIndex = (settingsIndex + 3) % 4;
           if (key === &#x27;down&#x27;) settingsIndex = (settingsIndex + 1) % 4;
           if (key === &#x27;left&#x27;) adjustSetting(-1);
           if (key === &#x27;right&#x27;) adjustSetting(1);
           if (key === &#x27;ok&#x27; &amp;&amp; settingsIndex === 3) page = &#x27;info&#x27;;
-          if (key === &#x27;back&#x27;) page = &#x27;main&#x27;;
-        } else if (page === &#x27;info&#x27; &amp;&amp; key === &#x27;back&#x27;) {
-          page = &#x27;settings&#x27;;
+        } else if (page === &#x27;info&#x27;) {
+          if (key === &#x27;back&#x27;) page = &#x27;settings&#x27;;
+        } else if (page === &#x27;error&#x27;) {
+          if (key === &#x27;back&#x27; || key === &#x27;ok&#x27;) {
+            page = errorReturn;
+            leaveTransientScenario();
+          }
         }
         render();
       }

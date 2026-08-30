@@ -210,6 +210,20 @@ static mp_obj_t modest_motor_error(mp_obj_t self_object)
 }
 static MP_DEFINE_CONST_FUN_OBJ_1(modest_motor_error_obj, modest_motor_error);
 
+static mp_obj_t modest_motor_stalled(mp_obj_t self_object)
+{
+	modest_motor_instance_t *self = MP_OBJ_TO_PTR(self_object);
+	bool stalled = false;
+	est_result_t result = est_motor_stalled(self->port, &stalled);
+
+	if (result != EST_OK) {
+		modest_raise_motor_error(result);
+	}
+	return mp_obj_new_bool(stalled);
+}
+static MP_DEFINE_CONST_FUN_OBJ_1(
+	modest_motor_stalled_obj, modest_motor_stalled);
+
 static mp_obj_t modest_motor_status(mp_obj_t self_object)
 {
 	est_motor_status_t status = {0};
@@ -396,6 +410,7 @@ static const mp_rom_map_elem_t modest_motor_locals_table[] = {
 	{MP_ROM_QSTR(MP_QSTR_speed), MP_ROM_PTR(&modest_motor_speed_obj)},
 	{MP_ROM_QSTR(MP_QSTR_angle), MP_ROM_PTR(&modest_motor_angle_obj)},
 	{MP_ROM_QSTR(MP_QSTR_error), MP_ROM_PTR(&modest_motor_error_obj)},
+	{MP_ROM_QSTR(MP_QSTR_stalled), MP_ROM_PTR(&modest_motor_stalled_obj)},
 	{MP_ROM_QSTR(MP_QSTR_status), MP_ROM_PTR(&modest_motor_status_obj)},
 	{MP_ROM_QSTR(MP_QSTR_stop), MP_ROM_PTR(&modest_motor_stop_obj)},
 	{MP_ROM_QSTR(MP_QSTR_run_power),

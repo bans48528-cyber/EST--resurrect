@@ -1,6 +1,7 @@
 #ifndef EST_MOTOR_H
 #define EST_MOTOR_H
 
+#include <stdbool.h>
 #include <stdint.h>
 
 #include "est_types.h"
@@ -43,5 +44,6 @@ est_result_t est_motor_stop_all(est_stop_mode_t stop_mode);
 est_result_t est_motor_reset_angle(est_motor_port_t port);
 est_result_t est_motor_get_status(est_motor_port_t port,
 	est_motor_status_t *status);
+est_result_t est_motor_stalled(est_motor_port_t port, bool *stalled);
 
 #endif

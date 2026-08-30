@@ -51,10 +51,13 @@ struct board_sensor_snapshot {
 	uint8_t mode;
 	bool value_valid;
 	uint16_t value;
+	uint8_t value_bytes[4];
+	uint8_t value_size;
 	uint16_t adc0_raw;
 	uint16_t adc1_raw;
 	uint8_t digital_mask;
 	uint32_t rx_count;
+	uint32_t last_data_ms;
 	uint16_t checksum_errors;
 };
 

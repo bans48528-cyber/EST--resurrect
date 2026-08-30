@@ -50,7 +50,7 @@ class BasicEventHatsContractTests(unittest.TestCase):
         self.assertNotIn("wait_value", sample)
         self.assertNotIn("sleep(", sample)
 
-    def test_protocol_125_and_bit24_are_reported_by_firmware_and_tool(self) -> None:
+    def test_current_protocol_and_bit24_are_reported_by_firmware_and_tool(self) -> None:
         config = (ROOT / "include" / "app_config.h").read_text(
             encoding="utf-8"
         )
@@ -60,13 +60,13 @@ class BasicEventHatsContractTests(unittest.TestCase):
         constants = (TOOLS_ROOT / "constants.py").read_text(encoding="utf-8")
         cli = (TOOLS_ROOT / "cli.py").read_text(encoding="utf-8")
 
-        self.assertIn("DEVICE_PROTOCOL_MINOR           25U", config)
+        self.assertIn("DEVICE_PROTOCOL_MINOR           26U", config)
         self.assertIn(
             "DEVICE_CAPABILITY_RUNTIME_BASIC_EVENT_HATS (1UL << 24U)",
             config,
         )
         self.assertIn("DEVICE_CAPABILITY_RUNTIME_BASIC_EVENT_HATS", protocol)
-        self.assertIn("DEVICE_PROTOCOL_MINOR = 25", constants)
+        self.assertIn("DEVICE_PROTOCOL_MINOR = 26", constants)
         self.assertIn("DEVICE_CAPABILITY_RUNTIME_BASIC_EVENT_HATS = 1 << 24", constants)
         self.assertIn('"runtime-basic-event-hats"', cli)
 

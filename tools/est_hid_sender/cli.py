@@ -18,6 +18,7 @@ from .constants import (
     DEVICE_CAPABILITY_INPUT_SENSOR,
     DEVICE_CAPABILITY_KEYS,
     DEVICE_CAPABILITY_MICROPYTHON,
+    DEVICE_CAPABILITY_MOTOR_STALL_DETECTION,
     DEVICE_CAPABILITY_PERSISTENT_PROGRAM,
     DEVICE_CAPABILITY_RUNTIME_TEMPERATURE,
     DEVICE_CAPABILITY_RUNTIME_BASIC_EVENT_HATS,
@@ -38,6 +39,18 @@ from .firmware import FirmwarePackage, compare_versions, load_firmware_package
 from .hid_transport import HidTransport
 from .logging_utils import UpgradeLog
 from .updater import FirmwareUpdater, PacketProgress
+
+
+def parse_flash_sector_address(value: str) -> int:
+    try:
+        address = int(value, 0)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("地址必须是十进制或 0x 开头的十六进制数") from exc
+    if not 0 <= address <= 0x01FFF000:
+        raise argparse.ArgumentTypeError("地址必须位于 32 MiB Flash 内")
+    if address & 0xFFF:
+        raise argparse.ArgumentTypeError("地址必须按 4 KiB 扇区对齐")
+    return address
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -146,6 +159,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
     flash_scan = commands.add_parser("flash-scan", help="只读检查安全测试扇区")
     add_device_options(flash_scan)
+    flash_scan.add_argument(
+        "--address",
+        type=parse_flash_sector_address,
+        help="可选的 4 KiB 对齐扇区地址，例如 0x01FCE000",
+    )
 
     flash_test = commands.add_parser(
         "flash-test", help="测试 32MB Flash 高地址读写并自动恢复"
@@ -682,6 +700,7 @@ DEVICE_CAPABILITY_NAMES = (
     (DEVICE_CAPABILITY_RUNTIME_TEMPERATURE, "runtime-temperature"),
     (DEVICE_CAPABILITY_COOPERATIVE_MULTITASK, "cooperative-multitask"),
     (DEVICE_CAPABILITY_RUNTIME_BASIC_EVENT_HATS, "runtime-basic-event-hats"),
+    (DEVICE_CAPABILITY_MOTOR_STALL_DETECTION, "motor-stall-detection"),
 )
 
 
@@ -749,7 +768,7 @@ def run_device_status(args: argparse.Namespace) -> int:
         print(f"uptime_ms={status.uptime_ms}", flush=True)
         print(f"pressed={format_pressed_keys(status.key_mask)}", flush=True)
         print(f"battery_level={status.battery_level}/4", flush=True)
-        print(f"battery_percent={min(status.battery_level, 4) * 25}", flush=True)
+        print(f"battery_percent={status.battery_percent}", flush=True)
         print(f"battery_adc_raw={status.battery_adc_raw}", flush=True)
         print(f"battery_sample_mv={status.battery_sample_mv}", flush=True)
         for index, motor in enumerate(status.motors[: status.motor_port_count]):
@@ -1182,7 +1201,7 @@ def run_flash_scan(args: argparse.Namespace) -> int:
         print(f"device={transport.path}", flush=True)
         updater = FirmwareUpdater(transport)
         print(f"current_version={updater.ping()}", flush=True)
-        result = updater.scan_flash_test_sector()
+        result = updater.scan_flash_test_sector(args.address)
         print_flash_scan(result)
     return 0
 

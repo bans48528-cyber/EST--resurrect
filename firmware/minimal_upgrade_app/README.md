@@ -73,7 +73,7 @@
 - 半帧中断后，如果主机停顿并从新帧头重发，接收器会自动丢弃残帧；设备回包使用 4 项 FIFO，避免前一 ACK 尚在 USB 总线上时丢掉重发响应。
 - 首帧确认 `APP=` 后擦除 Sector 8-11，写入完成后检查 MSP 和 Thumb Reset_Handler。
 - 最后擦除 Sector 3，按旧语义写入 `package_length - 1`，最后写升级状态 `0x0000`；最终 ACK 发出后拉低 `PE2/PB_CON` 关机，等待人工重新开机。这与 EST 3.0 官方 APP 行为一致，不使用未经验证的软件复位路径。
-- 打包器把最终升级文件填充为固定 256 KiB，满足旧 Bootloader 的长度限制。
+- 当前构建把升级文件填充为 320 KiB。M1.17A 实机已验证 320 KiB 包可以升级、启动，并能继续接收 256 KiB 基线包；旧 Bootloader 地址布局保持不变。
 - 每次构建自动检查 APP 地址、向量表、入口第一条关中断指令、USB VID/PID、1024 字节端点、HS HID/Qualifier 描述符、产品字符串、版本文本、`APP=` 包头、填充内容和 SHA-256 清单。
 - `make test` 还会读取 V5.0 当前引脚表，检查电源、LED、六个按键、LCD、背光、音频、外部 Flash、马达、四个输入口和 USB 的代码接线，并拒绝任何重复占用或与原理图不一致的修改。
 
@@ -108,7 +108,7 @@ $env:PATH='D:\AIMODU~1\AI_MOD~1\ARM_GC~1\bin;E:\Git\usr\bin;' + $env:PATH
 | --- | --- |
 | `build/est_minimal_upgrade_app.bin` | 原始 APP，仅供调试器写到 `0x08010000` |
 | `build/est_minimal_upgrade_app.app.bin` | `APP=` + 原始 APP，未填充参考包 |
-| `build/est_minimal_upgrade_app.upgrade.bin` | 256 KiB，交给旧上位机升级工具 |
+| `build/est_minimal_upgrade_app.upgrade.bin` | 320 KiB，交给升级工具 |
 | `build/est_minimal_upgrade_app.manifest.json` | 地址、长度和 SHA-256 检查信息 |
 
 不要把原始 `.bin` 交给旧升级工具；应选择 `.upgrade.bin`。该文件已经带 `APP=`，如果旧工具仍会自动添加文件头，需要先确认它的 `Firmware_check()` 不会重复添加。原工具识别到已有 `APP=` 时不会再添加。

@@ -69,8 +69,9 @@ class ZeroSpeedMotorControlTests(unittest.TestCase):
             board, "static void update_position_control_port", "static void update_position_control"
         )
 
-        self.assertIn("if (speed_percent == 0U)", start)
-        self.assertIn("control->timeout_ms = 0U;", start)
+        self.assertIn("speed_percent > 100U", start)
+        self.assertIn("control->requested_speed = degrees < 0", start)
+        self.assertNotIn("timeout_ms", start)
         zero_branch = update.split("if (control->requested_speed == 0)", 1)[1].split(
             "pair_owned = pair_position_owns_port(port);", 1
         )[0]
@@ -78,6 +79,7 @@ class ZeroSpeedMotorControlTests(unittest.TestCase):
         self.assertIn("return;", zero_branch)
         self.assertNotIn("finish_position_control", zero_branch)
         self.assertNotIn("motor_output_high_push_pull_stop", zero_branch)
+        self.assertNotIn("update_position_stall", zero_branch)
 
     def test_pair_zero_side_bypasses_sync_and_supports_live_retarget(self) -> None:
         board = (SOURCE_DIR / "board_motor.c").read_text(encoding="utf-8")

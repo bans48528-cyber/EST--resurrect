@@ -6,6 +6,7 @@
 #include <stdint.h>
 
 #include "board_lcd_text.h"
+#include "est_ui_font.h"
 
 #define BOARD_LCD_WIDTH 180U
 #define BOARD_LCD_HEIGHT 128U
@@ -24,6 +25,8 @@ bool board_lcd_draw_text(uint16_t x, uint16_t y,
 	const char *text, uint8_t scale);
 bool board_lcd_draw_text_style(uint16_t x, uint16_t y,
 	const char *text, board_lcd_text_style_t style);
+bool board_lcd_draw_ui_text(uint16_t x, uint16_t y,
+	const char *text, est_ui_text_style_t style);
 bool board_lcd_draw_bitmap(uint16_t x, uint16_t y,
 	uint16_t width, uint16_t height, const uint8_t *bitmap,
 	size_t bitmap_size);

@@ -9,6 +9,7 @@
 #include "board_lcd.h"
 #include "board_lcd_image.h"
 #include "board_lcd_text.h"
+#include "est_ui_font.h"
 #include "system_time.h"
 #include "watchdog.h"
 
@@ -397,6 +398,13 @@ bool board_lcd_draw_text_style(uint16_t x, uint16_t y,
 {
 	return board_lcd_text_draw_style(&framebuffer[0][0], LCD_WIDTH,
 		LCD_HEIGHT, x, y, text, style);
+}
+
+bool board_lcd_draw_ui_text(uint16_t x, uint16_t y,
+	const char *text, est_ui_text_style_t style)
+{
+	return est_ui_font_draw(&framebuffer[0][0], LCD_WIDTH, LCD_HEIGHT,
+		x, y, text, style);
 }
 
 bool board_lcd_draw_bitmap(uint16_t x, uint16_t y,

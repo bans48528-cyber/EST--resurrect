@@ -18,7 +18,6 @@
 
 #include "est_micropython.h"
 #include "est_buttons.h"
-#include "est_display.h"
 #include "est_motor.h"
 #include "est_runtime.h"
 #include "est_sensor.h"
@@ -240,10 +239,6 @@ void est_micropython_tick(void)
 	program_executing = true;
 	(void)est_motor_stop_all(EST_STOP_COAST);
 	reset_vm();
-	est_display_clear();
-	(void)est_display_text(45U, 60U, "Program Running", 1U);
-	est_display_refresh();
-
 	script_succeeded = execute_script((const char *)program_source,
 		program_status.expected_length);
 	finished_ms = est_system_millis();

@@ -299,10 +299,6 @@ est_result_t est_motor_get_status(est_motor_port_t port,
 			status->state = EST_MOTOR_POSITION;
 			status->target_speed_percent =
 				position.requested_speed_percent;
-		} else if (position.state == BOARD_MOTOR_POSITION_TIMEOUT &&
-		    status->state == EST_MOTOR_IDLE) {
-			status->state = EST_MOTOR_FAULT;
-			status->error = EST_ERR_TIMEOUT;
 		}
 	}
 	(void)board_motor_hold_snapshot_for_port(board_port, &hold);
@@ -312,4 +308,16 @@ est_result_t est_motor_get_status(est_motor_port_t port,
 		status->target_speed_percent = 0;
 	}
 	return EST_OK;
+}
+
+est_result_t est_motor_stalled(est_motor_port_t port, bool *stalled)
+{
+	if (!est_motor_port_valid(port)) {
+		return EST_ERR_INVALID_PORT;
+	}
+	if (stalled == NULL) {
+		return EST_ERR_INVALID_ARGUMENT;
+	}
+	return board_motor_position_stalled(board_port_from_est(port), stalled) ?
+		EST_OK : EST_ERR_IO;
 }
