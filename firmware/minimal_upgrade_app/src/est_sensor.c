@@ -241,7 +241,13 @@ est_result_t est_sensor_get_status(est_sensor_port_t port,
 	status->adc1_raw = snapshot.adc1_raw;
 	status->digital_mask = snapshot.digital_mask;
 	status->rx_count = snapshot.rx_count;
+	status->data_generation = snapshot.data_generation;
+	status->last_data_ms = snapshot.last_data_ms;
+	status->mode_command_count = snapshot.mode_command_count;
 	status->checksum_errors = snapshot.checksum_errors;
+	status->requested_mode = (est_sensor_mode_t)snapshot.requested_mode;
+	status->active_mode = (est_sensor_mode_t)snapshot.active_mode;
+	status->mode_pending = snapshot.mode_pending;
 	status->error = state_error(status->state);
 	return EST_OK;
 }

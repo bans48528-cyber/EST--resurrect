@@ -20,7 +20,13 @@ typedef struct {
 	uint16_t adc1_raw;
 	uint8_t digital_mask;
 	uint32_t rx_count;
+	uint32_t data_generation;
+	uint32_t last_data_ms;
+	uint32_t mode_command_count;
 	uint16_t checksum_errors;
+	est_sensor_mode_t requested_mode;
+	est_sensor_mode_t active_mode;
+	bool mode_pending;
 	est_result_t error;
 } est_sensor_status_t;
 

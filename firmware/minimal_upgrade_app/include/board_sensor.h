@@ -58,7 +58,12 @@ struct board_sensor_snapshot {
 	uint8_t digital_mask;
 	uint32_t rx_count;
 	uint32_t last_data_ms;
+	uint32_t data_generation;
+	uint32_t mode_command_count;
 	uint16_t checksum_errors;
+	uint8_t requested_mode;
+	uint8_t active_mode;
+	bool mode_pending;
 };
 
 void board_sensor_init(uint32_t now_ms);

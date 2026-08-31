@@ -139,6 +139,13 @@ def make_fake_est() -> types.ModuleType:
         def pressed(self):
             return True
 
+    class SoundSensor:
+        def __init__(self, port):
+            self.port = port
+
+        def db(self):
+            return 35
+
     class ColorSensor:
         def __init__(self, port):
             self.port = port
@@ -215,6 +222,7 @@ def make_fake_est() -> types.ModuleType:
     module.Motor = Motor
     module.DriveBase = DriveBase
     module.TouchSensor = TouchSensor
+    module.SoundSensor = SoundSensor
     module.ColorSensor = ColorSensor
     module.GyroSensor = GyroSensor
     module.TemperatureSensor = TemperatureSensor
@@ -517,11 +525,23 @@ class RuntimeHardwareTests(unittest.TestCase):
 
     def test_sensor_wrappers_and_cache(self) -> None:
         runtime, _ = load_runtime()
-        self.assertIs(runtime.color("3"), runtime.color("3"))
+        wrappers = (
+            runtime.color,
+            runtime.touch,
+            runtime.sound,
+            runtime.gyro,
+            runtime.temperature,
+            runtime.ultrasonic,
+            runtime.infrared,
+        )
+        for wrapper in wrappers:
+            self.assertIs(wrapper("3"), wrapper(3))
+        self.assertEqual(runtime.color("3").port, 3)
         self.assertEqual(runtime.color("3").reflection(), 42)
         self.assertTrue(runtime.touch("1").pressed())
+        self.assertEqual(runtime.sound("1").db(), 35)
         self.assertEqual(runtime.gyro("2").angle(), 90)
-        self.assertIs(runtime.temperature("2"), runtime.temperature("2"))
+        self.assertIs(runtime.temperature("2"), runtime.temperature(2))
         self.assertEqual(runtime.temperature("2").celsius(), 21.5)
         self.assertEqual(runtime.temperature("2").fahrenheit(), 70.7)
         self.assertEqual(runtime.ultrasonic("4").distance("centimeters"), 123.4)
@@ -530,6 +550,20 @@ class RuntimeHardwareTests(unittest.TestCase):
         self.assertEqual(runtime.infrared("4").beacon(), (-4, 22))
         with self.assertRaises(NotImplementedError):
             runtime.infrared("4").beacon_heading(1)
+        for invalid_port in (0, "0", 5, "5"):
+            with self.assertRaisesRegex(ValueError, "sensor port must be 1..4"):
+                runtime.color(invalid_port)
+
+    def test_motor_keeps_running_while_sensor_wrappers_read(self) -> None:
+        runtime, fake_est = load_runtime()
+        runtime.motor_set_speed("A", 30)
+        runtime.motor_start("A", "clockwise")
+        for _ in range(1200):
+            self.assertEqual(runtime.color(4).reflection(), 42)
+            self.assertEqual(
+                runtime.ultrasonic("3").distance("centimeters"), 123.4
+            )
+        self.assertNotIn(("motor.stop", "A", 0), fake_est.events)
 
     def test_display_image_for_draws_refreshes_and_waits(self) -> None:
         runtime, fake_est = load_runtime()

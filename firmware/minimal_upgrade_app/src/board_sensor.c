@@ -10,6 +10,7 @@
 #include <libopencm3/stm32/usart.h>
 
 #include "board_sensor.h"
+#include "board_sensor_mode.h"
 
 /* Verified V5 input port 1/A wiring. */
 #define SENSOR_A_ADC0_PORT GPIOF
@@ -106,6 +107,7 @@
 #define SENSOR_KEEPALIVE_INTERVAL_MS 100U
 #define SENSOR_STREAM_START_DELAY_MS 20U
 #define SENSOR_STREAM_TIMEOUT_MS 1300U
+#define SENSOR_STALE_RECOVERY_MS 300U
 #define SENSOR_SYNC_RESTART_MS 2500U
 #define SENSOR_RX_RING_SIZE 256U
 #define SENSOR_SOUND_CONNECT_SAMPLES 5U
@@ -176,13 +178,14 @@ struct sensor_runtime {
 	uint8_t rx_message[SENSOR_RX_MESSAGE_MAX];
 	uint8_t rx_message_length;
 	uint8_t rx_message_expected;
-	enum board_sensor_mode requested_mode;
+	struct board_sensor_mode_tracker mode_tracker;
 	uint32_t announced_baud;
 	uint32_t last_rx_ms;
 	uint32_t last_adc_ms;
 	uint32_t last_i2c_ms;
 	uint32_t last_keepalive_ms;
 	uint32_t stream_started_ms;
+	uint32_t stale_started_ms;
 	bool stream_commands_started;
 	bool received_type;
 	bool received_speed;
@@ -195,6 +198,19 @@ struct sensor_runtime {
 	bool touch_candidate_pressed;
 	bool i2c_path_enabled;
 };
+
+static void update_mode_snapshot(struct sensor_runtime *runtime)
+{
+	runtime->snapshot.mode = runtime->mode_tracker.active_mode;
+	runtime->snapshot.requested_mode = runtime->mode_tracker.requested_mode;
+	runtime->snapshot.active_mode = runtime->mode_tracker.active_mode;
+	runtime->snapshot.mode_pending = runtime->mode_tracker.pending;
+	runtime->snapshot.data_generation =
+		runtime->mode_tracker.data_generation;
+	runtime->snapshot.last_data_ms = runtime->mode_tracker.last_data_ms;
+	runtime->snapshot.mode_command_count =
+		runtime->mode_tracker.mode_command_count;
+}
 
 static const struct sensor_hardware sensor_hardware[BOARD_SENSOR_PORT_COUNT] = {
 	{
@@ -450,13 +466,17 @@ static bool temperature_read(enum board_sensor_port port, uint32_t now_ms)
 		((uint16_t)response[1] >> 4U);
 	signed_raw = (raw_value & 0x0800U) != 0U ?
 		(int16_t)(raw_value | 0xF000U) : (int16_t)raw_value;
-	if (runtime->snapshot.mode == BOARD_SENSOR_MODE_FAHRENHEIT) {
+	if (runtime->mode_tracker.requested_mode ==
+	    BOARD_SENSOR_MODE_FAHRENHEIT) {
 		tenths = ((int32_t)signed_raw * 18) / 16 + 320;
 	} else {
 		tenths = ((int32_t)signed_raw * 10) / 16;
 	}
 	runtime->snapshot.value = (uint16_t)(int16_t)tenths;
-	runtime->snapshot.value_valid = true;
+	runtime->snapshot.value_valid = board_sensor_mode_accept_data(
+		&runtime->mode_tracker, runtime->mode_tracker.requested_mode,
+		now_ms);
+	update_mode_snapshot(runtime);
 	runtime->snapshot.rx_count += sizeof(response);
 	runtime->last_rx_ms = now_ms;
 	return true;
@@ -476,7 +496,12 @@ static void enter_temperature_mode(enum board_sensor_port port,
 	runtime->rx_message_expected = 0U;
 	runtime->snapshot.state = BOARD_SENSOR_STREAMING;
 	runtime->snapshot.sensor_type = BOARD_SENSOR_TYPE_TEMPERATURE;
-	runtime->snapshot.mode = temperature_mode(runtime->requested_mode);
+	(void)board_sensor_mode_request(&runtime->mode_tracker,
+		temperature_mode((enum board_sensor_mode)
+			runtime->mode_tracker.requested_mode));
+	board_sensor_mode_reset_stream(&runtime->mode_tracker,
+		BOARD_SENSOR_MODE_CELSIUS);
+	update_mode_snapshot(runtime);
 	runtime->snapshot.value_valid = false;
 	runtime->temperature_failures = 0U;
 	runtime->i2c_path_enabled = true;
@@ -525,6 +550,19 @@ static void send_mode(enum board_sensor_port port,
 		(uint8_t)(SENSOR_SELECT_MODE ^ encoded_mode ^ 0xFFU));
 }
 
+static void send_pending_mode(enum board_sensor_port port)
+{
+	struct sensor_runtime *runtime = &sensor_runtime[(uint8_t)port];
+
+	if (!board_sensor_mode_command_needed(&runtime->mode_tracker)) {
+		return;
+	}
+	send_mode(port, (enum board_sensor_mode)
+		runtime->mode_tracker.requested_mode);
+	board_sensor_mode_mark_command_sent(&runtime->mode_tracker);
+	update_mode_snapshot(runtime);
+}
+
 static void start_sync(enum board_sensor_port port, uint32_t now_ms)
 {
 	struct sensor_runtime *runtime = &sensor_runtime[(uint8_t)port];
@@ -551,9 +589,11 @@ static void start_sync(enum board_sensor_port port, uint32_t now_ms)
 	runtime->touch_candidate_pressed = false;
 	runtime->temperature_failures = 0U;
 	runtime->i2c_path_enabled = false;
+	board_sensor_mode_reset_stream(&runtime->mode_tracker,
+		BOARD_SENSOR_MODE_REFLECTED);
+	update_mode_snapshot(runtime);
 	runtime->snapshot.state = BOARD_SENSOR_SYNCING;
 	runtime->snapshot.sensor_type = 0U;
-	runtime->snapshot.mode = (uint8_t)runtime->requested_mode;
 	runtime->snapshot.value_valid = false;
 	runtime->last_rx_ms = now_ms;
 	runtime->last_i2c_ms = now_ms - SENSOR_I2C_PROBE_INTERVAL_MS;
@@ -624,9 +664,15 @@ static void enter_sound_mode(enum board_sensor_port port)
 	runtime->rx_message_expected = 0U;
 	runtime->snapshot.state = BOARD_SENSOR_STREAMING;
 	runtime->snapshot.sensor_type = BOARD_SENSOR_TYPE_SOUND;
-	runtime->snapshot.mode = BOARD_SENSOR_MODE_SOUND_DB;
+	(void)board_sensor_mode_request(&runtime->mode_tracker,
+		BOARD_SENSOR_MODE_SOUND_DB);
+	board_sensor_mode_reset_stream(&runtime->mode_tracker,
+		BOARD_SENSOR_MODE_SOUND_DB);
 	runtime->snapshot.value = sound_level_from_adc(runtime->snapshot.adc0_raw);
-	runtime->snapshot.value_valid = true;
+	runtime->snapshot.value_valid = board_sensor_mode_accept_data(
+		&runtime->mode_tracker, BOARD_SENSOR_MODE_SOUND_DB,
+		runtime->last_adc_ms);
+	update_mode_snapshot(runtime);
 	runtime->sound_disconnect_samples = 0U;
 }
 
@@ -650,7 +696,9 @@ static void update_sound_detection(enum board_sensor_port port, uint32_t now_ms)
 		}
 		runtime->sound_disconnect_samples = 0U;
 		runtime->snapshot.value = sound_level_from_adc(runtime->snapshot.adc0_raw);
-		runtime->snapshot.value_valid = true;
+		runtime->snapshot.value_valid = board_sensor_mode_accept_data(
+			&runtime->mode_tracker, BOARD_SENSOR_MODE_SOUND_DB, now_ms);
+		update_mode_snapshot(runtime);
 		return;
 	}
 	if (runtime->snapshot.state == BOARD_SENSOR_STREAMING) {
@@ -707,7 +755,10 @@ static void update_touch_value(struct sensor_runtime *runtime)
 	}
 	if (runtime->touch_debounce_samples >= SENSOR_TOUCH_DEBOUNCE_SAMPLES) {
 		runtime->snapshot.value = pressed ? 1U : 0U;
-		runtime->snapshot.value_valid = true;
+		runtime->snapshot.value_valid = board_sensor_mode_accept_data(
+			&runtime->mode_tracker, BOARD_SENSOR_MODE_REFLECTED,
+			runtime->last_adc_ms);
+		update_mode_snapshot(runtime);
 	}
 }
 
@@ -724,7 +775,11 @@ static void enter_touch_mode(enum board_sensor_port port)
 	runtime->rx_message_expected = 0U;
 	runtime->snapshot.state = BOARD_SENSOR_STREAMING;
 	runtime->snapshot.sensor_type = BOARD_SENSOR_TYPE_TOUCH;
-	runtime->snapshot.mode = BOARD_SENSOR_MODE_REFLECTED;
+	(void)board_sensor_mode_request(&runtime->mode_tracker,
+		BOARD_SENSOR_MODE_REFLECTED);
+	board_sensor_mode_reset_stream(&runtime->mode_tracker,
+		BOARD_SENSOR_MODE_REFLECTED);
+	update_mode_snapshot(runtime);
 	runtime->snapshot.value_valid = false;
 	runtime->touch_disconnect_samples = 0U;
 	runtime->touch_debounce_samples = 0U;
@@ -795,7 +850,9 @@ static void enter_streaming(enum board_sensor_port port, uint32_t now_ms)
 	runtime->rx_message_length = 0U;
 	runtime->rx_message_expected = 0U;
 	runtime->snapshot.state = BOARD_SENSOR_STREAMING;
-	runtime->snapshot.mode = (uint8_t)runtime->requested_mode;
+	board_sensor_mode_reset_stream(&runtime->mode_tracker,
+		BOARD_SENSOR_MODE_REFLECTED);
+	update_mode_snapshot(runtime);
 	runtime->snapshot.value_valid = false;
 	runtime->stream_started_ms = now_ms;
 	runtime->last_keepalive_ms = now_ms;
@@ -828,8 +885,11 @@ static void handle_command_message(struct sensor_runtime *runtime,
 			runtime->rx_message[1] == BOARD_SENSOR_TYPE_GYRO ||
 			runtime->rx_message[1] == BOARD_SENSOR_TYPE_INFRARED;
 		if (runtime->snapshot.sensor_type == BOARD_SENSOR_TYPE_GYRO &&
-		    runtime->requested_mode > BOARD_SENSOR_MODE_GYRO_RATE) {
-			runtime->requested_mode = BOARD_SENSOR_MODE_GYRO_ANGLE;
+		    runtime->mode_tracker.requested_mode >
+			BOARD_SENSOR_MODE_GYRO_RATE) {
+			(void)board_sensor_mode_request(&runtime->mode_tracker,
+				BOARD_SENSOR_MODE_GYRO_ANGLE);
+			update_mode_snapshot(runtime);
 		}
 	} else if (command == SENSOR_COMMAND_SPEED && size == 4U) {
 		uint32_t baud = (uint32_t)runtime->rx_message[1] |
@@ -852,7 +912,8 @@ static void handle_data_message(struct sensor_runtime *runtime,
 	uint8_t index;
 	uint16_t value;
 
-	if (runtime->snapshot.state != BOARD_SENSOR_STREAMING || mode > 2U ||
+	if ((runtime->snapshot.state != BOARD_SENSOR_STREAMING &&
+	     runtime->snapshot.state != BOARD_SENSOR_STALE) || mode > 2U ||
 	    (runtime->snapshot.sensor_type == BOARD_SENSOR_TYPE_GYRO &&
 	     mode > BOARD_SENSOR_MODE_GYRO_RATE)) {
 		return;
@@ -861,15 +922,18 @@ static void handle_data_message(struct sensor_runtime *runtime,
 	if (size >= 2U) {
 		value |= (uint16_t)runtime->rx_message[2] << 8U;
 	}
-	runtime->snapshot.mode = mode;
 	runtime->snapshot.value = value;
 	runtime->snapshot.value_size = size < sizeof(runtime->snapshot.value_bytes) ?
 		size : (uint8_t)sizeof(runtime->snapshot.value_bytes);
 	for (index = 0U; index < runtime->snapshot.value_size; index++) {
 		runtime->snapshot.value_bytes[index] = runtime->rx_message[index + 1U];
 	}
-	runtime->snapshot.value_valid = true;
-	runtime->snapshot.last_data_ms = now_ms;
+	runtime->snapshot.value_valid = board_sensor_mode_accept_data(
+		&runtime->mode_tracker, mode, now_ms);
+	update_mode_snapshot(runtime);
+	if (runtime->snapshot.state == BOARD_SENSOR_STALE) {
+		runtime->snapshot.state = BOARD_SENSOR_STREAMING;
+	}
 	runtime->last_rx_ms = now_ms;
 }
 
@@ -998,7 +1062,8 @@ void board_sensor_init(uint32_t now_ms)
 			ADC_SMPR_SMP_144CYC);
 		adc_set_sample_time(hardware->adc1, hardware->adc1_channel,
 			ADC_SMPR_SMP_144CYC);
-		runtime->requested_mode = BOARD_SENSOR_MODE_REFLECTED;
+		board_sensor_mode_init(&runtime->mode_tracker,
+			BOARD_SENSOR_MODE_REFLECTED);
 		runtime->last_adc_ms = now_ms - SENSOR_ADC_SAMPLE_INTERVAL_MS;
 		start_sync(port, now_ms);
 		nvic_enable_irq(hardware->uart_irq);
@@ -1091,9 +1156,7 @@ static void tick_port(enum board_sensor_port port, uint32_t now_ms)
 		if (!runtime->stream_commands_started &&
 		    (uint32_t)(now_ms - runtime->stream_started_ms) >=
 			SENSOR_STREAM_START_DELAY_MS) {
-			if (runtime->requested_mode != BOARD_SENSOR_MODE_REFLECTED) {
-				send_mode(port, runtime->requested_mode);
-			}
+			send_pending_mode(port);
 			send_uart_byte(port, SENSOR_SYSTEM_NACK);
 			runtime->last_keepalive_ms = now_ms;
 			runtime->stream_commands_started = true;
@@ -1103,11 +1166,19 @@ static void tick_port(enum board_sensor_port port, uint32_t now_ms)
 			send_uart_byte(port, SENSOR_SYSTEM_NACK);
 			runtime->last_keepalive_ms = now_ms;
 		}
-		if ((uint32_t)(now_ms - runtime->last_rx_ms) >=
+		if ((uint32_t)(now_ms -
+		    (runtime->mode_tracker.last_data_ms == 0U ?
+		     runtime->stream_started_ms :
+		     runtime->mode_tracker.last_data_ms)) >=
 		    SENSOR_STREAM_TIMEOUT_MS) {
 			runtime->snapshot.state = BOARD_SENSOR_STALE;
-			start_sync(port, now_ms);
+			runtime->snapshot.value_valid = false;
+			runtime->stale_started_ms = now_ms;
 		}
+	} else if (runtime->snapshot.state == BOARD_SENSOR_STALE &&
+		   (uint32_t)(now_ms - runtime->stale_started_ms) >=
+			SENSOR_STALE_RECOVERY_MS) {
+		start_sync(port, now_ms);
 	} else if (runtime->snapshot.state == BOARD_SENSOR_SYNCING &&
 		   (uint32_t)(now_ms - runtime->last_rx_ms) >=
 			SENSOR_SYNC_RESTART_MS) {
@@ -1164,6 +1235,8 @@ bool board_sensor_set_mode(enum board_sensor_port port,
 	enum board_sensor_mode mode, uint32_t now_ms)
 {
 	struct sensor_runtime *runtime;
+	uint8_t normalized_mode;
+	bool changed;
 
 	if (!port_valid(port) || mode > BOARD_SENSOR_MODE_COLOR) {
 		return false;
@@ -1173,26 +1246,29 @@ bool board_sensor_set_mode(enum board_sensor_port port,
 	    mode > BOARD_SENSOR_MODE_GYRO_RATE) {
 		return false;
 	}
+	normalized_mode = runtime->snapshot.sensor_type ==
+		BOARD_SENSOR_TYPE_TEMPERATURE ? temperature_mode(mode) :
+		(uint8_t)mode;
+	changed = board_sensor_mode_request(&runtime->mode_tracker,
+		normalized_mode);
+	update_mode_snapshot(runtime);
+	if (!changed) {
+		return true;
+	}
+	runtime->snapshot.value_valid = false;
 	if (runtime->snapshot.sensor_type == BOARD_SENSOR_TYPE_TEMPERATURE &&
 	    runtime->snapshot.state == BOARD_SENSOR_STREAMING) {
-		runtime->requested_mode = (enum board_sensor_mode)
-			temperature_mode(mode);
-		runtime->snapshot.mode = (uint8_t)runtime->requested_mode;
-		runtime->snapshot.value_valid = false;
 		runtime->last_i2c_ms = now_ms - SENSOR_I2C_POLL_INTERVAL_MS;
 		return true;
 	}
-	runtime->requested_mode = mode;
 	if ((runtime->snapshot.sensor_type == BOARD_SENSOR_TYPE_TOUCH ||
 	     runtime->snapshot.sensor_type == BOARD_SENSOR_TYPE_SOUND) &&
 	    runtime->snapshot.state == BOARD_SENSOR_STREAMING) {
-		runtime->snapshot.mode = BOARD_SENSOR_MODE_REFLECTED;
 		return true;
 	}
-	runtime->snapshot.mode = (uint8_t)mode;
-	runtime->snapshot.value_valid = false;
-	if (runtime->snapshot.state == BOARD_SENSOR_STREAMING) {
-		send_mode(port, mode);
+	if (runtime->snapshot.state == BOARD_SENSOR_STREAMING &&
+	    runtime->stream_commands_started) {
+		send_pending_mode(port);
 		send_uart_byte(port, SENSOR_SYSTEM_NACK);
 		runtime->last_keepalive_ms = now_ms;
 	}

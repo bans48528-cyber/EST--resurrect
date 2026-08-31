@@ -177,6 +177,9 @@ def _degrees_for(amount, unit):
 
 
 def _sensor(key, constructor, port):
+    port = int(port)
+    if port < 1 or port > 4:
+        raise ValueError("sensor port must be 1..4")
     cache_key = key + str(port)
     if cache_key not in _sensors:
         _sensors[cache_key] = constructor(port)
@@ -853,6 +856,10 @@ def color(port):
 
 def touch(port):
     return _sensor("touch:", est.TouchSensor, port)
+
+
+def sound(port):
+    return _sensor("sound:", est.SoundSensor, port)
 
 
 def gyro(port):

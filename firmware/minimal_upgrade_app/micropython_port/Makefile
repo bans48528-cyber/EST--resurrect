@@ -17,6 +17,9 @@ INC += -I$(BUILD)
 ARCH_FLAGS = -mcpu=cortex-m4 -mthumb -mfloat-abi=hard -mfpu=fpv4-sp-d16
 CFLAGS += $(INC) $(ARCH_FLAGS) -std=c11 -Os -g3 -Wall -Werror
 CFLAGS += -ffunction-sections -fdata-sections -fno-common
+ifeq ($(SENSOR_DIAGNOSTICS),1)
+CFLAGS += -DMODEST_SENSOR_DIAGNOSTICS=1
+endif
 CSUPEROPT = -Os
 
 SRC_C = \

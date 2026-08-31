@@ -1,6 +1,10 @@
 #include <stdint.h>
 #include <string.h>
 
+#ifndef MODEST_SENSOR_DIAGNOSTICS
+#define MODEST_SENSOR_DIAGNOSTICS 0
+#endif
+
 #include "py/gc.h"
 #include "py/obj.h"
 #include "py/objstr.h"
@@ -16,6 +20,7 @@
 #include "est_motor.h"
 #include "est_runtime.h"
 #include "est_sensor.h"
+#include "est_sensor_wait.h"
 #include "est_system.h"
 
 static int32_t require_integer_range(mp_obj_t value, int32_t minimum,
@@ -1132,6 +1137,8 @@ typedef struct {
 	int32_t gyro_zero_degrees;
 } modest_sensor_instance_t;
 
+#define MODEST_SENSOR_VALUE_TIMEOUT_MS 3000U
+
 static void modest_raise_sensor_error(est_result_t error)
 {
 	switch (error) {
@@ -1185,14 +1192,39 @@ static void modest_sensor_read(mp_obj_t self_object,
 	modest_sensor_require_type(self, status);
 }
 
+static void modest_sensor_wait_for_type(modest_sensor_instance_t *self)
+{
+	est_sensor_status_t status = {0};
+	est_result_t result;
+	uint32_t started_ms = est_system_millis();
+
+	for (;;) {
+		result = est_sensor_get_status(self->port, &status);
+		if (result != EST_OK) {
+			modest_raise_sensor_error(result);
+		}
+		if (status.type == self->expected_type) {
+			return;
+		}
+		if (status.state != EST_SENSOR_SYNCING &&
+		    status.state != EST_SENSOR_STALE) {
+			modest_sensor_require_type(self, &status);
+		}
+		if ((uint32_t)(est_system_millis() - started_ms) >=
+		    MODEST_SENSOR_VALUE_TIMEOUT_MS) {
+			modest_raise_sensor_error(status.type == EST_SENSOR_TYPE_NONE ?
+				EST_ERR_NOT_CONNECTED : EST_ERR_TYPE_MISMATCH);
+		}
+		est_micropython_vm_hook();
+	}
+}
+
 static mp_obj_t modest_sensor_make_new_for_type(const mp_obj_type_t *type,
 	size_t argument_count, size_t keyword_count, const mp_obj_t *arguments,
 	est_sensor_type_t expected_type, bool type_constrained)
 {
 	int32_t port;
 	modest_sensor_instance_t *self;
-	est_sensor_status_t status = {0};
-	est_result_t result;
 
 	mp_arg_check_num(argument_count, keyword_count, 1U, 1U, false);
 	port = require_integer_range(arguments[0], 1, EST_SENSOR_PORT_COUNT,
@@ -1203,11 +1235,7 @@ static mp_obj_t modest_sensor_make_new_for_type(const mp_obj_type_t *type,
 	self->type_constrained = type_constrained;
 	self->gyro_zero_degrees = 0;
 	if (type_constrained) {
-		result = est_sensor_get_status(self->port, &status);
-		if (result != EST_OK) {
-			modest_raise_sensor_error(result);
-		}
-		modest_sensor_require_type(self, &status);
+		modest_sensor_wait_for_type(self);
 	}
 	return MP_OBJ_FROM_PTR(self);
 }
@@ -1365,8 +1393,56 @@ static mp_obj_t modest_sensor_status(mp_obj_t self_object)
 }
 static MP_DEFINE_CONST_FUN_OBJ_1(modest_sensor_status_obj, modest_sensor_status);
 
-#define MODEST_SENSOR_VALUE_TIMEOUT_MS 3000U
-#define MODEST_SENSOR_MODE_RETRY_MS 500U
+#if MODEST_SENSOR_DIAGNOSTICS
+enum {
+	MODEST_SENSOR_TRACE_CAPACITY = 8U,
+};
+
+typedef struct {
+	uint32_t sequence;
+	uint32_t captured_ms;
+	uint32_t rx_count;
+	uint32_t data_generation;
+	uint32_t last_data_ms;
+	uint32_t mode_command_count;
+	uint8_t port;
+	uint8_t type;
+	uint8_t requested_mode;
+	uint8_t active_mode;
+	uint8_t state;
+	uint8_t value_valid;
+	const char *reason;
+} modest_sensor_trace_record_t;
+
+volatile uint32_t modest_sensor_trace_sequence;
+volatile modest_sensor_trace_record_t
+	modest_sensor_trace_records[MODEST_SENSOR_TRACE_CAPACITY];
+
+static void modest_sensor_trace(est_sensor_port_t port,
+	const est_sensor_status_t *status, const char *reason)
+{
+	uint32_t sequence = modest_sensor_trace_sequence++;
+	volatile modest_sensor_trace_record_t *record =
+		&modest_sensor_trace_records[
+			sequence % MODEST_SENSOR_TRACE_CAPACITY];
+
+	record->sequence = sequence;
+	record->captured_ms = est_system_millis();
+	record->rx_count = status->rx_count;
+	record->data_generation = status->data_generation;
+	record->last_data_ms = status->last_data_ms;
+	record->mode_command_count = status->mode_command_count;
+	record->port = (uint8_t)port + 1U;
+	record->type = (uint8_t)status->type;
+	record->requested_mode = (uint8_t)status->requested_mode;
+	record->active_mode = (uint8_t)status->active_mode;
+	record->state = (uint8_t)status->state;
+	record->value_valid = status->value_valid ? 1U : 0U;
+	record->reason = reason;
+}
+#else
+#define modest_sensor_trace(port, status, reason) ((void)0)
+#endif
 
 static int32_t modest_sensor_wait_value(mp_obj_t self_object,
 	est_sensor_mode_t requested_mode)
@@ -1376,51 +1452,68 @@ static int32_t modest_sensor_wait_value(mp_obj_t self_object,
 	est_sensor_type_t expected_type = self->expected_type;
 	est_result_t result;
 	uint32_t started_ms = est_system_millis();
-	uint32_t last_request_ms = started_ms;
+	uint32_t request_generation = 0U;
 	bool mode_requested = false;
+	bool require_new_generation = false;
+	est_sensor_wait_decision_t decision;
 
 	result = est_sensor_get_status(self->port, &status);
 	if (result != EST_OK) {
 		modest_raise_sensor_error(result);
 	}
-	if (!self->type_constrained) {
-		if (status.state == EST_SENSOR_SYNCING) {
-			modest_raise_sensor_error(EST_ERR_BUSY);
-		}
-		if (status.type == EST_SENSOR_TYPE_NONE) {
-			modest_raise_sensor_error(EST_ERR_NOT_CONNECTED);
-		}
+	if (!self->type_constrained && status.type != EST_SENSOR_TYPE_NONE &&
+	    status.type != EST_SENSOR_TYPE_UNKNOWN) {
 		expected_type = status.type;
 	}
+	modest_sensor_trace(self->port, &status, "initial");
 	for (;;) {
+		if (!self->type_constrained &&
+		    expected_type == EST_SENSOR_TYPE_UNKNOWN &&
+		    status.type != EST_SENSOR_TYPE_NONE &&
+		    status.type != EST_SENSOR_TYPE_UNKNOWN) {
+			expected_type = status.type;
+		}
+		decision = est_sensor_wait_decide(&status, expected_type,
+			requested_mode, request_generation, require_new_generation);
+		if (decision == EST_SENSOR_WAIT_READY) {
+			modest_sensor_trace(self->port, &status, "complete");
+			return status.value;
+		}
 		if (status.type == expected_type) {
-			uint32_t now_ms = est_system_millis();
-
-			if ((status.mode != requested_mode || !status.value_valid) &&
-			    (!mode_requested ||
-			     (uint32_t)(now_ms - last_request_ms) >=
-				MODEST_SENSOR_MODE_RETRY_MS)) {
+			if (!mode_requested) {
+				request_generation = status.data_generation;
 				result = est_sensor_set_mode(self->port, requested_mode);
 				if (result != EST_OK) {
+					modest_sensor_trace(self->port, &status,
+						"mode-request-failed");
 					modest_raise_sensor_error(result);
 				}
 				mode_requested = true;
-				last_request_ms = now_ms;
-			} else if (status.state == EST_SENSOR_STREAMING &&
-			    status.mode == requested_mode && status.value_valid &&
-			    status.error == EST_OK) {
-				return status.value;
+				require_new_generation = true;
+				result = est_sensor_get_status(self->port, &status);
+				if (result != EST_OK) {
+					modest_raise_sensor_error(result);
+				}
+				modest_sensor_trace(self->port, &status, "mode-requested");
 			}
-		} else if (status.state != EST_SENSOR_SYNCING) {
-			if (status.type == EST_SENSOR_TYPE_NONE) {
-				modest_raise_sensor_error(EST_ERR_NOT_CONNECTED);
-			}
+		} else if (decision == EST_SENSOR_WAIT_DISCONNECTED) {
+			modest_sensor_trace(self->port, &status, "disconnected");
+			modest_raise_sensor_error(EST_ERR_NOT_CONNECTED);
+		} else if (decision == EST_SENSOR_WAIT_TYPE_MISMATCH) {
+			modest_sensor_trace(self->port, &status, "type-mismatch");
 			modest_raise_sensor_error(EST_ERR_TYPE_MISMATCH);
 		}
 		if ((uint32_t)(est_system_millis() - started_ms) >=
 		    MODEST_SENSOR_VALUE_TIMEOUT_MS) {
+			est_result_t timeout_error = est_sensor_wait_timeout_error(
+				&status, expected_type);
+
+			modest_sensor_trace(self->port, &status, "recovery-timeout");
+			if (timeout_error != EST_ERR_TIMEOUT) {
+				modest_raise_sensor_error(timeout_error);
+			}
 			mp_raise_msg(&mp_type_RuntimeError,
-				MP_ERROR_TEXT("sensor mode timeout"));
+				MP_ERROR_TEXT("sensor recovery timeout"));
 		}
 		est_micropython_vm_hook();
 		result = est_sensor_get_status(self->port, &status);

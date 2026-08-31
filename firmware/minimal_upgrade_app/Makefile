@@ -21,6 +21,9 @@ CPPFLAGS := -DSTM32F4 -Iinclude -I$(OPENCM3_DIR)/include \
 ifeq ($(DIAGNOSTIC_SKIP_LCD_STARTUP),1)
 CPPFLAGS += -DDIAGNOSTIC_SKIP_LCD_STARTUP=1
 endif
+ifeq ($(SENSOR_DIAGNOSTICS),1)
+CPPFLAGS += -DMODEST_SENSOR_DIAGNOSTICS=1
+endif
 CFLAGS := $(ARCH_FLAGS) -std=c11 -Os -g3 -Wall -Wextra -Werror \
 	-Wshadow -Wundef -Wstrict-prototypes -Wmissing-prototypes \
 	-ffunction-sections -fdata-sections -fno-common
@@ -104,7 +107,8 @@ micropython-lib:
 		(echo "MicroPython submodule missing; run git submodule update --init" && false)
 	$(MAKE) -C $(MICROPYTHON_PORT_DIR) \
 		TOP=../$(MICROPYTHON_DIR) BUILD=../$(BUILD_DIR)/micropython \
-		CROSS_COMPILE=$(PREFIX)- PYTHON=$(PYTHON) SHELL=$(SHELL)
+		CROSS_COMPILE=$(PREFIX)- PYTHON=$(PYTHON) SHELL=$(SHELL) \
+		SENSOR_DIAGNOSTICS=$(SENSOR_DIAGNOSTICS)
 
 test:
 	$(PYTHON) -m unittest discover -s tests -v
