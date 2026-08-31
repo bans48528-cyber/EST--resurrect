@@ -564,7 +564,7 @@ static void draw_remote_header(const est_ui_state_t *state,
 	const est_ui_view_t *view)
 {
 	char battery[10] = "BAT --";
-	const char *group = state->remote_group == 0U ? "1/2" : "3/4";
+	const char *channel = "CH1";
 	uint16_t battery_width;
 
 	(void)est_ui_text_draw(3U, 1U, state->language,
@@ -580,8 +580,8 @@ static void draw_remote_header(const est_ui_state_t *state,
 	}
 	battery_width = est_ui_font_measure(battery, EST_UI_TEXT_COMPACT);
 	(void)est_ui_text_draw_raw((uint16_t)(BOARD_LCD_WIDTH - battery_width -
-		est_ui_font_measure(group, EST_UI_TEXT_COMPACT) - 12U), 1U,
-		group, EST_UI_TEXT_COMPACT);
+		est_ui_font_measure(channel, EST_UI_TEXT_COMPACT) - 12U), 1U,
+		channel, EST_UI_TEXT_COMPACT);
 	(void)est_ui_text_draw_raw((uint16_t)(BOARD_LCD_WIDTH - battery_width - 3U),
 		1U, battery, view->battery_low ? EST_UI_TEXT_COMPACT_INVERSE :
 		EST_UI_TEXT_COMPACT);
@@ -600,9 +600,10 @@ static void draw_remote_row(uint16_t y, const char *label, const char *value)
 static void draw_remote(const est_ui_state_t *state,
 	const est_ui_view_t *view)
 {
-	char channel0[4] = {'C', 'H', state->remote_group == 0U ? '1' : '3', '\0'};
-	char channel1[4] = {'C', 'H', state->remote_group == 0U ? '2' : '4', '\0'};
-	const char *next_group = state->remote_group == 0U ? "3/4" : "1/2";
+	const char *motor_group = state->remote_motor_group == 0U ? "B / C" :
+		"A / D";
+	const char *next_group = state->remote_motor_group == 0U ? "A / D" :
+		"B / C";
 
 	draw_remote_header(state, view);
 	if (view->remote_fault != EST_UI_REMOTE_FAULT_NONE) {
@@ -621,10 +622,9 @@ static void draw_remote(const est_ui_state_t *state,
 	} else {
 		draw_remote_row(25U, "IR 4", est_ui_text(state->language,
 			EST_UI_STRING_CONNECTED));
-		draw_remote_row(42U, channel0, "B / C");
-		draw_remote_row(59U, channel1, "A / D");
-		draw_remote_row(76U, "PWR", "100%");
-		draw_remote_row(93U, "STOP", est_ui_text(state->language,
+		draw_remote_row(42U, "CH1", motor_group);
+		draw_remote_row(65U, "PWR", "100%");
+		draw_remote_row(88U, "STOP", est_ui_text(state->language,
 			EST_UI_STRING_BRAKING));
 	}
 	draw_raw_right(112U, next_group, EST_UI_TEXT_COMPACT);

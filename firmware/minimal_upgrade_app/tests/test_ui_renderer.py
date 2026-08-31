@@ -56,7 +56,7 @@ class UiRendererTests(unittest.TestCase):
                 uint8_t program_count;
                 uint8_t delete_choice;
                 uint8_t port_item;
-                uint8_t remote_group;
+                uint8_t remote_motor_group;
                 uint8_t motor_output_power_index;
                 est_ui_motor_output_state_t motor_output_states[4];
                 uint8_t backlight_percent;
@@ -75,8 +75,8 @@ class UiRendererTests(unittest.TestCase):
                 int programs_state;
                 uint16_t programs_error_code;
                 est_ui_ports_view_t ports;
-                uint8_t remote_group;
-                uint8_t remote_codes[2];
+                uint8_t remote_motor_group;
+                uint8_t remote_code;
                 uint8_t remote_fault;
                 _Bool remote_output_enabled;
                 _Bool transfer_active;
@@ -309,7 +309,7 @@ class UiRendererTests(unittest.TestCase):
         self.assertGreater(self.count_pixels(134, 23, 44, 55), 1300)
 
         state.page = 6
-        state.remote_group = 1
+        state.remote_motor_group = 1
         view.remote_fault = 2
         self.renderer.est_ui_renderer_render(state, view)
         self.assertGreater(self.count_pixels(0, 19, 180, 100), 100)

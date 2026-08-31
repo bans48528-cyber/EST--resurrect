@@ -2492,6 +2492,9 @@ bool board_motor_connection_present(enum board_motor_port port,
 	bool *connected)
 {
 	const struct motor_port_config *config;
+	int16_t power;
+	uint32_t drive_compare = MOTOR_PWM_OFF_COMPARE;
+	bool drive_paused = false;
 	uint16_t raw;
 	uint16_t millivolts;
 
@@ -2499,7 +2502,22 @@ bool board_motor_connection_present(enum board_motor_port port,
 		return false;
 	}
 	config = motor_config(port);
+	power = output_power[(uint8_t)port];
+	if (output_state[(uint8_t)port] == BOARD_MOTOR_OUTPUT_DRIVE &&
+	    power != 0) {
+		int16_t magnitude = power < 0 ? -power : power;
+
+		drive_compare = 100U - (uint32_t)magnitude;
+		timer_set_oc_value(TIM4, config->pwm_channel,
+			MOTOR_PWM_OFF_COMPARE);
+		timer_generate_event(TIM4, TIM_EGR_UG);
+		drive_paused = true;
+	}
 	raw = read_motor_id_adc(config);
+	if (drive_paused) {
+		timer_set_oc_value(TIM4, config->pwm_channel, drive_compare);
+		timer_generate_event(TIM4, TIM_EGR_UG);
+	}
 	millivolts = (uint16_t)(((uint32_t)raw * MOTOR_ID_SCALE_MV) /
 		MOTOR_ID_ADC_FULL_SCALE);
 	*connected = motor_type_from_mv(millivolts) != BOARD_MOTOR_TYPE_NONE;

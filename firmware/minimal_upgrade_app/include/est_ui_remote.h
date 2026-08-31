@@ -12,17 +12,17 @@ typedef enum {
 } est_ui_remote_fault_t;
 
 typedef struct {
-	uint8_t group;
-	uint8_t codes[2];
+	uint8_t motor_group;
+	uint8_t code;
 	est_ui_remote_fault_t fault;
 	bool output_enabled;
 } est_ui_remote_view_t;
 
 void est_ui_remote_init(void);
-void est_ui_remote_enter(uint32_t now_ms, uint8_t group);
-void est_ui_remote_switch_group(uint32_t now_ms, uint8_t group);
+void est_ui_remote_enter(uint32_t now_ms, uint8_t motor_group);
+void est_ui_remote_switch_motor_group(uint32_t now_ms, uint8_t motor_group);
 void est_ui_remote_leave(void);
-void est_ui_remote_tick(uint32_t now_ms, uint8_t group,
+void est_ui_remote_tick(uint32_t now_ms, uint8_t motor_group,
 	est_ui_remote_view_t *view);
 
 #endif

@@ -21,8 +21,8 @@ class UiRemoteTests(unittest.TestCase):
         cls.ffi.cdef(
             """
             typedef struct {
-                uint8_t group;
-                uint8_t codes[2];
+                uint8_t motor_group;
+                uint8_t code;
                 int fault;
                 _Bool output_enabled;
             } est_ui_remote_view_t;
@@ -30,11 +30,12 @@ class UiRemoteTests(unittest.TestCase):
             void fake_sensor(uint8_t, uint8_t, uint8_t, _Bool,
                 uint8_t, uint32_t, const uint8_t *);
             void fake_motor_connected(uint8_t, _Bool);
+            void fake_motor_fail(uint8_t);
             int8_t fake_motor_power(uint8_t);
             uint32_t fake_brake_all_count(void);
             void est_ui_remote_init(void);
             void est_ui_remote_enter(uint32_t, uint8_t);
-            void est_ui_remote_switch_group(uint32_t, uint8_t);
+            void est_ui_remote_switch_motor_group(uint32_t, uint8_t);
             void est_ui_remote_leave(void);
             void est_ui_remote_tick(uint32_t, uint8_t, est_ui_remote_view_t *);
             """
@@ -55,6 +56,7 @@ class UiRemoteTests(unittest.TestCase):
             static enum board_motor_type fake_types[4];
             static int8_t fake_power[4];
             static uint32_t fake_brake_count;
+            static uint8_t fake_fail_port;
 
             void fake_reset(void) {{
                 uint8_t index;
@@ -65,6 +67,7 @@ class UiRemoteTests(unittest.TestCase):
                     fake_power[index] = 0;
                 }}
                 fake_brake_count = 0U;
+                fake_fail_port = 0xFFU;
             }}
             void fake_sensor(uint8_t state, uint8_t type, uint8_t mode,
                 bool valid, uint8_t size, uint32_t last_data,
@@ -81,6 +84,7 @@ class UiRemoteTests(unittest.TestCase):
                 fake_types[port] = connected ? BOARD_MOTOR_TYPE_LARGE :
                     BOARD_MOTOR_TYPE_NONE;
             }}
+            void fake_motor_fail(uint8_t port) {{ fake_fail_port = port; }}
             int8_t fake_motor_power(uint8_t port) {{ return fake_power[port]; }}
             uint32_t fake_brake_all_count(void) {{ return fake_brake_count; }}
 
@@ -124,6 +128,7 @@ class UiRemoteTests(unittest.TestCase):
             }}
             est_result_t est_motor_set_power(est_motor_port_t port,
                 int8_t power) {{
+                if ((uint8_t)port == fake_fail_port) return EST_ERR_STATE;
                 if (fake_types[(uint8_t)port] == BOARD_MOTOR_TYPE_NONE)
                     return EST_ERR_NOT_CONNECTED;
                 fake_power[(uint8_t)port] = power;
@@ -146,25 +151,87 @@ class UiRemoteTests(unittest.TestCase):
         values = self.ffi.new("uint8_t[4]", codes)
         self.remote.fake_sensor(2, 0x21, 2, True, 4, last_data, values)
 
-    def test_group_mapping_switch_and_leave_always_brake(self) -> None:
+    def test_channel_one_controls_bc_then_ad_and_switch_brakes(self) -> None:
         self.remote.est_ui_remote_enter(100, 0)
         self.assertEqual(self.remote.fake_brake_all_count(), 1)
-        self.set_remote([5, 0, 0, 0])
+        self.set_remote([5, 8, 8, 8])
         view = self.view()
         self.remote.est_ui_remote_tick(110, 0, view)
         self.assertEqual(view.fault, 0)
+        self.assertEqual(view.motor_group, 0)
+        self.assertEqual(view.code, 5)
         self.assertTrue(view.output_enabled)
         self.assertEqual(self.remote.fake_motor_power(1), 100)
         self.assertEqual(self.remote.fake_motor_power(2), 100)
+        self.assertEqual(self.remote.fake_motor_power(0), 0)
+        self.assertEqual(self.remote.fake_motor_power(3), 0)
 
-        self.remote.est_ui_remote_switch_group(120, 1)
+        self.remote.est_ui_remote_switch_motor_group(120, 1)
         self.assertEqual(self.remote.fake_brake_all_count(), 2)
-        self.set_remote([0, 0, 8, 0], last_data=120)
+        for port in range(4):
+            self.assertEqual(self.remote.fake_motor_power(port), 0)
+        self.set_remote([8, 5, 5, 5], last_data=120)
         self.remote.est_ui_remote_tick(130, 1, view)
-        self.assertEqual(self.remote.fake_motor_power(1), -100)
-        self.assertEqual(self.remote.fake_motor_power(2), -100)
+        self.assertEqual(view.motor_group, 1)
+        self.assertEqual(view.code, 8)
+        self.assertEqual(self.remote.fake_motor_power(0), -100)
+        self.assertEqual(self.remote.fake_motor_power(3), -100)
+        self.assertEqual(self.remote.fake_motor_power(1), 0)
+        self.assertEqual(self.remote.fake_motor_power(2), 0)
         self.remote.est_ui_remote_leave()
         self.assertEqual(self.remote.fake_brake_all_count(), 3)
+        self.remote.est_ui_remote_tick(140, 1, view)
+        self.assertEqual(view.code, 0)
+        for port in range(4):
+            self.assertEqual(self.remote.fake_motor_power(port), 0)
+
+    def test_channels_two_through_four_are_ignored(self) -> None:
+        view = self.view()
+        self.remote.est_ui_remote_enter(100, 0)
+        self.set_remote([0, 5, 6, 7])
+        self.remote.est_ui_remote_tick(110, 0, view)
+        self.assertEqual(view.fault, 0)
+        self.assertFalse(view.output_enabled)
+        for port in range(4):
+            self.assertEqual(self.remote.fake_motor_power(port), 0)
+
+        self.remote.est_ui_remote_switch_motor_group(120, 1)
+        self.set_remote([0, 8, 8, 8], last_data=120)
+        self.remote.est_ui_remote_tick(130, 1, view)
+        self.assertFalse(view.output_enabled)
+        for port in range(4):
+            self.assertEqual(self.remote.fake_motor_power(port), 0)
+
+    def test_short_zero_gap_does_not_interrupt_held_command(self) -> None:
+        view = self.view()
+        self.remote.est_ui_remote_enter(100, 0)
+        self.set_remote([5, 0, 0, 0])
+        self.remote.est_ui_remote_tick(110, 0, view)
+        self.assertEqual(self.remote.fake_motor_power(1), 100)
+        self.assertEqual(self.remote.fake_motor_power(2), 100)
+
+        self.set_remote([0, 0, 0, 0], last_data=120)
+        self.remote.est_ui_remote_tick(120, 0, view)
+        self.remote.est_ui_remote_tick(400, 0, view)
+        self.assertTrue(view.output_enabled)
+        self.assertEqual(view.code, 5)
+        self.set_remote([5, 0, 0, 0], last_data=410)
+        self.remote.est_ui_remote_tick(410, 0, view)
+        self.assertEqual(self.remote.fake_brake_all_count(), 1)
+        self.assertEqual(self.remote.fake_motor_power(1), 100)
+
+    def test_sustained_zero_code_brakes_after_release_window(self) -> None:
+        view = self.view()
+        self.remote.est_ui_remote_enter(100, 0)
+        self.set_remote([1, 0, 0, 0])
+        self.remote.est_ui_remote_tick(110, 0, view)
+        self.set_remote([0, 0, 0, 0], last_data=120)
+        self.remote.est_ui_remote_tick(120, 0, view)
+        self.remote.est_ui_remote_tick(469, 0, view)
+        self.assertEqual(self.remote.fake_motor_power(1), 100)
+        self.remote.est_ui_remote_tick(470, 0, view)
+        self.assertFalse(view.output_enabled)
+        self.assertEqual(view.code, 0)
         self.assertEqual(self.remote.fake_motor_power(1), 0)
 
     def test_missing_ir_timeout_and_disconnect_are_safe_faults(self) -> None:
@@ -178,6 +245,7 @@ class UiRemoteTests(unittest.TestCase):
         self.assertEqual(view.fault, 0)
         self.remote.est_ui_remote_tick(600, 0, view)
         self.assertEqual(view.fault, 2)
+        self.assertEqual(view.code, 0)
         self.assertEqual(self.remote.fake_motor_power(1), 0)
 
         self.set_remote([1, 0, 0, 0], last_data=610)
@@ -186,7 +254,7 @@ class UiRemoteTests(unittest.TestCase):
         self.remote.est_ui_remote_tick(630, 0, view)
         self.assertEqual(view.fault, 3)
 
-    def test_commanded_motor_disconnect_brakes_all(self) -> None:
+    def test_controlled_group_motor_disconnect_brakes_all(self) -> None:
         view = self.view()
         self.remote.est_ui_remote_enter(100, 0)
         self.set_remote([1, 0, 0, 0])
@@ -197,10 +265,90 @@ class UiRemoteTests(unittest.TestCase):
         self.remote.fake_motor_connected(1, False)
         self.set_remote([1, 0, 0, 0], last_data=120)
         self.remote.est_ui_remote_tick(120, 0, view)
+        self.assertEqual(view.fault, 0)
+        self.remote.est_ui_remote_tick(140, 0, view)
+        self.assertEqual(view.fault, 0)
+        self.remote.est_ui_remote_tick(160, 0, view)
+        self.assertEqual(view.fault, 0)
+        self.remote.est_ui_remote_tick(180, 0, view)
         self.assertEqual(view.fault, 3)
         self.assertFalse(view.output_enabled)
         for port in range(4):
             self.assertEqual(self.remote.fake_motor_power(port), 0)
+
+    def test_idle_controlled_group_still_requires_both_motors(self) -> None:
+        view = self.view()
+        self.remote.est_ui_remote_enter(100, 0)
+        self.remote.fake_motor_connected(2, False)
+        self.set_remote([0, 0, 0, 0])
+        self.remote.est_ui_remote_tick(110, 0, view)
+        self.assertEqual(view.fault, 3)
+        self.assertFalse(view.output_enabled)
+
+    def test_single_running_connection_glitch_does_not_pulse_output(self) -> None:
+        view = self.view()
+        self.remote.est_ui_remote_enter(100, 0)
+        self.set_remote([1, 0, 0, 0])
+        self.remote.est_ui_remote_tick(110, 0, view)
+        self.assertEqual(self.remote.fake_motor_power(1), 100)
+
+        self.remote.fake_motor_connected(1, False)
+        self.remote.est_ui_remote_tick(130, 0, view)
+        self.assertEqual(view.fault, 0)
+        self.assertEqual(self.remote.fake_motor_power(1), 100)
+        self.remote.fake_motor_connected(1, True)
+        self.remote.est_ui_remote_tick(150, 0, view)
+        self.assertEqual(view.fault, 0)
+        self.assertEqual(self.remote.fake_motor_power(1), 100)
+        self.assertEqual(self.remote.fake_brake_all_count(), 1)
+
+    def test_motor_command_error_brakes_all_and_clears_code(self) -> None:
+        view = self.view()
+        self.remote.est_ui_remote_enter(100, 0)
+        self.remote.fake_motor_fail(2)
+        self.set_remote([5, 0, 0, 0])
+        self.remote.est_ui_remote_tick(110, 0, view)
+        self.assertEqual(view.fault, 3)
+        self.assertEqual(view.code, 0)
+        self.assertFalse(view.output_enabled)
+        for port in range(4):
+            self.assertEqual(self.remote.fake_motor_power(port), 0)
+
+    def test_channel_one_contract_and_native_remote_low_byte(self) -> None:
+        remote_source = (ROOT / "src" / "est_ui_remote.c").read_text(
+            encoding="utf-8"
+        )
+        renderer = (ROOT / "src" / "est_ui_renderer.c").read_text(
+            encoding="utf-8"
+        )
+        native_module = (ROOT / "micropython_port" / "modest.c").read_text(
+            encoding="utf-8"
+        )
+        board_motor = (ROOT / "src" / "board_motor.c").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("code = sensor.value_bytes[0];", remote_source)
+        for index in range(1, 4):
+            self.assertNotIn(f"sensor.value_bytes[{index}]", remote_source)
+        for obsolete in ('"1/2"', '"3/4"', '"CH2"', '"CH3"', '"CH4"'):
+            self.assertNotIn(obsolete, renderer)
+        remote_method = native_module[
+            native_module.index("static mp_obj_t modest_infrared_remote") :
+            native_module.index(
+                "static MP_DEFINE_CONST_FUN_OBJ_1(\n"
+                "\tmodest_infrared_remote_obj",
+                native_module.index("static mp_obj_t modest_infrared_remote"),
+            )
+        ]
+        self.assertIn("EST_SENSOR_MODE_IR_REMOTE", remote_method)
+        self.assertIn("value & 0xFFU", remote_method)
+        connection_probe = board_motor[
+            board_motor.index("bool board_motor_connection_present") :
+            board_motor.index("bool board_motor_refresh_identification")
+        ]
+        self.assertIn("MOTOR_PWM_OFF_COMPARE", connection_probe)
+        self.assertEqual(connection_probe.count("timer_generate_event"), 2)
 
 
 if __name__ == "__main__":

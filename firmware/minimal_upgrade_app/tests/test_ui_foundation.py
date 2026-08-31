@@ -286,7 +286,7 @@ class UiStateTests(unittest.TestCase):
     ACTION_SAVE_SETTINGS = 10
     ACTION_CYCLE_SENSOR_MODE = 12
     ACTION_ENTER_REMOTE = 13
-    ACTION_SWITCH_REMOTE_GROUP = 14
+    ACTION_SWITCH_REMOTE_MOTOR_GROUP = 14
     ACTION_EXIT_REMOTE = 15
     ACTION_ENTER_MOTOR_OUTPUT = 16
     ACTION_UPDATE_MOTOR_OUTPUT = 17
@@ -313,7 +313,7 @@ class UiStateTests(unittest.TestCase):
                 uint8_t program_count;
                 uint8_t delete_choice;
                 uint8_t port_item;
-                uint8_t remote_group;
+                uint8_t remote_motor_group;
                 uint8_t motor_output_power_index;
                 est_ui_motor_output_state_t motor_output_states[4];
                 uint8_t backlight_percent;
@@ -446,9 +446,9 @@ class UiStateTests(unittest.TestCase):
         self.assertEqual(state.page, self.REMOTE)
         self.assertEqual(
             self.state_api.est_ui_state_handle_short(state, self.CONFIRM),
-            self.ACTION_SWITCH_REMOTE_GROUP,
+            self.ACTION_SWITCH_REMOTE_MOTOR_GROUP,
         )
-        self.assertEqual(state.remote_group, 1)
+        self.assertEqual(state.remote_motor_group, 1)
         self.assertEqual(
             self.state_api.est_ui_state_handle_short(state, self.BACK),
             self.ACTION_EXIT_REMOTE,

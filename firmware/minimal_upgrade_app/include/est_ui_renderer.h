@@ -25,8 +25,8 @@ typedef struct {
 	est_ui_view_programs_state_t programs_state;
 	uint16_t programs_error_code;
 	est_ui_ports_view_t ports;
-	uint8_t remote_group;
-	uint8_t remote_codes[2];
+	uint8_t remote_motor_group;
+	uint8_t remote_code;
 	uint8_t remote_fault;
 	bool remote_output_enabled;
 	bool transfer_active;

@@ -257,10 +257,11 @@ static void handle_action(est_ui_action_t action)
 		}
 		break;
 	case EST_UI_ACTION_ENTER_REMOTE:
-		est_ui_remote_enter(ui_now_ms, ui_state.remote_group);
+		est_ui_remote_enter(ui_now_ms, ui_state.remote_motor_group);
 		break;
-	case EST_UI_ACTION_SWITCH_REMOTE_GROUP:
-		est_ui_remote_switch_group(ui_now_ms, ui_state.remote_group);
+	case EST_UI_ACTION_SWITCH_REMOTE_MOTOR_GROUP:
+		est_ui_remote_switch_motor_group(ui_now_ms,
+			ui_state.remote_motor_group);
 		break;
 	case EST_UI_ACTION_EXIT_REMOTE:
 		est_ui_remote_leave();
@@ -335,15 +336,13 @@ static void update_remote_state(void)
 	if (ui_state.page != EST_UI_PAGE_REMOTE) {
 		return;
 	}
-	est_ui_remote_tick(ui_now_ms, ui_state.remote_group, &remote);
-	if (ui_view.remote_group != remote.group ||
-	    ui_view.remote_codes[0] != remote.codes[0] ||
-	    ui_view.remote_codes[1] != remote.codes[1] ||
+	est_ui_remote_tick(ui_now_ms, ui_state.remote_motor_group, &remote);
+	if (ui_view.remote_motor_group != remote.motor_group ||
+	    ui_view.remote_code != remote.code ||
 	    ui_view.remote_fault != (uint8_t)remote.fault ||
 	    ui_view.remote_output_enabled != remote.output_enabled) {
-		ui_view.remote_group = remote.group;
-		ui_view.remote_codes[0] = remote.codes[0];
-		ui_view.remote_codes[1] = remote.codes[1];
+		ui_view.remote_motor_group = remote.motor_group;
+		ui_view.remote_code = remote.code;
 		ui_view.remote_fault = (uint8_t)remote.fault;
 		ui_view.remote_output_enabled = remote.output_enabled;
 		est_ui_state_invalidate(&ui_state);
@@ -405,9 +404,8 @@ void est_ui_init(uint32_t now_ms)
 	ui_view.program_count = 0U;
 	ui_view.programs_state = EST_UI_VIEW_PROGRAMS_SCANNING;
 	ui_view.programs_error_code = 0U;
-	ui_view.remote_group = 0U;
-	ui_view.remote_codes[0] = 0U;
-	ui_view.remote_codes[1] = 0U;
+	ui_view.remote_motor_group = 0U;
+	ui_view.remote_code = 0U;
 	ui_view.remote_fault = (uint8_t)EST_UI_REMOTE_FAULT_CONNECT_IR;
 	ui_view.remote_output_enabled = false;
 	ui_view.transfer_active = false;

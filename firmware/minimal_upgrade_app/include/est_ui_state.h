@@ -41,7 +41,7 @@ typedef enum {
 	EST_UI_ACTION_RETRY,
 	EST_UI_ACTION_CYCLE_SENSOR_MODE,
 	EST_UI_ACTION_ENTER_REMOTE,
-	EST_UI_ACTION_SWITCH_REMOTE_GROUP,
+	EST_UI_ACTION_SWITCH_REMOTE_MOTOR_GROUP,
 	EST_UI_ACTION_EXIT_REMOTE,
 	EST_UI_ACTION_ENTER_MOTOR_OUTPUT,
 	EST_UI_ACTION_UPDATE_MOTOR_OUTPUT,
@@ -65,7 +65,7 @@ typedef struct {
 	uint8_t program_count;
 	uint8_t delete_choice;
 	uint8_t port_item;
-	uint8_t remote_group;
+	uint8_t remote_motor_group;
 	uint8_t motor_output_power_index;
 	est_ui_motor_output_state_t motor_output_states[
 		EST_UI_MOTOR_OUTPUT_PORT_COUNT];

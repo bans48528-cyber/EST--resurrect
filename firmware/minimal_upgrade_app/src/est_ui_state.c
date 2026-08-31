@@ -49,7 +49,7 @@ void est_ui_state_init(est_ui_state_t *state)
 	state->program_count = 0U;
 	state->delete_choice = 0U;
 	state->port_item = 0U;
-	state->remote_group = 0U;
+	state->remote_motor_group = 0U;
 	state->motor_output_power_index = 0U;
 	state->motor_output_states[0] = EST_UI_MOTOR_OUTPUT_STOP;
 	state->motor_output_states[1] = EST_UI_MOTOR_OUTPUT_STOP;
@@ -142,7 +142,7 @@ static est_ui_action_t handle_home(est_ui_state_t *state, est_button_t button)
 		if (state->home_item == 2U) {
 			set_page(state, EST_UI_PAGE_PORTS);
 		} else if (state->home_item == 3U) {
-			state->remote_group = 0U;
+			state->remote_motor_group = 0U;
 			set_page(state, EST_UI_PAGE_REMOTE);
 			return EST_UI_ACTION_ENTER_REMOTE;
 		} else if (state->home_item == 4U) {
@@ -227,9 +227,9 @@ static est_ui_action_t handle_remote(est_ui_state_t *state,
 		return EST_UI_ACTION_EXIT_REMOTE;
 	}
 	if (button == EST_BUTTON_CONFIRM) {
-		state->remote_group ^= 1U;
+		state->remote_motor_group ^= 1U;
 		state->dirty = true;
-		return EST_UI_ACTION_SWITCH_REMOTE_GROUP;
+		return EST_UI_ACTION_SWITCH_REMOTE_MOTOR_GROUP;
 	}
 	return EST_UI_ACTION_NONE;
 }
