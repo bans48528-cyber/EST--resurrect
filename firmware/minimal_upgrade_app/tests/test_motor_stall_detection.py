@@ -76,7 +76,8 @@ class MotorStallDetectionTests(unittest.TestCase):
         self.assertIn("MP_QSTR_stalled", module)
         self.assertIn("est_motor_stalled(self->port, &stalled)", module)
         self.assertIn("def motor_stalled(port):", runtime)
-        self.assertIn("motor(str(port)).stalled()", runtime)
+        self.assertIn("motor(port).stalled()", runtime)
+        self.assertIn("port = _motor_port(port)", runtime)
 
     def test_protocol_126_advertises_bit25(self) -> None:
         config = (ROOT / "include" / "app_config.h").read_text(encoding="utf-8")

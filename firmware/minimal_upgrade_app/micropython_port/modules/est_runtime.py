@@ -143,11 +143,24 @@ def _elapsed_ms(start_ms):
     return (est.millis() - start_ms) & 0xFFFFFFFF
 
 
-def _speed_magnitude(value):
-    value = _absolute(int(value))
+def _percent(value):
+    value = int(value)
     if value > 100:
-        raise ValueError("speed magnitude must be 0..100")
+        return 100
+    if value < -100:
+        return -100
     return value
+
+
+def _speed_magnitude(value):
+    return _absolute(_percent(value))
+
+
+def _motor_port(port):
+    port = str(port).upper()
+    if port not in _MOTOR_PORTS:
+        raise ValueError("motor port must be A, B, C or D")
+    return port
 
 
 def _stop_mode(action):
@@ -591,40 +604,54 @@ def repeat_count(value):
 
 
 def motor(port):
-    port = str(port)
+    port = _motor_port(port)
     if port not in _motors:
         _motors[port] = est.Motor(port)
     return _motors[port]
 
 
 def motor_stalled(port):
-    return bool(motor(str(port)).stalled())
+    return bool(motor(port).stalled())
 
 
 def motor_set_speed(port, speed):
-    _motor_speeds[str(port)] = _speed_magnitude(speed)
+    _motor_speeds[_motor_port(port)] = _speed_magnitude(speed)
 
 
 def motor_set_stop_action(port, action):
     _stop_mode(action)
-    _motor_stop_actions[str(port)] = action
+    _motor_stop_actions[_motor_port(port)] = action
 
 
-def motor_start(port, direction):
-    port = str(port)
-    speed = _motor_speeds.get(port, 50)
-    sign = _direction_sign(direction, "clockwise", "counterclockwise")
-    generation = _begin_motor_command((port,), "speed", True)
+def _start_motor_percent(port, value, kind, method_name):
+    port = _motor_port(port)
+    value = _percent(value)
+    generation = _begin_motor_command((port,), kind, True)
     try:
-        motor(port).run_speed(sign * speed)
+        getattr(motor(port), method_name)(value)
     except Exception:
         if _command_is_current((port,), generation):
             _motor_commands.pop(port, None)
         raise
 
 
+def motor_start_speed(port, speed):
+    _start_motor_percent(port, speed, "speed", "run_speed")
+
+
+def motor_start_power(port, power):
+    _start_motor_percent(port, power, "power", "run_power")
+
+
+def motor_start(port, direction):
+    port = _motor_port(port)
+    speed = _motor_speeds.get(port, 50)
+    sign = _direction_sign(direction, "clockwise", "counterclockwise")
+    motor_start_speed(port, sign * speed)
+
+
 def motor_stop(port):
-    port = str(port)
+    port = _motor_port(port)
     action = _motor_stop_actions.get(port, "float")
     stop_mode = _stop_mode(action)
     generation = _begin_motor_command((port,), "stop")
@@ -639,7 +666,7 @@ def motor_stop(port):
 
 def motor_run_for(port, direction, amount, unit, speed=None):
     _reject_sync_event_wait("motor_run_for")
-    port = str(port)
+    port = _motor_port(port)
     configured_speed = _motor_speeds.get(port, 50)
     if speed is None:
         speed = configured_speed
@@ -701,8 +728,8 @@ def _get_drive_base():
 
 def drive_set_pair(left_port, right_port):
     global _drive_left_port, _drive_right_port, _drive_base
-    left_port = str(left_port)
-    right_port = str(right_port)
+    left_port = _motor_port(left_port)
+    right_port = _motor_port(right_port)
     if left_port == right_port:
         raise ValueError("drive motor ports must differ")
     _drive_left_port = left_port
@@ -823,8 +850,7 @@ def drive_steer_for(steering, amount, unit, speed=None):
 def drive_start_steer(steering, speed=None):
     if speed is None:
         speed = _drive_speed
-    speed = int(speed)
-    _speed_magnitude(speed)
+    speed = _percent(speed)
     ports = (_drive_left_port, _drive_right_port)
     generation = _begin_motor_command(ports, "drive-continuous")
     try:

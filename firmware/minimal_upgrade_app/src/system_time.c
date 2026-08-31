@@ -14,7 +14,7 @@ void system_time_init(void)
 	systick_set_frequency(1000U, 168000000U);
 	systick_interrupt_enable();
 	systick_counter_enable();
-	watchdog_kick();
+	watchdog_startup_progress();
 }
 
 uint32_t system_time_millis(void)
@@ -25,5 +25,4 @@ uint32_t system_time_millis(void)
 void sys_tick_handler(void)
 {
 	milliseconds++;
-	watchdog_kick();
 }

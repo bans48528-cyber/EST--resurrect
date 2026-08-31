@@ -56,6 +56,11 @@ def make_fake_est() -> types.ModuleType:
             self.timed_until_ms = None
             module.events.append(("motor.run_speed", self.port, speed))
 
+        def run_power(self, power):
+            self.states = []
+            self.timed_until_ms = None
+            module.events.append(("motor.run_power", self.port, power))
+
         def run_time(self, duration_ms, **kwargs):
             module.events.append(
                 ("motor.run_time", self.port, duration_ms, kwargs)
@@ -445,15 +450,12 @@ class RuntimeHardwareTests(unittest.TestCase):
         motor.stalled_value = True
         self.assertTrue(runtime.motor_stalled("A"))
 
-    def test_motor_start_forwards_20_zero_75_without_interrupting(self) -> None:
+    def test_motor_start_speed_forwards_20_zero_75_without_interrupting(self) -> None:
         runtime, fake_est = load_runtime()
 
-        runtime.motor_set_speed("A", 20)
-        runtime.motor_start("A", "clockwise")
-        runtime.motor_set_speed("A", 0)
-        runtime.motor_start("A", "clockwise")
-        runtime.motor_set_speed("A", 75)
-        runtime.motor_start("A", "clockwise")
+        runtime.motor_start_speed("A", 20)
+        runtime.motor_start_speed("A", 0)
+        runtime.motor_start_speed("A", 75)
 
         self.assertEqual(
             [
@@ -475,8 +477,102 @@ class RuntimeHardwareTests(unittest.TestCase):
             [0, 1, 5, 9],
             [event[2] for event in fake_est.events if event[0] == "motor.run_speed"],
         )
-        with self.assertRaisesRegex(ValueError, "0..100"):
-            runtime.motor_set_speed("A", 101)
+        runtime.motor_set_speed("A", 101)
+        runtime.motor_start("A", "clockwise")
+        runtime.drive_set_speed(-101)
+        self.assertEqual(("motor.run_speed", "A", 100), fake_est.events[-1])
+
+    def test_motor_start_speed_and_power_normalize_clamp_and_switch(self) -> None:
+        runtime, fake_est = load_runtime()
+
+        runtime.motor_start_speed("a", 101.9)
+        runtime.motor_start_speed("A", -101)
+        runtime.motor_start_power("a", 101)
+        runtime.motor_start_power("A", -101.9)
+
+        self.assertEqual(
+            [
+                ("motor.run_speed", "A", 100),
+                ("motor.run_speed", "A", -100),
+                ("motor.stop", "A", 0),
+                ("motor.run_power", "A", 100),
+                ("motor.run_power", "A", -100),
+            ],
+            fake_est.events,
+        )
+        with self.assertRaisesRegex(ValueError, "motor port"):
+            runtime.motor_start_speed("E", 20)
+
+    def test_new_motor_owner_survives_old_task_cleanup(self) -> None:
+        runtime, fake_est = load_runtime()
+
+        @runtime.on_start
+        async def old_owner():
+            runtime.motor_start_speed("A", 20)
+            await runtime.yield_once()
+            await runtime.yield_once()
+
+        @runtime.on_start
+        async def new_owner():
+            await runtime.yield_once()
+            runtime.motor_start_power("A", 75)
+            await runtime.yield_once()
+
+        runtime.run()
+
+        power_index = fake_est.events.index(("motor.run_power", "A", 75))
+        self.assertEqual(
+            [("motor.stop", "A", 0)],
+            [
+                event for event in fake_est.events[power_index + 1:]
+                if event[0] == "motor.stop"
+            ],
+        )
+
+    def test_all_generated_speed_entries_clamp_dynamic_values(self) -> None:
+        runtime, fake_est = load_runtime()
+
+        runtime.motor_run_for("A", None, 1, "seconds", speed=-101)
+        runtime.drive_set_pair("B", "C")
+        runtime.drive_set_speed(101)
+        runtime.drive_move_for("forward", 1, "rotations")
+        runtime.drive_steer_for(25, 1, "seconds", speed=101)
+        runtime.drive_start_steer(0, speed=-101)
+
+        self.assertIn(
+            ("motor.run_time", "A", 1000, {"speed": -100, "stop": 0}),
+            fake_est.events,
+        )
+        self.assertIn(
+            (
+                "drive.straight_angle",
+                360,
+                {"speed": 100, "stop": 0, "wait": True},
+            ),
+            fake_est.events,
+        )
+        self.assertIn(
+            (
+                "drive.steer_time",
+                25,
+                1000,
+                {"speed": 100, "stop": 0, "wait": True},
+            ),
+            fake_est.events,
+        )
+        self.assertIn(("drive.steer", 0, {"speed": -100}), fake_est.events)
+
+    def test_motor_start_failure_removes_failed_generation(self) -> None:
+        runtime, _ = load_runtime()
+        device = runtime.motor("A")
+
+        def fail_run_power(_power):
+            raise RuntimeError("native start failed")
+
+        device.run_power = fail_run_power
+        with self.assertRaisesRegex(RuntimeError, "native start failed"):
+            runtime.motor_start_power("A", 50)
+        self.assertNotIn("A", runtime._motor_commands)
 
     def test_timed_zero_speed_waits_full_duration_then_continues(self) -> None:
         runtime, fake_est = load_runtime()
@@ -950,7 +1046,8 @@ class RuntimeContractTests(unittest.TestCase):
             "drive_steer_for", "drive_stop", "gyro", "infrared",
             "ir_beacon_compare", "motor", "motor_run_for",
             "motor_set_speed", "motor_set_stop_action", "motor_stalled", "motor_start",
-            "motor_stop", "on_brick_button", "on_broadcast", "on_color",
+            "motor_start_power", "motor_start_speed", "motor_stop",
+            "on_brick_button", "on_broadcast", "on_color",
             "on_condition", "on_gyro_angle", "on_ir_beacon_button",
             "on_ir_proximity", "on_start", "on_timer_gt", "on_touch",
             "on_ultrasonic", "repeat_count", "reset_timer", "run",

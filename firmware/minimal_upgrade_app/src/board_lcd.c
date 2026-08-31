@@ -41,6 +41,8 @@ _Static_assert(LCD_MOTOR_COLUMN_X +
 #define LCD_RESET_ASSERT_MS 30U
 #define LCD_RESET_RELEASE_MS 250U
 #define LCD_CONTROLLER_SETTLE_MS 100U
+#define LCD_INIT_WATCHDOG_BUDGET_MS 2000U
+#define LCD_REFRESH_WATCHDOG_BUDGET_MS 1000U
 
 static uint8_t framebuffer[LCD_WIDTH][LCD_PAGES];
 
@@ -155,12 +157,12 @@ static void write_control_byte(uint8_t value)
 	write_control(&value, 1U);
 }
 
-static void lcd_delay_ms(uint32_t duration_ms)
+static void lcd_delay_ms(uint32_t duration_ms, watchdog_guard_t *guard)
 {
 	uint32_t started_ms = system_time_millis();
 
 	while ((uint32_t)(system_time_millis() - started_ms) < duration_ms) {
-		watchdog_kick();
+		(void)watchdog_guard_progress(guard, system_time_millis());
 	}
 }
 
@@ -170,17 +172,21 @@ static void controller_init(void)
 	static const uint8_t display_setup[] = {
 		0x40U, 0x50U, 0x86U, 0x89U, 0xC4U, 0xA3U, 0x95U
 	};
+	watchdog_guard_t guard;
+
+	watchdog_guard_begin(&guard, system_time_millis(),
+		LCD_INIT_WATCHDOG_BUDGET_MS);
 
 	gpio_set(LCD_RESET_PORT, LCD_RESET_PIN);
-	lcd_delay_ms(LCD_RESET_IDLE_MS);
+	lcd_delay_ms(LCD_RESET_IDLE_MS, &guard);
 	gpio_clear(LCD_RESET_PORT, LCD_RESET_PIN);
-	lcd_delay_ms(LCD_RESET_ASSERT_MS);
+	lcd_delay_ms(LCD_RESET_ASSERT_MS, &guard);
 	gpio_set(LCD_RESET_PORT, LCD_RESET_PIN);
-	lcd_delay_ms(LCD_RESET_RELEASE_MS);
+	lcd_delay_ms(LCD_RESET_RELEASE_MS, &guard);
 
 	write_control_byte(0xE1U);
 	write_data(0xE2U);
-	lcd_delay_ms(2U);
+	lcd_delay_ms(2U, &guard);
 	write_control_byte(0x04U);
 	write_data(0x00U);
 	write_control(pump_setup, sizeof(pump_setup));
@@ -199,7 +205,8 @@ static void controller_init(void)
 	write_control_byte(0x95U);
 	write_control_byte(0xC9U);
 	write_data(0xADU);
-	lcd_delay_ms(LCD_CONTROLLER_SETTLE_MS);
+	lcd_delay_ms(LCD_CONTROLLER_SETTLE_MS, &guard);
+	watchdog_guard_end(&guard);
 }
 
 static void set_address(uint16_t page, uint8_t column)
@@ -219,6 +226,10 @@ static void refresh_framebuffer(board_lcd_refresh_hook_t hook)
 	uint16_t column_group;
 	uint8_t page;
 	uint8_t offset;
+	watchdog_guard_t guard;
+
+	watchdog_guard_begin(&guard, system_time_millis(),
+		LCD_REFRESH_WATCHDOG_BUDGET_MS);
 
 	for (column_group = 0U;
 	     column_group < (LCD_TRANSFER_COLUMNS / 8U);
@@ -236,12 +247,13 @@ static void refresh_framebuffer(board_lcd_refresh_hook_t hook)
 				write_control_byte(0x01U);
 				write_data(value);
 			}
-			watchdog_kick();
+			(void)watchdog_guard_progress(&guard, system_time_millis());
 			if (hook != NULL) {
 				hook();
 			}
 		}
 	}
+	watchdog_guard_end(&guard);
 }
 
 static void framebuffer_set_pixel(uint16_t x, uint16_t y, bool on)

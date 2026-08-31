@@ -6,6 +6,7 @@
 #include <libopencm3/stm32/spi.h>
 
 #include "board_flash.h"
+#include "system_time.h"
 #include "watchdog.h"
 
 #define FLASH_CHIP_SELECT_PORT GPIOA
@@ -35,6 +36,10 @@
 #define FLASH_CAPACITY_BYTES 33554432U
 #define FLASH_TEST_PATTERN_SIZE 32U
 #define FLASH_BUSY_POLL_LIMIT 2000000U
+#define FLASH_READ_WATCHDOG_BUDGET_MS 5000U
+#define FLASH_PROGRAM_WATCHDOG_BUDGET_MS 20000U
+#define FLASH_ERASE_WATCHDOG_BUDGET_MS 10000U
+#define FLASH_TEST_WATCHDOG_BUDGET_MS 30000U
 
 static uint8_t transfer_byte(uint8_t value)
 {
@@ -59,7 +64,8 @@ static void send_address_4byte(uint32_t address)
 	(void)transfer_byte((uint8_t)address);
 }
 
-static void read_data_4byte(uint32_t address, uint8_t *buffer, size_t length)
+static void read_data_4byte(uint32_t address, uint8_t *buffer, size_t length,
+	watchdog_guard_t *guard)
 {
 	size_t index;
 
@@ -68,12 +74,15 @@ static void read_data_4byte(uint32_t address, uint8_t *buffer, size_t length)
 	send_address_4byte(address);
 	for (index = 0U; index < length; index++) {
 		buffer[index] = transfer_byte(0xFFU);
+		if ((index & 0xFFU) == 0U) {
+			(void)watchdog_guard_progress(guard, system_time_millis());
+		}
 	}
 	deselect_flash();
 }
 
 static void read_data_in_4byte_mode(uint32_t address, uint8_t *buffer,
-	size_t length)
+	size_t length, watchdog_guard_t *guard)
 {
 	size_t index;
 
@@ -82,6 +91,9 @@ static void read_data_in_4byte_mode(uint32_t address, uint8_t *buffer,
 	send_address_4byte(address);
 	for (index = 0U; index < length; index++) {
 		buffer[index] = transfer_byte(0xFFU);
+		if ((index & 0xFFU) == 0U) {
+			(void)watchdog_guard_progress(guard, system_time_millis());
+		}
 	}
 	deselect_flash();
 }
@@ -100,14 +112,14 @@ static void send_command(uint8_t command)
 	deselect_flash();
 }
 
-static bool wait_ready(void)
+static bool wait_ready(watchdog_guard_t *guard)
 {
 	uint32_t poll;
 	uint8_t status;
 
 	for (poll = 0U; poll < FLASH_BUSY_POLL_LIMIT; poll++) {
 		if ((poll & 0xFFU) == 0U) {
-			watchdog_kick();
+			(void)watchdog_guard_progress(guard, system_time_millis());
 		}
 		select_flash();
 		(void)transfer_byte(READ_STATUS_COMMAND);
@@ -138,7 +150,7 @@ static bool write_enable_latched(void)
 }
 
 static bool page_program_in_4byte_mode(uint32_t address, const uint8_t *data,
-	size_t length)
+	size_t length, watchdog_guard_t *guard)
 {
 	size_t index;
 
@@ -149,27 +161,30 @@ static bool page_program_in_4byte_mode(uint32_t address, const uint8_t *data,
 		(void)transfer_byte(data[index]);
 	}
 	deselect_flash();
-	return wait_ready();
+	return wait_ready(guard);
 }
 
-static bool erase_sector_in_4byte_mode(uint32_t address)
+static bool erase_sector_in_4byte_mode(uint32_t address,
+	watchdog_guard_t *guard)
 {
 	select_flash();
 	(void)transfer_byte(SECTOR_ERASE_COMMAND);
 	send_address_4byte(address);
 	deselect_flash();
-	return wait_ready();
+	return wait_ready(guard);
 }
 
-static bool sector_is_erased_in_4byte_mode(uint32_t address)
+static bool sector_is_erased_in_4byte_mode(uint32_t address,
+	watchdog_guard_t *guard)
 {
 	uint8_t buffer[32];
 	uint32_t offset;
 	size_t index;
 
 	for (offset = 0U; offset < FLASH_SECTOR_SIZE; offset += sizeof(buffer)) {
-		watchdog_kick();
-		read_data_in_4byte_mode(address + offset, buffer, sizeof(buffer));
+		(void)watchdog_guard_progress(guard, system_time_millis());
+		read_data_in_4byte_mode(address + offset, buffer, sizeof(buffer),
+			guard);
 		for (index = 0U; index < sizeof(buffer); index++) {
 			if (buffer[index] != 0xFFU) {
 				return false;
@@ -260,25 +275,39 @@ bool board_flash_sector_is_erased_4byte(uint32_t address)
 	uint8_t buffer[32];
 	uint32_t offset;
 	size_t index;
+	bool erased = true;
+	watchdog_guard_t guard;
+
+	watchdog_guard_begin(&guard, system_time_millis(),
+		FLASH_READ_WATCHDOG_BUDGET_MS);
 
 	for (offset = 0U; offset < FLASH_SECTOR_SIZE; offset += sizeof(buffer)) {
-		watchdog_kick();
-		read_data_4byte(address + offset, buffer, sizeof(buffer));
+		(void)watchdog_guard_progress(&guard, system_time_millis());
+		read_data_4byte(address + offset, buffer, sizeof(buffer), &guard);
 		for (index = 0U; index < sizeof(buffer); index++) {
 			if (buffer[index] != 0xFFU) {
-				return false;
+				erased = false;
+				goto done;
 			}
 		}
 	}
-	return true;
+
+done:
+	watchdog_guard_end(&guard);
+	return erased;
 }
 
 bool board_flash_read_4byte(uint32_t address, uint8_t *buffer, size_t length)
 {
+	watchdog_guard_t guard;
+
 	if (buffer == NULL || !range_is_valid(address, length)) {
 		return false;
 	}
-	read_data_4byte(address, buffer, length);
+	watchdog_guard_begin(&guard, system_time_millis(),
+		FLASH_READ_WATCHDOG_BUDGET_MS);
+	read_data_4byte(address, buffer, length, &guard);
+	watchdog_guard_end(&guard);
 	return true;
 }
 
@@ -287,10 +316,13 @@ bool board_flash_program_4byte(uint32_t address, const uint8_t *data,
 {
 	bool success = false;
 	bool mode_change_attempted = false;
+	watchdog_guard_t guard;
 
 	if (data == NULL || !range_is_valid(address, length)) {
 		return false;
 	}
+	watchdog_guard_begin(&guard, system_time_millis(),
+		FLASH_PROGRAM_WATCHDOG_BUDGET_MS);
 	send_command(ENTER_4BYTE_MODE_COMMAND);
 	mode_change_attempted = true;
 	if ((read_status_register(READ_STATUS_3_COMMAND) & 0x01U) == 0U) {
@@ -302,7 +334,8 @@ bool board_flash_program_4byte(uint32_t address, const uint8_t *data,
 		size_t chunk_length = length < page_remaining ? length : page_remaining;
 
 		if (!write_enable_latched() ||
-		    !page_program_in_4byte_mode(address, data, chunk_length)) {
+		    !page_program_in_4byte_mode(address, data, chunk_length,
+			&guard)) {
 			goto cleanup;
 		}
 		address += (uint32_t)chunk_length;
@@ -318,6 +351,7 @@ cleanup:
 			success = false;
 		}
 	}
+	watchdog_guard_end(&guard);
 	return success;
 }
 
@@ -325,16 +359,19 @@ bool board_flash_erase_sector_4byte(uint32_t address)
 {
 	bool success = false;
 	bool mode_change_attempted = false;
+	watchdog_guard_t guard;
 
 	if ((address & (FLASH_SECTOR_SIZE - 1U)) != 0U ||
 	    !range_is_valid(address, FLASH_SECTOR_SIZE)) {
 		return false;
 	}
+	watchdog_guard_begin(&guard, system_time_millis(),
+		FLASH_ERASE_WATCHDOG_BUDGET_MS);
 	send_command(ENTER_4BYTE_MODE_COMMAND);
 	mode_change_attempted = true;
 	if ((read_status_register(READ_STATUS_3_COMMAND) & 0x01U) == 0U ||
 	    !write_enable_latched() ||
-	    !erase_sector_in_4byte_mode(address)) {
+	    !erase_sector_in_4byte_mode(address, &guard)) {
 		goto cleanup;
 	}
 	success = true;
@@ -346,6 +383,7 @@ cleanup:
 			success = false;
 		}
 	}
+	watchdog_guard_end(&guard);
 	return success;
 }
 
@@ -364,11 +402,14 @@ enum board_flash_test_result board_flash_test_empty_sector_4byte(uint32_t addres
 	enum board_flash_test_result result = BOARD_FLASH_TEST_SUCCESS;
 	bool write_attempted = false;
 	bool mode_change_attempted = false;
+	watchdog_guard_t guard;
 
 	if (!board_flash_sector_is_erased_4byte(address)) {
 		return BOARD_FLASH_TEST_NOT_ERASED;
 	}
-	read_data_4byte(alias_address, alias_before, sizeof(alias_before));
+	watchdog_guard_begin(&guard, system_time_millis(),
+		FLASH_TEST_WATCHDOG_BUDGET_MS);
+	read_data_4byte(alias_address, alias_before, sizeof(alias_before), &guard);
 
 	send_command(ENTER_4BYTE_MODE_COMMAND);
 	mode_change_attempted = true;
@@ -381,16 +422,18 @@ enum board_flash_test_result board_flash_test_empty_sector_4byte(uint32_t addres
 		goto cleanup;
 	}
 	write_attempted = true;
-	if (!page_program_in_4byte_mode(address, pattern, sizeof(pattern))) {
+	if (!page_program_in_4byte_mode(address, pattern, sizeof(pattern),
+		&guard)) {
 		result = BOARD_FLASH_TEST_PROGRAM_TIMEOUT;
 		goto cleanup;
 	}
-	read_data_in_4byte_mode(address, verify, sizeof(verify));
+	read_data_in_4byte_mode(address, verify, sizeof(verify), &guard);
 	if (memcmp(verify, pattern, sizeof(pattern)) != 0) {
 		result = BOARD_FLASH_TEST_PROGRAM_VERIFY_FAILED;
 		goto cleanup;
 	}
-	read_data_in_4byte_mode(alias_address, alias_after, sizeof(alias_after));
+	read_data_in_4byte_mode(alias_address, alias_after, sizeof(alias_after),
+		&guard);
 	if (memcmp(alias_before, alias_after, sizeof(alias_before)) != 0) {
 		result = BOARD_FLASH_TEST_ALIAS_CHANGED;
 	}
@@ -399,9 +442,9 @@ cleanup:
 	if (write_attempted) {
 		if (!write_enable_latched()) {
 			result = BOARD_FLASH_TEST_WRITE_ENABLE_FAILED;
-		} else if (!erase_sector_in_4byte_mode(address)) {
+		} else if (!erase_sector_in_4byte_mode(address, &guard)) {
 			result = BOARD_FLASH_TEST_ERASE_TIMEOUT;
-		} else if (!sector_is_erased_in_4byte_mode(address)) {
+		} else if (!sector_is_erased_in_4byte_mode(address, &guard)) {
 			result = BOARD_FLASH_TEST_ERASE_VERIFY_FAILED;
 		}
 	}
@@ -411,5 +454,6 @@ cleanup:
 			result = BOARD_FLASH_TEST_RESTORE_3BYTE_FAILED;
 		}
 	}
+	watchdog_guard_end(&guard);
 	return result;
 }

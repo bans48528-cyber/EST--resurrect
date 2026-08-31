@@ -5,11 +5,15 @@
 #include <libopencm3/stm32/flash.h>
 
 #include "app_config.h"
+#include "system_time.h"
 #include "watchdog.h"
 #include "update_storage.h"
 
 #define FLASH_ERROR_MASK (FLASH_SR_PGSERR | FLASH_SR_PGPERR | \
 	FLASH_SR_PGAERR | FLASH_SR_WRPERR | FLASH_SR_OPERR)
+#define UPDATE_ERASE_WATCHDOG_BUDGET_MS 30000U
+#define UPDATE_WRITE_WATCHDOG_BUDGET_MS 2000U
+#define UPDATE_COMMIT_WATCHDOG_BUDGET_MS 10000U
 
 static bool storage_open;
 
@@ -23,7 +27,8 @@ static bool flash_ok(void)
 	return (FLASH_SR & FLASH_ERROR_MASK) == 0U;
 }
 
-static bool range_is_erased(uint32_t start, uint32_t end)
+static bool range_is_erased(uint32_t start, uint32_t end,
+	watchdog_guard_t *guard)
 {
 	uint32_t address;
 
@@ -31,7 +36,9 @@ static bool range_is_erased(uint32_t start, uint32_t end)
 		if (*(const volatile uint32_t *)address != 0xFFFFFFFFU) {
 			return false;
 		}
-		watchdog_kick();
+		if ((address & 0xFFFU) == 0U) {
+			(void)watchdog_guard_progress(guard, system_time_millis());
+		}
 	}
 	return true;
 }
@@ -39,25 +46,32 @@ static bool range_is_erased(uint32_t start, uint32_t end)
 bool update_storage_begin(void)
 {
 	uint8_t sector;
+	watchdog_guard_t guard;
 
 	storage_open = false;
+	watchdog_guard_begin(&guard, system_time_millis(),
+		UPDATE_ERASE_WATCHDOG_BUDGET_MS);
 	flash_unlock();
 	clear_flash_status();
 	for (sector = 8U; sector <= 11U; sector++) {
-		watchdog_kick();
+		(void)watchdog_guard_progress(&guard, system_time_millis());
 		flash_erase_sector(sector, FLASH_CR_PROGRAM_X32);
-		watchdog_kick();
+		(void)watchdog_guard_progress(&guard, system_time_millis());
 		if (!flash_ok()) {
 			flash_lock();
+			watchdog_guard_end(&guard);
 			return false;
 		}
 	}
 
-	if (!range_is_erased(UPDATE_FLASH_START, UPDATE_FLASH_PHYSICAL_END)) {
+	if (!range_is_erased(UPDATE_FLASH_START, UPDATE_FLASH_PHYSICAL_END,
+		&guard)) {
 		flash_lock();
+		watchdog_guard_end(&guard);
 		return false;
 	}
 	storage_open = true;
+	watchdog_guard_end(&guard);
 	return true;
 }
 
@@ -65,6 +79,7 @@ bool update_storage_write(uint32_t offset, const uint8_t *data, size_t length)
 {
 	uint32_t address;
 	size_t index = 0U;
+	watchdog_guard_t guard;
 
 	if (!storage_open || data == NULL || length == 0U ||
 	    offset >= UPDATE_MAX_PACKAGE_SIZE ||
@@ -72,6 +87,8 @@ bool update_storage_write(uint32_t offset, const uint8_t *data, size_t length)
 		return false;
 	}
 
+	watchdog_guard_begin(&guard, system_time_millis(),
+		UPDATE_WRITE_WATCHDOG_BUDGET_MS);
 	address = UPDATE_FLASH_START + offset;
 	clear_flash_status();
 	if (((address & 1U) != 0U) && index < length) {
@@ -85,21 +102,27 @@ bool update_storage_write(uint32_t offset, const uint8_t *data, size_t length)
 		flash_program_half_word(address, value);
 		address += 2U;
 		index += 2U;
-		watchdog_kick();
+		(void)watchdog_guard_progress(&guard, system_time_millis());
 	}
 	if (index < length) {
 		flash_program_byte(address, data[index]);
 	}
 
 	if (!flash_ok()) {
+		watchdog_guard_end(&guard);
 		return false;
 	}
 	for (index = 0U; index < length; index++) {
 		if (*(const volatile uint8_t *)(UPDATE_FLASH_START + offset + index) !=
 		    data[index]) {
+			watchdog_guard_end(&guard);
 			return false;
 		}
+		if ((index & 0xFFU) == 0U) {
+			(void)watchdog_guard_progress(&guard, system_time_millis());
+		}
 	}
+	watchdog_guard_end(&guard);
 	return true;
 }
 
@@ -109,7 +132,6 @@ bool update_storage_validate_image(uint32_t package_length)
 	uint32_t initial_msp;
 	uint32_t reset_handler;
 	uint32_t reset_address;
-	uint32_t index;
 	bool msp_in_sram;
 	bool msp_in_ccm;
 
@@ -121,10 +143,6 @@ bool update_storage_validate_image(uint32_t package_length)
 	if (header[0] != 'A' || header[1] != 'P' ||
 	    header[2] != 'P' || header[3] != '=') {
 		return false;
-	}
-
-	for (index = 0U; index < package_length; index += 4096U) {
-		watchdog_kick();
 	}
 
 	initial_msp = *(const volatile uint32_t *)(UPDATE_FLASH_START + 4U);
@@ -141,19 +159,23 @@ bool update_storage_validate_image(uint32_t package_length)
 bool update_storage_commit(uint32_t package_length)
 {
 	uint32_t stored_length;
+	watchdog_guard_t guard;
 
 	if (!update_storage_validate_image(package_length)) {
 		return false;
 	}
 	stored_length = package_length - 1U;
+	watchdog_guard_begin(&guard, system_time_millis(),
+		UPDATE_COMMIT_WATCHDOG_BUDGET_MS);
 
 	clear_flash_status();
-	watchdog_kick();
+	(void)watchdog_guard_progress(&guard, system_time_millis());
 	flash_erase_sector(UPDATE_STATUS_FLASH_SECTOR, FLASH_CR_PROGRAM_X32);
-	watchdog_kick();
+	(void)watchdog_guard_progress(&guard, system_time_millis());
 	if (!flash_ok()) {
 		flash_lock();
 		storage_open = false;
+		watchdog_guard_end(&guard);
 		return false;
 	}
 
@@ -168,12 +190,14 @@ bool update_storage_commit(uint32_t package_length)
 		(uint16_t)(stored_length >> 16U)) {
 		flash_lock();
 		storage_open = false;
+		watchdog_guard_end(&guard);
 		return false;
 	}
 
 	flash_program_half_word(UPDATE_STATUS_ADDRESS, UPDATE_STATUS_PENDING);
 	flash_lock();
 	storage_open = false;
+	watchdog_guard_end(&guard);
 	return flash_ok() &&
 		*(const volatile uint16_t *)UPDATE_STATUS_ADDRESS == UPDATE_STATUS_PENDING;
 }

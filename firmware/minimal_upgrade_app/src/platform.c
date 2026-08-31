@@ -28,7 +28,7 @@ static void reset_bootloader_peripherals(void)
 
 	for (index = 0U; index < (sizeof(resets) / sizeof(resets[0])); index++) {
 		rcc_periph_reset_pulse(resets[index]);
-		watchdog_kick();
+		watchdog_startup_progress();
 	}
 }
 
@@ -36,7 +36,7 @@ void platform_prepare_from_bootloader(void)
 {
 	uint32_t index;
 
-	watchdog_kick();
+	watchdog_startup_progress();
 	STK_CSR = 0U;
 	STK_RVR = 0U;
 	STK_CVR = 0U;
@@ -54,7 +54,7 @@ void platform_prepare_from_bootloader(void)
 	rcc_apb1_frequency = 42000000U;
 	rcc_apb2_frequency = 84000000U;
 	SCB_VTOR = APP_FLASH_START;
-	watchdog_kick();
+	watchdog_startup_progress();
 }
 
 void platform_enable_interrupts(void)

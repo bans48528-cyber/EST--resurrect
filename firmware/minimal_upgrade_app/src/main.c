@@ -16,6 +16,7 @@
 #include "platform.h"
 #include "update_protocol.h"
 #include "usb_hid.h"
+#include "watchdog.h"
 
 int main(void)
 {
@@ -51,5 +52,6 @@ int main(void)
 			est_micropython_deinit();
 			est_system_power_off();
 		}
+		watchdog_main_progress(est_system_millis());
 	}
 }

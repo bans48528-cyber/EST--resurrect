@@ -22,6 +22,7 @@
 #include "est_sensor.h"
 #include "est_sensor_wait.h"
 #include "est_system.h"
+#include "watchdog.h"
 
 static int32_t require_integer_range(mp_obj_t value, int32_t minimum,
 	int32_t maximum, mp_rom_error_text_t message)
@@ -1138,6 +1139,7 @@ typedef struct {
 } modest_sensor_instance_t;
 
 #define MODEST_SENSOR_VALUE_TIMEOUT_MS 3000U
+#define MODEST_SENSOR_WATCHDOG_BUDGET_MS 5000U
 
 static void modest_raise_sensor_error(est_result_t error)
 {
@@ -1163,6 +1165,13 @@ static void modest_raise_sensor_error(est_result_t error)
 		mp_raise_msg(&mp_type_RuntimeError,
 			MP_ERROR_TEXT("sensor read failed"));
 	}
+}
+
+static void modest_raise_sensor_error_guarded(watchdog_guard_t *guard,
+	est_result_t error)
+{
+	watchdog_guard_end(guard);
+	modest_raise_sensor_error(error);
 }
 
 static void modest_sensor_require_type(modest_sensor_instance_t *self,
@@ -1197,25 +1206,34 @@ static void modest_sensor_wait_for_type(modest_sensor_instance_t *self)
 	est_sensor_status_t status = {0};
 	est_result_t result;
 	uint32_t started_ms = est_system_millis();
+	watchdog_guard_t guard;
+
+	watchdog_guard_begin(&guard, started_ms,
+		MODEST_SENSOR_WATCHDOG_BUDGET_MS);
 
 	for (;;) {
 		result = est_sensor_get_status(self->port, &status);
 		if (result != EST_OK) {
-			modest_raise_sensor_error(result);
+			modest_raise_sensor_error_guarded(&guard, result);
 		}
 		if (status.type == self->expected_type) {
+			watchdog_guard_end(&guard);
 			return;
 		}
 		if (status.state != EST_SENSOR_SYNCING &&
 		    status.state != EST_SENSOR_STALE) {
-			modest_sensor_require_type(self, &status);
+			modest_raise_sensor_error_guarded(&guard,
+				status.type == EST_SENSOR_TYPE_NONE ?
+				EST_ERR_NOT_CONNECTED : EST_ERR_TYPE_MISMATCH);
 		}
 		if ((uint32_t)(est_system_millis() - started_ms) >=
 		    MODEST_SENSOR_VALUE_TIMEOUT_MS) {
-			modest_raise_sensor_error(status.type == EST_SENSOR_TYPE_NONE ?
+			modest_raise_sensor_error_guarded(&guard,
+				status.type == EST_SENSOR_TYPE_NONE ?
 				EST_ERR_NOT_CONNECTED : EST_ERR_TYPE_MISMATCH);
 		}
 		est_micropython_vm_hook();
+		(void)watchdog_guard_progress(&guard, est_system_millis());
 	}
 }
 
@@ -1456,10 +1474,14 @@ static int32_t modest_sensor_wait_value(mp_obj_t self_object,
 	bool mode_requested = false;
 	bool require_new_generation = false;
 	est_sensor_wait_decision_t decision;
+	watchdog_guard_t guard;
+
+	watchdog_guard_begin(&guard, started_ms,
+		MODEST_SENSOR_WATCHDOG_BUDGET_MS);
 
 	result = est_sensor_get_status(self->port, &status);
 	if (result != EST_OK) {
-		modest_raise_sensor_error(result);
+		modest_raise_sensor_error_guarded(&guard, result);
 	}
 	if (!self->type_constrained && status.type != EST_SENSOR_TYPE_NONE &&
 	    status.type != EST_SENSOR_TYPE_UNKNOWN) {
@@ -1477,6 +1499,7 @@ static int32_t modest_sensor_wait_value(mp_obj_t self_object,
 			requested_mode, request_generation, require_new_generation);
 		if (decision == EST_SENSOR_WAIT_READY) {
 			modest_sensor_trace(self->port, &status, "complete");
+			watchdog_guard_end(&guard);
 			return status.value;
 		}
 		if (status.type == expected_type) {
@@ -1486,22 +1509,26 @@ static int32_t modest_sensor_wait_value(mp_obj_t self_object,
 				if (result != EST_OK) {
 					modest_sensor_trace(self->port, &status,
 						"mode-request-failed");
-					modest_raise_sensor_error(result);
+					modest_raise_sensor_error_guarded(&guard,
+						result);
 				}
 				mode_requested = true;
 				require_new_generation = true;
 				result = est_sensor_get_status(self->port, &status);
 				if (result != EST_OK) {
-					modest_raise_sensor_error(result);
+					modest_raise_sensor_error_guarded(&guard,
+						result);
 				}
 				modest_sensor_trace(self->port, &status, "mode-requested");
 			}
 		} else if (decision == EST_SENSOR_WAIT_DISCONNECTED) {
 			modest_sensor_trace(self->port, &status, "disconnected");
-			modest_raise_sensor_error(EST_ERR_NOT_CONNECTED);
+			modest_raise_sensor_error_guarded(&guard,
+				EST_ERR_NOT_CONNECTED);
 		} else if (decision == EST_SENSOR_WAIT_TYPE_MISMATCH) {
 			modest_sensor_trace(self->port, &status, "type-mismatch");
-			modest_raise_sensor_error(EST_ERR_TYPE_MISMATCH);
+			modest_raise_sensor_error_guarded(&guard,
+				EST_ERR_TYPE_MISMATCH);
 		}
 		if ((uint32_t)(est_system_millis() - started_ms) >=
 		    MODEST_SENSOR_VALUE_TIMEOUT_MS) {
@@ -1510,15 +1537,18 @@ static int32_t modest_sensor_wait_value(mp_obj_t self_object,
 
 			modest_sensor_trace(self->port, &status, "recovery-timeout");
 			if (timeout_error != EST_ERR_TIMEOUT) {
-				modest_raise_sensor_error(timeout_error);
+				modest_raise_sensor_error_guarded(&guard,
+					timeout_error);
 			}
+			watchdog_guard_end(&guard);
 			mp_raise_msg(&mp_type_RuntimeError,
 				MP_ERROR_TEXT("sensor recovery timeout"));
 		}
 		est_micropython_vm_hook();
+		(void)watchdog_guard_progress(&guard, est_system_millis());
 		result = est_sensor_get_status(self->port, &status);
 		if (result != EST_OK) {
-			modest_raise_sensor_error(result);
+			modest_raise_sensor_error_guarded(&guard, result);
 		}
 	}
 }
@@ -2072,6 +2102,29 @@ static mp_obj_t modest_display_text(size_t argument_count,
 static MP_DEFINE_CONST_FUN_OBJ_KW(
 	modest_display_text_obj, 3, modest_display_text);
 
+static mp_obj_t modest_display_text_line(mp_obj_t line_object,
+	mp_obj_t text_object)
+{
+	uint16_t line = (uint16_t)require_integer_range(line_object, 1, 12,
+		MP_ERROR_TEXT("display line must be 1..12"));
+	uint16_t y = (uint16_t)((line - 1U) * 10U);
+	const char *value;
+
+	if (!mp_obj_is_str(text_object)) {
+		mp_raise_TypeError(MP_ERROR_TEXT("display text must be a string"));
+	}
+	value = mp_obj_str_get_str(text_object);
+	modest_require_peripheral_result(est_display_rectangle(0U, y,
+		EST_DISPLAY_WIDTH, 10U, true, false));
+	modest_require_peripheral_result(est_display_text(0U, y, value, 1U));
+	est_micropython_vm_hook();
+	est_display_refresh_with_hook(est_micropython_vm_hook);
+	est_micropython_vm_hook();
+	return mp_const_none;
+}
+static MP_DEFINE_CONST_FUN_OBJ_2(
+	modest_display_text_line_obj, modest_display_text_line);
+
 static mp_obj_t modest_display_bitmap(size_t argument_count,
 	const mp_obj_t *arguments)
 {
@@ -2129,6 +2182,8 @@ static const mp_rom_map_elem_t modest_display_globals_table[] = {
 	{MP_ROM_QSTR(MP_QSTR_rectangle),
 		MP_ROM_PTR(&modest_display_rectangle_obj)},
 	{MP_ROM_QSTR(MP_QSTR_text), MP_ROM_PTR(&modest_display_text_obj)},
+	{MP_ROM_QSTR(MP_QSTR_text_line),
+		MP_ROM_PTR(&modest_display_text_line_obj)},
 	{MP_ROM_QSTR(MP_QSTR_bitmap), MP_ROM_PTR(&modest_display_bitmap_obj)},
 	{MP_ROM_QSTR(MP_QSTR_image), MP_ROM_PTR(&modest_display_image_obj)},
 	{MP_ROM_QSTR(MP_QSTR_refresh), MP_ROM_PTR(&modest_display_refresh_obj)},

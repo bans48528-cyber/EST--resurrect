@@ -164,7 +164,7 @@ void est_micropython_init(void)
 	memset(&micropython_status, 0, sizeof(micropython_status));
 	micropython_status.state = EST_MICROPYTHON_STARTING;
 	started_ms = est_system_millis();
-	watchdog_kick();
+	watchdog_startup_progress();
 
 	SCS_DEMCR |= SCS_DEMCR_TRCENA;
 	DWT_CYCCNT = 0U;
@@ -198,7 +198,7 @@ void est_micropython_init(void)
 		micropython_status.state = EST_MICROPYTHON_PASSED;
 		micropython_status.flags |= EST_MICROPYTHON_FLAG_SCRIPT_COMPLETE;
 	}
-	watchdog_kick();
+	watchdog_startup_progress();
 }
 
 void est_micropython_deinit(void)
@@ -265,7 +265,6 @@ void est_micropython_tick(void)
 	}
 	program_executing = false;
 	program_stop_requested = false;
-	watchdog_kick();
 }
 
 bool est_micropython_get_status(est_micropython_status_t *status)
@@ -497,7 +496,7 @@ void est_micropython_vm_hook(void)
 	}
 	if ((uint32_t)(now_ms - program_last_watchdog_ms) >= 10U) {
 		program_last_watchdog_ms = now_ms;
-		watchdog_kick();
+		watchdog_vm_progress(now_ms);
 	}
 	if (program_stop_requested) {
 		program_abort_error = EST_MICROPYTHON_PROGRAM_ERROR_STOPPED;
@@ -551,7 +550,6 @@ void nlr_jump_fail(void *value)
 	(void)value;
 	(void)est_system_cleanup();
 	for (;;) {
-		watchdog_kick();
 	}
 }
 
@@ -560,6 +558,5 @@ void MP_NORETURN __fatal_error(const char *message)
 	(void)message;
 	(void)est_system_cleanup();
 	for (;;) {
-		watchdog_kick();
 	}
 }

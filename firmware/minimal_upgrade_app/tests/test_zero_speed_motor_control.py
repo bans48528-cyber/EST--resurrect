@@ -24,8 +24,10 @@ class ZeroSpeedMotorControlTests(unittest.TestCase):
         drive = (SOURCE_DIR / "est_drive.c").read_text(encoding="utf-8")
         board = (SOURCE_DIR / "board_motor.c").read_text(encoding="utf-8")
 
-        speed_helper = section(runtime, "def _speed_magnitude", "def _stop_mode")
+        speed_helper = section(runtime, "def _percent", "def _stop_mode")
         self.assertIn("if value > 100:", speed_helper)
+        self.assertIn("if value < -100:", speed_helper)
+        self.assertIn("return _absolute(_percent(value))", speed_helper)
         self.assertNotIn("value < 1", speed_helper)
 
         motor_run_speed = section(

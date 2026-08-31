@@ -122,6 +122,7 @@ class BuildVerificationTests(unittest.TestCase):
             config,
         )
         self.assertIn("#define MICROPY_PY_BUILTINS_FLOAT (1)", config)
+        self.assertIn("#define MICROPY_PY_BUILTINS_MIN_MAX (1)", config)
         self.assertIn("#define MICROPY_PY_BUILTINS_COMPLEX (0)", config)
         self.assertIn(
             "#define MICROPY_FLOAT_IMPL (MICROPY_FLOAT_IMPL_FLOAT)", config
@@ -454,10 +455,11 @@ class BoardModuleLayoutTests(unittest.TestCase):
             "LCD_CONTROLLER_SETTLE_MS 100U",
         ):
             self.assertIn(timing, lcd)
-        self.assertIn("lcd_delay_ms(LCD_RESET_IDLE_MS);", lcd)
-        self.assertIn("lcd_delay_ms(LCD_RESET_ASSERT_MS);", lcd)
-        self.assertIn("lcd_delay_ms(LCD_RESET_RELEASE_MS);", lcd)
-        self.assertIn("lcd_delay_ms(LCD_CONTROLLER_SETTLE_MS);", lcd)
+        self.assertIn("lcd_delay_ms(LCD_RESET_IDLE_MS, &guard);", lcd)
+        self.assertIn("lcd_delay_ms(LCD_RESET_ASSERT_MS, &guard);", lcd)
+        self.assertIn("lcd_delay_ms(LCD_RESET_RELEASE_MS, &guard);", lcd)
+        self.assertIn("lcd_delay_ms(LCD_CONTROLLER_SETTLE_MS, &guard);", lcd)
+        self.assertIn("LCD_INIT_WATCHDOG_BUDGET_MS 2000U", lcd)
 
     def test_external_flash_write_test_is_guarded_and_recoverable(self) -> None:
         header = (ROOT / "include" / "board_flash.h").read_text(encoding="utf-8")
@@ -474,7 +476,8 @@ class BoardModuleLayoutTests(unittest.TestCase):
         self.assertNotIn("SECTOR_ERASE_4BYTE_COMMAND 0x21U", source)
         self.assertIn("board_flash_sector_is_erased_4byte(address)", source)
         self.assertIn("memcmp(alias_before, alias_after", source)
-        self.assertIn("erase_sector_in_4byte_mode(address)", source)
+        self.assertIn("erase_sector_in_4byte_mode(address, &guard)", source)
+        self.assertIn("FLASH_TEST_WATCHDOG_BUDGET_MS 30000U", source)
         self.assertIn("READ_STATUS_2_COMMAND 0x35U", source)
         self.assertIn("READ_STATUS_3_COMMAND 0x15U", source)
         self.assertIn("board_flash_read_status", header)
@@ -754,7 +757,8 @@ class BoardModuleLayoutTests(unittest.TestCase):
         self.assertIn("if (magnitude > 100)", motor)
         self.assertIn("return magnitude <= 100;", drive)
         self.assertIn("speed must be -100..100", module)
-        self.assertIn("speed magnitude must be 0..100", runtime)
+        self.assertIn("def _percent(value):", runtime)
+        self.assertIn("return _absolute(_percent(value))", runtime)
         for source in (board, motor, drive, module, runtime):
             self.assertNotIn("10..100", source)
 
@@ -1554,6 +1558,7 @@ class MicroPythonIntegrationTests(unittest.TestCase):
             "MP_QSTR_line",
             "MP_QSTR_rectangle",
             "MP_QSTR_text",
+            "MP_QSTR_text_line",
             "MP_QSTR_bitmap",
             "MP_QSTR_refresh",
         ):
@@ -1581,6 +1586,33 @@ class MicroPythonIntegrationTests(unittest.TestCase):
         self.assertNotIn("board_lcd_", module)
         self.assertNotIn("board_led_", module)
         self.assertNotIn("board_backlight_", module)
+
+    def test_display_text_line_matches_studio_contract_and_refreshes(self) -> None:
+        module = (ROOT / "micropython_port" / "modest.c").read_text(
+            encoding="utf-8"
+        )
+        script = (
+            ROOT.parents[1] / "tools" / "est_hid_sender" / "examples" /
+            "m122e_display_text_line_smoke.py"
+        ).read_text(encoding="utf-8")
+        text_line = module.split(
+            "static mp_obj_t modest_display_text_line", 1
+        )[1].split("static MP_DEFINE_CONST_FUN_OBJ_2", 1)[0]
+
+        self.assertIn("require_integer_range(line_object, 1, 12", text_line)
+        self.assertIn('MP_ERROR_TEXT("display line must be 1..12")', text_line)
+        self.assertIn("mp_obj_is_str(text_object)", text_line)
+        self.assertIn('MP_ERROR_TEXT("display text must be a string")', text_line)
+        self.assertIn("(line - 1U) * 10U", text_line)
+        self.assertIn("est_display_rectangle(0U, y", text_line)
+        self.assertIn("est_display_text(0U, y, value, 1U)", text_line)
+        self.assertIn(
+            "est_display_refresh_with_hook(est_micropython_vm_hook)", text_line
+        )
+        self.assertIn("MP_QSTR_text_line", module)
+        self.assertIn('est.display.text_line(1, "EST")', script)
+        self.assertIn('est.display.text_line(12, "LINE 12")', script)
+        self.assertNotIn("est.display.refresh()", script)
 
     def test_display_font_styles_keep_keyword_and_legacy_scale_contract(self) -> None:
         module = (ROOT / "micropython_port" / "modest.c").read_text(
