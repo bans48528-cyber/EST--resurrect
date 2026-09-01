@@ -116,6 +116,21 @@ void est_ui_state_set_error(est_ui_state_t *state, uint16_t error_code,
 	set_page(state, EST_UI_PAGE_ERROR);
 }
 
+void est_ui_state_set_python_error(est_ui_state_t *state, uint16_t source_line,
+	est_ui_page_t return_page)
+{
+	uint16_t encoded_line;
+
+	if (state == NULL) {
+		return;
+	}
+	encoded_line = source_line > EST_UI_ERROR_SOURCE_LINE_MASK ?
+		EST_UI_ERROR_SOURCE_LINE_MASK : source_line;
+	est_ui_state_set_error(state,
+		(uint16_t)(EST_UI_ERROR_SOURCE_LINE_FLAG | encoded_line),
+		return_page);
+}
+
 static est_ui_action_t handle_home(est_ui_state_t *state, est_button_t button)
 {
 	if (button == EST_BUTTON_BACK) {

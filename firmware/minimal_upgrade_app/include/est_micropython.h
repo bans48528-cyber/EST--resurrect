@@ -69,6 +69,7 @@ typedef struct {
 	uint32_t duration_ms;
 	uint32_t timeout_ms;
 	int32_t result_value;
+	uint16_t exception_line;
 } est_micropython_program_status_t;
 
 typedef struct {

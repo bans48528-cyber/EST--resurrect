@@ -1261,6 +1261,29 @@ class MicroPythonIntegrationTests(unittest.TestCase):
         self.assertIn("gc_helper_collect_regs_and_stack();", runtime)
         self.assertIn("micropython_status.maximum_gc_pause_us", runtime)
 
+    def test_python_exception_reports_the_innermost_user_source_line(self) -> None:
+        runtime = (ROOT / "micropython_port" / "est_micropython.c").read_text(
+            encoding="utf-8"
+        )
+        header = (ROOT / "include" / "est_micropython.h").read_text(
+            encoding="utf-8"
+        )
+        ui = (SOURCE_DIR / "est_ui.c").read_text(encoding="utf-8")
+        renderer = (SOURCE_DIR / "est_ui_renderer.c").read_text(
+            encoding="utf-8"
+        )
+        protocol = (SOURCE_DIR / "update_protocol.c").read_text(encoding="utf-8")
+
+        self.assertIn("mp_obj_exception_get_traceback", runtime)
+        self.assertIn("MP_QSTR__lt_stdin_gt_", runtime)
+        self.assertIn("for (index = 0U;", runtime)
+        self.assertIn("uint16_t exception_line;", header)
+        self.assertIn("status.exception_line", ui)
+        self.assertIn("est_ui_state_set_python_error", ui)
+        self.assertIn("format_source_line", renderer)
+        self.assertIn("EST_UI_ERROR_SOURCE_LINE_FLAG", renderer)
+        self.assertNotIn("status.exception_line", protocol)
+
     def test_est_module_uses_public_service_apis(self) -> None:
         module = (ROOT / "micropython_port" / "modest.c").read_text(
             encoding="utf-8"

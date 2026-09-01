@@ -11,6 +11,8 @@
 #define EST_UI_HOME_VISIBLE_ITEM_COUNT 4U
 #define EST_UI_SETTINGS_ITEM_COUNT 4U
 #define EST_UI_MOTOR_OUTPUT_PORT_COUNT 4U
+#define EST_UI_ERROR_SOURCE_LINE_FLAG 0x8000U
+#define EST_UI_ERROR_SOURCE_LINE_MASK 0x7FFFU
 
 typedef enum {
 	EST_UI_PAGE_HOME = 0,
@@ -83,6 +85,8 @@ void est_ui_state_set_home(est_ui_state_t *state);
 void est_ui_state_set_programs(est_ui_state_t *state);
 void est_ui_state_set_running(est_ui_state_t *state);
 void est_ui_state_set_error(est_ui_state_t *state, uint16_t error_code,
+	est_ui_page_t return_page);
+void est_ui_state_set_python_error(est_ui_state_t *state, uint16_t source_line,
 	est_ui_page_t return_page);
 est_ui_action_t est_ui_state_handle_short(est_ui_state_t *state,
 	est_button_t button);

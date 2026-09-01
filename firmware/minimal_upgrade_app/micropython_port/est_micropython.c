@@ -13,6 +13,7 @@
 #include "py/lexer.h"
 #include "py/mperrno.h"
 #include "py/nlr.h"
+#include "py/obj.h"
 #include "py/runtime.h"
 #include "shared/runtime/gchelper.h"
 
@@ -99,9 +100,34 @@ static uint32_t crc32_bytes(const uint8_t *data, uint16_t length)
 	return crc ^ 0xFFFFFFFFUL;
 }
 
-static bool execute_script(const char *source, size_t length)
+static uint16_t exception_source_line(mp_obj_t exception)
+{
+	size_t count;
+	size_t *traceback;
+	size_t index;
+
+	if (!mp_obj_is_exception_instance(exception)) {
+		return 0U;
+	}
+	mp_obj_exception_get_traceback(exception, &count, &traceback);
+	for (index = 0U; index + 2U < count; index += 3U) {
+		if ((qstr)traceback[index] == MP_QSTR__lt_stdin_gt_ &&
+		    traceback[index + 1U] > 0U) {
+			return traceback[index + 1U] <= UINT16_MAX ?
+				(uint16_t)traceback[index + 1U] : UINT16_MAX;
+		}
+	}
+	return 0U;
+}
+
+static bool execute_script(const char *source, size_t length,
+	uint16_t *exception_line)
 {
 	nlr_buf_t nlr;
+
+	if (exception_line != NULL) {
+		*exception_line = 0U;
+	}
 
 	if (nlr_push(&nlr) == 0) {
 		nlr_set_abort(&nlr);
@@ -116,6 +142,10 @@ static bool execute_script(const char *source, size_t length)
 		nlr_pop();
 		nlr_set_abort(NULL);
 		return true;
+	}
+	if (exception_line != NULL) {
+		*exception_line = exception_source_line(
+			MP_OBJ_FROM_PTR(nlr.ret_val));
 	}
 	nlr_set_abort(NULL);
 	return false;
@@ -180,7 +210,7 @@ void est_micropython_init(void)
 	initialize_vm();
 
 	script_succeeded = execute_script(
-		self_test_script, sizeof(self_test_script) - 1U);
+		self_test_script, sizeof(self_test_script) - 1U, NULL);
 	refresh_heap_status();
 	micropython_status.startup_duration_ms =
 		est_system_millis() - started_ms;
@@ -217,6 +247,7 @@ void est_micropython_tick(void)
 {
 	bool script_succeeded;
 	uint32_t finished_ms;
+	uint16_t exception_line;
 
 	if (!program_run_requested ||
 	    program_status.state != EST_MICROPYTHON_PROGRAM_QUEUED) {
@@ -233,6 +264,7 @@ void est_micropython_tick(void)
 		EST_MICROPYTHON_PROGRAM_FLAG_TIMEOUT_ARMED);
 	program_status.duration_ms = 0U;
 	program_status.result_value = 0;
+	program_status.exception_line = 0U;
 	program_started_ms = est_system_millis();
 	program_last_watchdog_ms = program_started_ms;
 	program_last_usb_poll_ms = program_started_ms;
@@ -240,7 +272,7 @@ void est_micropython_tick(void)
 	(void)est_motor_stop_all(EST_STOP_COAST);
 	reset_vm();
 	script_succeeded = execute_script((const char *)program_source,
-		program_status.expected_length);
+		program_status.expected_length, &exception_line);
 	finished_ms = est_system_millis();
 	program_status.duration_ms = finished_ms - program_started_ms;
 	program_status.run_count++;
@@ -261,6 +293,7 @@ void est_micropython_tick(void)
 		program_status.state = EST_MICROPYTHON_PROGRAM_EXCEPTION;
 		program_status.error =
 			EST_MICROPYTHON_PROGRAM_ERROR_PYTHON_EXCEPTION;
+		program_status.exception_line = exception_line;
 		program_cleanup_after_failure();
 	}
 	program_executing = false;
@@ -304,6 +337,7 @@ static est_result_t program_begin(uint16_t length, uint32_t crc32,
 	program_status.duration_ms = 0U;
 	program_status.timeout_ms = 0U;
 	program_status.result_value = 0;
+	program_status.exception_line = 0U;
 	program_requires_host = requires_host;
 	program_source[0] = 0U;
 	return EST_OK;
@@ -459,6 +493,7 @@ bool est_micropython_program_get_status(
 	status->duration_ms = program_status.duration_ms;
 	status->timeout_ms = program_status.timeout_ms;
 	status->result_value = program_status.result_value;
+	status->exception_line = program_status.exception_line;
 	return true;
 }
 

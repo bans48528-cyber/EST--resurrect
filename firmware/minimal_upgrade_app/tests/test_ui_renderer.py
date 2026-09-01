@@ -87,6 +87,8 @@ class UiRendererTests(unittest.TestCase):
                 _Bool usb_connected;
             } est_ui_view_t;
             void est_ui_state_init(est_ui_state_t *);
+            void est_ui_state_set_python_error(
+                est_ui_state_t *, uint16_t, int);
             void est_ui_renderer_render(
                 const est_ui_state_t *, const est_ui_view_t *);
             const uint8_t *fake_lcd_framebuffer(void);
@@ -324,6 +326,26 @@ class UiRendererTests(unittest.TestCase):
         view.transfer_progress = 50
         self.renderer.est_ui_renderer_render(state, view)
         self.assertGreater(self.count_pixels(20, 39, 140, 52), 300)
+
+    def test_python_error_renders_source_line_instead_of_error_three(self) -> None:
+        state, view, _ = self.new_model()
+        self.renderer.est_ui_state_set_python_error(state, 27, 2)
+        self.assertEqual(state.page, 10)
+        self.assertEqual(state.error_code, 0x8000 | 27)
+
+        self.renderer.fake_lcd_reset()
+        self.renderer.est_ui_renderer_render(state, view)
+        line_frame = bytes(
+            self.ffi.buffer(self.renderer.fake_lcd_framebuffer(), 180 * 16)
+        )
+        self.assertGreater(self.count_pixels(50, 74, 80, 20), 25)
+
+        state.error_code = 3
+        self.renderer.est_ui_renderer_render(state, view)
+        code_frame = bytes(
+            self.ffi.buffer(self.renderer.fake_lcd_framebuffer(), 180 * 16)
+        )
+        self.assertNotEqual(line_frame, code_frame)
 
 
 if __name__ == "__main__":

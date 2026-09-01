@@ -16,6 +16,12 @@ def make_fake_est() -> types.ModuleType:
     module.now_ms = 0
     module.millis_step = 100
     module.button_mask = 0
+    module.touch_pressed = True
+    module.color_value = 5
+    module.gyro_angle = 90
+    module.ultrasonic_distance_mm = 1234
+    module.infrared_proximity = 31
+    module.infrared_remote = 9
     module.events = []
 
     class GlobalProgramStop(BaseException):
@@ -137,12 +143,45 @@ def make_fake_est() -> types.ModuleType:
                 return self.states.pop(0)
             return self.STATE_IDLE
 
+    class MotorPair:
+        STATE_IDLE = 0
+        STATE_RUNNING = 1
+        STATE_COMPLETE = 2
+        STATE_FAULT = 3
+
+        def __init__(self, left_port, right_port):
+            self.left_port = left_port
+            self.right_port = right_port
+            self.states = []
+            module.events.append(("pair.new", left_port, right_port))
+
+        def run_speed(self, left_speed, right_speed):
+            self.states = [self.STATE_RUNNING]
+            module.events.append(("pair.run_speed", left_speed, right_speed))
+
+        def run_time(self, duration_ms, **kwargs):
+            module.events.append(("pair.run_time", duration_ms, kwargs))
+            if not kwargs.get("wait", True):
+                self.states = [self.STATE_RUNNING, self.STATE_COMPLETE]
+
+        def run_angle(self, left_degrees, right_degrees, **kwargs):
+            module.events.append(
+                ("pair.run_angle", left_degrees, right_degrees, kwargs)
+            )
+            if not kwargs.get("wait", True):
+                self.states = [self.STATE_RUNNING, self.STATE_COMPLETE]
+
+        def state(self):
+            if self.states:
+                return self.states.pop(0)
+            return self.STATE_IDLE
+
     class TouchSensor:
         def __init__(self, port):
             self.port = port
 
         def pressed(self):
-            return True
+            return module.touch_pressed
 
     class SoundSensor:
         def __init__(self, port):
@@ -162,7 +201,7 @@ def make_fake_est() -> types.ModuleType:
             return 7
 
         def color(self):
-            return 5
+            return module.color_value
 
     class GyroSensor:
         def __init__(self, port):
@@ -170,7 +209,7 @@ def make_fake_est() -> types.ModuleType:
             self.zeroed = False
 
         def angle(self):
-            return 90
+            return module.gyro_angle
 
         def speed(self):
             return -3
@@ -193,7 +232,7 @@ def make_fake_est() -> types.ModuleType:
             self.port = port
 
         def distance_mm(self):
-            return 1234
+            return module.ultrasonic_distance_mm
 
         def inches_tenths(self):
             return 48
@@ -206,13 +245,13 @@ def make_fake_est() -> types.ModuleType:
             self.port = port
 
         def proximity(self):
-            return 31
+            return module.infrared_proximity
 
         def beacon(self):
             return (-4, 22)
 
         def remote(self):
-            return 9
+            return module.infrared_remote
 
     class Display:
         @staticmethod
@@ -220,11 +259,20 @@ def make_fake_est() -> types.ModuleType:
             module.events.append(("display.image", name))
 
         @staticmethod
+        def text(x, y, value, **kwargs):
+            module.events.append(("display.text", x, y, value, kwargs))
+
+        @staticmethod
+        def text_line(line, value):
+            module.events.append(("display.text_line", line, value))
+
+        @staticmethod
         def refresh():
             module.events.append(("display.refresh",))
 
     module.millis = millis
     module.Motor = Motor
+    module.MotorPair = MotorPair
     module.DriveBase = DriveBase
     module.TouchSensor = TouchSensor
     module.SoundSensor = SoundSensor
@@ -619,6 +667,89 @@ class RuntimeHardwareTests(unittest.TestCase):
         self.assertIn(("drive.steer", -30, {"speed": -40}), fake_est.events)
         self.assertIn(("drive.stop", 0), fake_est.events)
 
+    def test_dual_speed_drive_continuous_clamps_and_retargets(self) -> None:
+        runtime, fake_est = load_runtime()
+        runtime.drive_set_pair("A", "C")
+
+        runtime.drive_start_dual_speed(101, -101)
+        runtime.drive_start_dual_speed(0, 50)
+        runtime.drive_start_dual_speed(50, 0)
+        runtime.drive_start_dual_speed(0, 0)
+
+        self.assertEqual(
+            [
+                ("pair.run_speed", 100, -100),
+                ("pair.run_speed", 0, 50),
+                ("pair.run_speed", 50, 0),
+                ("pair.run_speed", 0, 0),
+            ],
+            [event for event in fake_est.events if event[0] == "pair.run_speed"],
+        )
+        self.assertNotIn(("motor.stop", "A", 0), fake_est.events)
+        self.assertNotIn(("motor.stop", "C", 0), fake_est.events)
+
+    def test_dual_speed_drive_for_time_and_proportional_degrees(self) -> None:
+        runtime, fake_est = load_runtime()
+        runtime.drive_set_pair("B", "C")
+        runtime.drive_set_stop_action("hold")
+
+        runtime.drive_dual_speed_for(101, -50, 2, "rotations")
+        runtime.drive_dual_speed_for(0, 50, 90, "degrees")
+        runtime.drive_dual_speed_for(50, 0, 1.5, "seconds")
+        runtime.drive_dual_speed_for(0, 0, 0.5, "seconds")
+
+        self.assertIn(
+            (
+                "pair.run_angle", 720, -360,
+                {"speed": 100, "stop": 2, "wait": True},
+            ),
+            fake_est.events,
+        )
+        self.assertIn(
+            (
+                "pair.run_angle", 0, 90,
+                {"speed": 50, "stop": 2, "wait": True},
+            ),
+            fake_est.events,
+        )
+        self.assertIn(
+            (
+                "pair.run_time", 1500,
+                {"left_speed": 50, "right_speed": 0, "stop": 2, "wait": True},
+            ),
+            fake_est.events,
+        )
+        self.assertIn(
+            (
+                "pair.run_time", 500,
+                {"left_speed": 0, "right_speed": 0, "stop": 2, "wait": True},
+            ),
+            fake_est.events,
+        )
+
+    def test_new_dual_speed_owner_survives_old_task_cleanup(self) -> None:
+        runtime, fake_est = load_runtime()
+
+        @runtime.on_start
+        async def old_owner():
+            runtime.drive_start_dual_speed(20, 40)
+            await runtime.yield_once()
+            await runtime.yield_once()
+
+        @runtime.on_start
+        async def new_owner():
+            await runtime.yield_once()
+            runtime.drive_start_dual_speed(75, 50)
+            await runtime.yield_once()
+
+        runtime.run()
+
+        takeover = fake_est.events.index(("pair.run_speed", 75, 50))
+        self.assertEqual(
+            [("motor.stop", "B", 0), ("motor.stop", "C", 0)],
+            [event for event in fake_est.events[takeover + 1:] if event[0] == "motor.stop"],
+        )
+
     def test_sensor_wrappers_and_cache(self) -> None:
         runtime, _ = load_runtime()
         wrappers = (
@@ -672,6 +803,37 @@ class RuntimeHardwareTests(unittest.TestCase):
         self.assertGreaterEqual(fake_est.now_ms - started, 500)
         with self.assertRaises(ValueError):
             runtime.display_image_for("Eyes/Neutral", -1)
+
+    def test_display_text_converts_values_and_refreshes_once(self) -> None:
+        runtime, fake_est = load_runtime()
+
+        runtime.display_text("10", 20.9, 42, font="bold_white")
+
+        self.assertEqual(
+            fake_est.events,
+            [
+                ("display.text", 10, 20, "42", {"font": "bold_white"}),
+                ("display.refresh",),
+            ],
+        )
+
+    def test_display_text_line_converts_values_and_uses_native_refresh(self) -> None:
+        runtime, fake_est = load_runtime()
+
+        runtime.display_text_line("3", 21.5)
+
+        self.assertEqual(fake_est.events, [("display.text_line", 3, "21.5")])
+
+    def test_random_int_is_inclusive_and_accepts_reversed_bounds(self) -> None:
+        runtime, _ = load_runtime()
+
+        normal = [runtime.random_int(1, 10) for _ in range(64)]
+        reversed_bounds = [runtime.random_int(10, 1) for _ in range(64)]
+
+        self.assertTrue(all(1 <= value <= 10 for value in normal))
+        self.assertTrue(all(1 <= value <= 10 for value in reversed_bounds))
+        self.assertGreater(len(set(normal + reversed_bounds)), 1)
+        self.assertEqual(runtime.random_int(7, 7), 7)
 
 
 class RuntimeEventTests(unittest.TestCase):
@@ -1034,12 +1196,133 @@ class RuntimeEventTests(unittest.TestCase):
             runtime.run()
 
 
+class RuntimeSensorWaitTests(unittest.TestCase):
+    def test_synchronous_waits_return_when_conditions_are_already_true(self) -> None:
+        runtime, fake_est = load_runtime()
+
+        runtime.wait_brick_button("confirm", "released")
+        runtime.wait_color("3", "red")
+        runtime.wait_touch(1, "pressed")
+        runtime.wait_ultrasonic("4", "less", 200, "centimeters")
+        runtime.wait_ir_proximity(4, "greater", 20)
+        runtime.wait_ir_beacon_button("4", 1, "active")
+        runtime.wait_gyro("2", "greater", 20)
+
+        self.assertEqual(fake_est.now_ms, 200)
+
+    def test_all_sensor_waits_cooperate_with_other_tasks(self) -> None:
+        runtime, fake_est = load_runtime()
+        fake_est.touch_pressed = False
+        fake_est.color_value = 5
+        fake_est.ultrasonic_distance_mm = 1000
+        fake_est.infrared_proximity = 10
+        fake_est.infrared_remote = 0
+        fake_est.gyro_angle = 0
+        calls = []
+
+        @runtime.on_start
+        async def waiter():
+            await runtime.wait_brick_button("center", "pressed")
+            calls.append("button")
+            await runtime.wait_color(3, "blue")
+            calls.append("color")
+            await runtime.wait_touch("1", "pressed")
+            calls.append("touch")
+            await runtime.wait_ultrasonic(4, "less", 15, "centimeters")
+            calls.append("ultrasonic")
+            await runtime.wait_ir_proximity("4", "greater", 50)
+            calls.append("ir-proximity")
+            await runtime.wait_ir_beacon_button(4, "1", "top_left_pressed")
+            calls.append("ir-remote")
+            await runtime.wait_gyro(2, "greater", 45)
+            calls.append("gyro")
+            runtime.stop("all")
+
+        @runtime.on_start
+        async def driver():
+            await runtime.yield_once()
+            fake_est.button_mask = fake_est.buttons.CONFIRM
+            while "button" not in calls:
+                await runtime.yield_once()
+            fake_est.color_value = 2
+            while "color" not in calls:
+                await runtime.yield_once()
+            fake_est.touch_pressed = True
+            while "touch" not in calls:
+                await runtime.yield_once()
+            fake_est.ultrasonic_distance_mm = 100
+            while "ultrasonic" not in calls:
+                await runtime.yield_once()
+            fake_est.infrared_proximity = 60
+            while "ir-proximity" not in calls:
+                await runtime.yield_once()
+            fake_est.infrared_remote = 1
+            while "ir-remote" not in calls:
+                await runtime.yield_once()
+            fake_est.gyro_angle = 90
+
+        with self.assertRaises(fake_est.GlobalProgramStop):
+            runtime.run()
+        self.assertEqual(
+            calls,
+            [
+                "button", "color", "touch", "ultrasonic",
+                "ir-proximity", "ir-remote", "gyro",
+            ],
+        )
+
+    def test_changed_waits_capture_a_baseline(self) -> None:
+        runtime, fake_est = load_runtime()
+        fake_est.color_value = 5
+        fake_est.gyro_angle = 10
+        calls = []
+
+        @runtime.on_start
+        async def waiter():
+            await runtime.wait_color(3, "changed")
+            calls.append("color")
+            await runtime.wait_gyro(2, "changed", 5)
+            calls.append("gyro")
+            runtime.stop("all")
+
+        @runtime.on_start
+        async def driver():
+            await runtime.yield_once()
+            fake_est.color_value = 2
+            while "color" not in calls:
+                await runtime.yield_once()
+            fake_est.gyro_angle = 16
+
+        with self.assertRaises(fake_est.GlobalProgramStop):
+            runtime.run()
+        self.assertEqual(calls, ["color", "gyro"])
+
+    def test_wait_parameter_errors_are_explicit(self) -> None:
+        runtime, _ = load_runtime()
+
+        with self.assertRaisesRegex(ValueError, "global program stop"):
+            runtime.wait_brick_button("back", "pressed")
+        with self.assertRaisesRegex(ValueError, "event must"):
+            runtime.wait_touch(1, "held")
+        with self.assertRaisesRegex(ValueError, "unknown color"):
+            runtime.wait_color(3, "purple")
+        with self.assertRaisesRegex(ValueError, "comparator"):
+            runtime.wait_gyro(2, "around", 10)
+        with self.assertRaisesRegex(ValueError, "distance unit"):
+            runtime.wait_ultrasonic(4, "less", 10, "meters")
+        with self.assertRaisesRegex(ValueError, "channel must be 1"):
+            runtime.wait_ir_beacon_button(4, 2, "active")
+        with self.assertRaisesRegex(ValueError, "unknown infrared"):
+            runtime.wait_ir_beacon_button(4, 1, "held")
+
+
 class RuntimeContractTests(unittest.TestCase):
     def test_generator_runtime_names_are_explicit(self) -> None:
         runtime, _ = load_runtime()
         expected = {
             "boolean", "broadcast", "color", "color_calibrate",
             "color_reset_calibration", "compare", "display_image_for",
+            "display_text", "display_text_line",
             "drive_dual_speed_for", "drive_move_for", "drive_set_pair",
             "drive_set_speed", "drive_set_stop_action",
             "drive_start_dual_speed", "drive_start_steer",
@@ -1050,7 +1333,7 @@ class RuntimeContractTests(unittest.TestCase):
             "on_brick_button", "on_broadcast", "on_color",
             "on_condition", "on_gyro_angle", "on_ir_beacon_button",
             "on_ir_proximity", "on_start", "on_timer_gt", "on_touch",
-            "on_ultrasonic", "repeat_count", "reset_timer", "run",
+            "on_ultrasonic", "random_int", "repeat_count", "reset_timer", "run",
             "seconds_to_ms", "sleep", "stop", "stop_other_stacks",
             "temperature", "timer_seconds", "touch", "ultrasonic", "wait_brick_button",
             "wait_color", "wait_gyro", "wait_ir_beacon_button",
@@ -1063,14 +1346,10 @@ class RuntimeContractTests(unittest.TestCase):
         runtime, _ = load_runtime()
         unsupported = (
             "broadcast", "color_calibrate", "color_reset_calibration",
-            "drive_dual_speed_for",
-            "drive_start_dual_speed", "ir_beacon_compare",
+            "ir_beacon_compare",
             "on_broadcast", "on_color",
             "on_gyro_angle", "on_ir_beacon_button", "on_ir_proximity",
             "on_touch", "on_ultrasonic",
-            "wait_brick_button", "wait_color",
-            "wait_gyro", "wait_ir_beacon_button", "wait_ir_proximity",
-            "wait_touch", "wait_ultrasonic",
         )
         for name in unsupported:
             with self.subTest(name=name):

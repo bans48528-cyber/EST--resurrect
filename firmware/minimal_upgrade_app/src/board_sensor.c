@@ -550,17 +550,18 @@ static void send_mode(enum board_sensor_port port,
 		(uint8_t)(SENSOR_SELECT_MODE ^ encoded_mode ^ 0xFFU));
 }
 
-static void send_pending_mode(enum board_sensor_port port)
+static bool send_pending_mode(enum board_sensor_port port, uint32_t now_ms)
 {
 	struct sensor_runtime *runtime = &sensor_runtime[(uint8_t)port];
 
-	if (!board_sensor_mode_command_needed(&runtime->mode_tracker)) {
-		return;
+	if (!board_sensor_mode_command_needed(&runtime->mode_tracker, now_ms)) {
+		return false;
 	}
 	send_mode(port, (enum board_sensor_mode)
 		runtime->mode_tracker.requested_mode);
-	board_sensor_mode_mark_command_sent(&runtime->mode_tracker);
+	board_sensor_mode_mark_command_sent(&runtime->mode_tracker, now_ms);
 	update_mode_snapshot(runtime);
+	return true;
 }
 
 static void start_sync(enum board_sensor_port port, uint32_t now_ms)
@@ -1156,15 +1157,30 @@ static void tick_port(enum board_sensor_port port, uint32_t now_ms)
 		if (!runtime->stream_commands_started &&
 		    (uint32_t)(now_ms - runtime->stream_started_ms) >=
 			SENSOR_STREAM_START_DELAY_MS) {
-			send_pending_mode(port);
-			send_uart_byte(port, SENSOR_SYSTEM_NACK);
+			bool mode_sent = send_pending_mode(port, now_ms);
+
+			if (!mode_sent) {
+				send_uart_byte(port, SENSOR_SYSTEM_NACK);
+			}
 			runtime->last_keepalive_ms = now_ms;
 			runtime->stream_commands_started = true;
-		} else if (runtime->stream_commands_started &&
-			   (uint32_t)(now_ms - runtime->last_keepalive_ms) >=
-				SENSOR_KEEPALIVE_INTERVAL_MS) {
-			send_uart_byte(port, SENSOR_SYSTEM_NACK);
-			runtime->last_keepalive_ms = now_ms;
+		} else if (runtime->stream_commands_started) {
+			bool mode_sent;
+
+			/*
+			 * The sensor can retain its previous mode across a host-side
+			 * resync. The first data frame then reveals that the pending
+			 * request still needs to be sent.
+			 */
+			mode_sent = send_pending_mode(port, now_ms);
+			if (mode_sent) {
+				/* Do not append a keepalive while the sensor changes mode. */
+				runtime->last_keepalive_ms = now_ms;
+			} else if ((uint32_t)(now_ms - runtime->last_keepalive_ms) >=
+			    SENSOR_KEEPALIVE_INTERVAL_MS) {
+				send_uart_byte(port, SENSOR_SYSTEM_NACK);
+				runtime->last_keepalive_ms = now_ms;
+			}
 		}
 		if ((uint32_t)(now_ms -
 		    (runtime->mode_tracker.last_data_ms == 0U ?
@@ -1266,12 +1282,7 @@ bool board_sensor_set_mode(enum board_sensor_port port,
 	    runtime->snapshot.state == BOARD_SENSOR_STREAMING) {
 		return true;
 	}
-	if (runtime->snapshot.state == BOARD_SENSOR_STREAMING &&
-	    runtime->stream_commands_started) {
-		send_pending_mode(port);
-		send_uart_byte(port, SENSOR_SYSTEM_NACK);
-		runtime->last_keepalive_ms = now_ms;
-	}
+	/* The streaming tick sends the request after draining complete RX frames. */
 	return true;
 }
 

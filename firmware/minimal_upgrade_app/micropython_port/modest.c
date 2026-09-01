@@ -775,11 +775,11 @@ static mp_obj_t modest_motor_pair_run_angle(size_t argument_count,
 	right_degrees = (int32_t)arguments[ARG_right_degrees].u_int;
 	speed = (int32_t)arguments[ARG_speed].u_int;
 	stop_mode = (int32_t)arguments[ARG_stop].u_int;
-	if (left_degrees == 0 || left_degrees < -3600 ||
-	    left_degrees > 3600 || right_degrees == 0 ||
+	if ((left_degrees == 0 && right_degrees == 0) ||
+	    left_degrees < -3600 || left_degrees > 3600 ||
 	    right_degrees < -3600 || right_degrees > 3600) {
 		mp_raise_ValueError(
-			MP_ERROR_TEXT("pair degrees must be nonzero and within 3600"));
+			MP_ERROR_TEXT("at least one pair degree must be nonzero and within 3600"));
 	}
 	if (speed < 0 || speed > 100) {
 		mp_raise_ValueError(MP_ERROR_TEXT("speed must be 0..100"));
@@ -1138,7 +1138,9 @@ typedef struct {
 	int32_t gyro_zero_degrees;
 } modest_sensor_instance_t;
 
+#define MODEST_SENSOR_TYPE_TIMEOUT_MS 6000U
 #define MODEST_SENSOR_VALUE_TIMEOUT_MS 3000U
+#define MODEST_SENSOR_TYPE_WATCHDOG_BUDGET_MS 8000U
 #define MODEST_SENSOR_WATCHDOG_BUDGET_MS 5000U
 
 static void modest_raise_sensor_error(est_result_t error)
@@ -1209,14 +1211,15 @@ static void modest_sensor_wait_for_type(modest_sensor_instance_t *self)
 	watchdog_guard_t guard;
 
 	watchdog_guard_begin(&guard, started_ms,
-		MODEST_SENSOR_WATCHDOG_BUDGET_MS);
+		MODEST_SENSOR_TYPE_WATCHDOG_BUDGET_MS);
 
 	for (;;) {
 		result = est_sensor_get_status(self->port, &status);
 		if (result != EST_OK) {
 			modest_raise_sensor_error_guarded(&guard, result);
 		}
-		if (status.type == self->expected_type) {
+		if (status.type == self->expected_type &&
+		    status.state == EST_SENSOR_STREAMING) {
 			watchdog_guard_end(&guard);
 			return;
 		}
@@ -1227,7 +1230,7 @@ static void modest_sensor_wait_for_type(modest_sensor_instance_t *self)
 				EST_ERR_NOT_CONNECTED : EST_ERR_TYPE_MISMATCH);
 		}
 		if ((uint32_t)(est_system_millis() - started_ms) >=
-		    MODEST_SENSOR_VALUE_TIMEOUT_MS) {
+		    MODEST_SENSOR_TYPE_TIMEOUT_MS) {
 			modest_raise_sensor_error_guarded(&guard,
 				status.type == EST_SENSOR_TYPE_NONE ?
 				EST_ERR_NOT_CONNECTED : EST_ERR_TYPE_MISMATCH);

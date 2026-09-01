@@ -371,8 +371,14 @@ static void update_program_state(void)
 	if (status.state == EST_MICROPYTHON_PROGRAM_EXCEPTION ||
 	    status.state == EST_MICROPYTHON_PROGRAM_TIMED_OUT ||
 	    status.state == EST_MICROPYTHON_PROGRAM_INVALID) {
-		est_ui_state_set_error(&ui_state, (uint16_t)status.error,
-			EST_UI_PAGE_PROGRAMS);
+		if (status.error ==
+		    EST_MICROPYTHON_PROGRAM_ERROR_PYTHON_EXCEPTION) {
+			est_ui_state_set_python_error(&ui_state,
+				status.exception_line, EST_UI_PAGE_PROGRAMS);
+		} else {
+			est_ui_state_set_error(&ui_state, (uint16_t)status.error,
+				EST_UI_PAGE_PROGRAMS);
+		}
 	} else {
 		est_ui_state_set_home(&ui_state);
 	}

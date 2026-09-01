@@ -188,7 +188,8 @@ est_result_t est_motor_pair_run_angles(est_motor_port_t left_port,
 	if (!motor_port_valid(left_port) || !motor_port_valid(right_port)) {
 		return EST_ERR_INVALID_PORT;
 	}
-	if (left_port == right_port || left_degrees == 0 || right_degrees == 0 ||
+	if (left_port == right_port ||
+	    (left_degrees == 0 && right_degrees == 0) ||
 	    left_degrees < -3600 || left_degrees > 3600 ||
 	    right_degrees < -3600 || right_degrees > 3600 ||
 	    maximum_speed_percent > 100U ||

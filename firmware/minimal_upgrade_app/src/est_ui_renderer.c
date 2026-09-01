@@ -209,6 +209,24 @@ static void format_error(uint16_t error_code, char output[8])
 	(void)append_uint(output, index, 8U, error_code);
 }
 
+static void format_source_line(uint16_t encoded_line, char output[12])
+{
+	uint16_t source_line = encoded_line & EST_UI_ERROR_SOURCE_LINE_MASK;
+	uint8_t index = 0U;
+
+	output[index++] = 'L';
+	output[index++] = 'i';
+	output[index++] = 'n';
+	output[index++] = 'e';
+	output[index++] = ':';
+	if (source_line == 0U) {
+		output[index++] = '?';
+		output[index] = '\0';
+	} else {
+		(void)append_uint(output, index, 12U, source_line);
+	}
+}
+
 static void draw_header(const est_ui_state_t *state,
 	const est_ui_view_t *view)
 {
@@ -768,9 +786,13 @@ static void draw_device_info(const est_ui_state_t *state,
 
 static void draw_error(const est_ui_state_t *state)
 {
-	char error[8];
+	char error[12];
 
-	format_error(state->error_code, error);
+	if ((state->error_code & EST_UI_ERROR_SOURCE_LINE_FLAG) != 0U) {
+		format_source_line(state->error_code, error);
+	} else {
+		format_error(state->error_code, error);
+	}
 	draw_text_centered(30U, state->language,
 		EST_UI_STRING_PROGRAM_STOPPED, EST_UI_TEXT_NORMAL);
 	draw_text_centered(53U, state->language,

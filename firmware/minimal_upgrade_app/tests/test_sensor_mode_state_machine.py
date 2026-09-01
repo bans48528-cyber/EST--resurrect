@@ -22,11 +22,13 @@ class SensorModeTrackerTests(unittest.TestCase):
             typedef struct {
                 uint8_t requested_mode;
                 uint8_t active_mode;
+                uint8_t command_attempts;
                 _Bool pending;
                 _Bool command_sent;
                 uint32_t data_generation;
                 uint32_t last_data_ms;
                 uint32_t mode_command_count;
+                uint32_t last_command_ms;
             } board_sensor_mode_tracker_t;
             void board_sensor_mode_init(board_sensor_mode_tracker_t *, uint8_t);
             void board_sensor_mode_reset_stream(
@@ -34,9 +36,9 @@ class SensorModeTrackerTests(unittest.TestCase):
             _Bool board_sensor_mode_request(
                 board_sensor_mode_tracker_t *, uint8_t);
             _Bool board_sensor_mode_command_needed(
-                const board_sensor_mode_tracker_t *);
+                const board_sensor_mode_tracker_t *, uint32_t);
             void board_sensor_mode_mark_command_sent(
-                board_sensor_mode_tracker_t *);
+                board_sensor_mode_tracker_t *, uint32_t);
             _Bool board_sensor_mode_accept_data(
                 board_sensor_mode_tracker_t *, uint8_t, uint32_t);
             """
@@ -59,12 +61,12 @@ class SensorModeTrackerTests(unittest.TestCase):
     def test_pending_request_is_sent_once_and_requires_new_target_frame(self) -> None:
         tracker = self.tracker()
         self.assertTrue(tracker.pending)
-        self.assertFalse(self.mode.board_sensor_mode_command_needed(tracker))
+        self.assertFalse(self.mode.board_sensor_mode_command_needed(tracker, 0))
 
         self.assertTrue(self.mode.board_sensor_mode_request(tracker, 1))
-        self.assertTrue(self.mode.board_sensor_mode_command_needed(tracker))
-        self.mode.board_sensor_mode_mark_command_sent(tracker)
-        self.mode.board_sensor_mode_mark_command_sent(tracker)
+        self.assertTrue(self.mode.board_sensor_mode_command_needed(tracker, 0))
+        self.mode.board_sensor_mode_mark_command_sent(tracker, 0)
+        self.mode.board_sensor_mode_mark_command_sent(tracker, 0)
         self.assertEqual(tracker.mode_command_count, 1)
         self.assertFalse(self.mode.board_sensor_mode_request(tracker, 1))
         self.assertEqual(tracker.mode_command_count, 1)
@@ -72,6 +74,8 @@ class SensorModeTrackerTests(unittest.TestCase):
         self.assertFalse(self.mode.board_sensor_mode_accept_data(tracker, 0, 10))
         self.assertTrue(tracker.pending)
         self.assertEqual(tracker.data_generation, 1)
+        self.assertFalse(self.mode.board_sensor_mode_command_needed(tracker, 99))
+        self.assertTrue(self.mode.board_sensor_mode_command_needed(tracker, 100))
         self.assertTrue(self.mode.board_sensor_mode_accept_data(tracker, 1, 20))
         self.assertFalse(tracker.pending)
         self.assertEqual(tracker.active_mode, 1)
@@ -83,17 +87,51 @@ class SensorModeTrackerTests(unittest.TestCase):
         self.assertTrue(self.mode.board_sensor_mode_accept_data(tracker, 0, 10))
 
         self.assertTrue(self.mode.board_sensor_mode_request(tracker, 1))
-        self.mode.board_sensor_mode_mark_command_sent(tracker)
+        self.mode.board_sensor_mode_mark_command_sent(tracker, 10)
         self.assertFalse(self.mode.board_sensor_mode_accept_data(tracker, 0, 20))
         self.assertTrue(self.mode.board_sensor_mode_accept_data(tracker, 1, 30))
 
         self.assertTrue(self.mode.board_sensor_mode_request(tracker, 0))
-        self.assertTrue(self.mode.board_sensor_mode_command_needed(tracker))
-        self.mode.board_sensor_mode_mark_command_sent(tracker)
-        self.assertFalse(self.mode.board_sensor_mode_accept_data(tracker, 1, 40))
-        self.assertTrue(self.mode.board_sensor_mode_accept_data(tracker, 0, 50))
+        self.assertTrue(self.mode.board_sensor_mode_command_needed(tracker, 40))
+        self.mode.board_sensor_mode_mark_command_sent(tracker, 40)
+        self.assertFalse(self.mode.board_sensor_mode_accept_data(tracker, 1, 50))
+        self.assertTrue(self.mode.board_sensor_mode_accept_data(tracker, 0, 60))
         self.assertEqual(tracker.mode_command_count, 2)
         self.assertEqual(tracker.data_generation, 5)
+
+    def test_wrong_mode_frames_allow_five_bounded_select_attempts(self) -> None:
+        tracker = self.tracker()
+        self.assertTrue(self.mode.board_sensor_mode_request(tracker, 1))
+
+        for attempt in range(1, 6):
+            now_ms = (attempt - 1) * 100
+            self.assertTrue(
+                self.mode.board_sensor_mode_command_needed(tracker, now_ms)
+            )
+            self.mode.board_sensor_mode_mark_command_sent(tracker, now_ms)
+            self.assertEqual(tracker.command_attempts, attempt)
+            self.assertFalse(
+                self.mode.board_sensor_mode_accept_data(tracker, 0, now_ms + 10)
+            )
+
+        self.assertFalse(
+            self.mode.board_sensor_mode_command_needed(tracker, 500)
+        )
+        self.assertTrue(tracker.pending)
+        self.assertEqual(tracker.mode_command_count, 5)
+
+    def test_target_frame_stops_select_retries(self) -> None:
+        tracker = self.tracker()
+        self.assertTrue(self.mode.board_sensor_mode_request(tracker, 2))
+        self.mode.board_sensor_mode_mark_command_sent(tracker, 0)
+        self.assertFalse(self.mode.board_sensor_mode_accept_data(tracker, 0, 10))
+        self.assertFalse(self.mode.board_sensor_mode_command_needed(tracker, 99))
+        self.assertTrue(self.mode.board_sensor_mode_command_needed(tracker, 100))
+        self.mode.board_sensor_mode_mark_command_sent(tracker, 100)
+        self.assertTrue(self.mode.board_sensor_mode_accept_data(tracker, 2, 110))
+        self.assertFalse(tracker.pending)
+        self.assertFalse(self.mode.board_sensor_mode_command_needed(tracker, 200))
+        self.assertEqual(tracker.mode_command_count, 2)
 
     def test_same_ready_mode_does_not_clear_data_or_send_command(self) -> None:
         tracker = self.tracker()
@@ -104,6 +142,24 @@ class SensorModeTrackerTests(unittest.TestCase):
         self.assertEqual(tracker.data_generation, generation)
         self.assertEqual(tracker.last_data_ms, 25)
         self.assertEqual(tracker.mode_command_count, 0)
+
+    def test_resync_sends_preserved_request_after_sensor_reports_old_mode(self) -> None:
+        tracker = self.tracker()
+        self.assertTrue(self.mode.board_sensor_mode_request(tracker, 2))
+        self.mode.board_sensor_mode_mark_command_sent(tracker, 0)
+        self.assertTrue(self.mode.board_sensor_mode_accept_data(tracker, 2, 10))
+
+        self.assertTrue(self.mode.board_sensor_mode_request(tracker, 0))
+        self.mode.board_sensor_mode_reset_stream(tracker, 0)
+        self.assertFalse(self.mode.board_sensor_mode_command_needed(tracker, 20))
+
+        self.assertFalse(self.mode.board_sensor_mode_accept_data(tracker, 2, 20))
+        self.assertTrue(tracker.pending)
+        self.assertTrue(self.mode.board_sensor_mode_command_needed(tracker, 100))
+        self.mode.board_sensor_mode_mark_command_sent(tracker, 100)
+        self.assertFalse(self.mode.board_sensor_mode_command_needed(tracker, 100))
+        self.assertTrue(self.mode.board_sensor_mode_accept_data(tracker, 0, 30))
+        self.assertFalse(tracker.pending)
 
     def test_twenty_hz_reads_for_one_minute_do_not_resend_mode(self) -> None:
         tracker = self.tracker()
@@ -243,6 +299,36 @@ class SensorWaitContractTests(unittest.TestCase):
             self.assertIn(reason, modest)
         self.assertIn('"recovery-timeout"', modest)
 
+    def test_initial_type_sync_has_a_separate_bounded_window(self) -> None:
+        modest = (ROOT / "micropython_port" / "modest.c").read_text(
+            encoding="utf-8"
+        )
+        type_wait_start = modest.index("static void modest_sensor_wait_for_type")
+        type_wait_end = modest.index(
+            "static mp_obj_t modest_sensor_make_new_for_type", type_wait_start
+        )
+        value_wait_start = modest.index("static int32_t modest_sensor_wait_value")
+        value_wait_end = modest.index(
+            "static mp_obj_t modest_sensor_set_mode", value_wait_start
+        )
+        type_wait = modest[type_wait_start:type_wait_end]
+        value_wait = modest[value_wait_start:value_wait_end]
+
+        self.assertIn("MODEST_SENSOR_TYPE_TIMEOUT_MS 6000U", modest)
+        self.assertIn("MODEST_SENSOR_VALUE_TIMEOUT_MS 3000U", modest)
+        self.assertIn("MODEST_SENSOR_TYPE_WATCHDOG_BUDGET_MS 8000U", modest)
+        self.assertIn("MODEST_SENSOR_TYPE_TIMEOUT_MS", type_wait)
+        self.assertNotIn("MODEST_SENSOR_VALUE_TIMEOUT_MS", type_wait)
+        self.assertIn(
+            "status.type == self->expected_type &&", type_wait
+        )
+        self.assertIn(
+            "status.state == EST_SENSOR_STREAMING", type_wait
+        )
+        self.assertIn("MODEST_SENSOR_VALUE_TIMEOUT_MS", value_wait)
+        self.assertNotIn("MODEST_SENSOR_TYPE_TIMEOUT_MS", value_wait)
+        self.assertIn("est_micropython_vm_hook();", type_wait)
+
     def test_board_driver_has_stale_grace_and_mode_diagnostics(self) -> None:
         sensor = (ROOT / "src" / "board_sensor.c").read_text(encoding="utf-8")
         header = (ROOT / "include" / "board_sensor.h").read_text(
@@ -255,6 +341,30 @@ class SensorWaitContractTests(unittest.TestCase):
         self.assertNotIn("start_sync", sensor[stale_start:stale_branch_end])
         self.assertIn("SENSOR_STALE_RECOVERY_MS", sensor)
         self.assertIn("runtime->snapshot.state != BOARD_SENSOR_STALE", sensor)
+
+        streaming = sensor.index(
+            "if (runtime->snapshot.state == BOARD_SENSOR_STREAMING)"
+        )
+        stale = sensor.index(
+            "runtime->snapshot.state = BOARD_SENSOR_STALE;", streaming
+        )
+        self.assertGreaterEqual(
+            sensor[streaming:stale].count(
+                "send_pending_mode(port, now_ms)"
+            ),
+            2,
+        )
+
+        set_mode = sensor.index("bool board_sensor_set_mode(")
+        set_all_modes = sensor.index("bool board_sensor_set_all_modes(")
+        self.assertNotIn(
+            "send_pending_mode(port, now_ms);",
+            sensor[set_mode:set_all_modes],
+        )
+        self.assertIn(
+            "The streaming tick sends the request after draining complete RX frames.",
+            sensor[set_mode:set_all_modes],
+        )
         for field in (
             "requested_mode",
             "active_mode",

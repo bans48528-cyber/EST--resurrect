@@ -10,6 +10,16 @@ _MAX_TASKS = 8
 _MAX_EVENTS = 16
 _BUTTON_DEBOUNCE_MS = 20
 _MOTOR_PORTS = ("A", "B", "C", "D")
+_COLOR_IDS = {
+    "none": 0,
+    "black": 1,
+    "blue": 2,
+    "green": 3,
+    "yellow": 4,
+    "red": 5,
+    "white": 6,
+    "brown": 7,
+}
 _SYNC_OWNER = object()
 _start_handlers = []
 _event_handlers = []
@@ -26,8 +36,10 @@ _drive_right_port = "C"
 _drive_speed = 50
 _drive_stop_action = "float"
 _drive_base = None
+_drive_pair = None
 _timer_started_ms = est.millis()
 _timer_generation = 0
+_random_state = (est.millis() ^ 0xA5A5A5A5) & 0xFFFFFFFF
 
 
 class _StopStack(BaseException):
@@ -116,6 +128,23 @@ class _OperationWait:
         if state == self._fault_state:
             raise RuntimeError("motor operation failed")
         if state != self._running_state:
+            raise StopIteration
+        return None
+
+
+class _CommandWait:
+    def __init__(self, ports, generation):
+        self._ports = ports
+        self._generation = generation
+
+    def __iter__(self):
+        return self
+
+    def __await__(self):
+        return self
+
+    def __next__(self):
+        if not _command_is_current(self._ports, self._generation):
             raise StopIteration
         return None
 
@@ -238,10 +267,13 @@ def _next_command_generation():
 
 def _begin_motor_command(ports, kind, allow_speed_retarget=False):
     owner = _command_owner()
-    can_retarget = allow_speed_retarget and len(ports) == 1
-    previous = _motor_commands.get(ports[0]) if can_retarget else None
-
-    can_retarget = previous is not None and previous[2] == kind
+    previous = _motor_commands.get(ports[0]) if ports else None
+    can_retarget = allow_speed_retarget and previous is not None and all(
+        _motor_commands.get(port) is not None and
+        _motor_commands[port][1] == previous[1] and
+        _motor_commands[port][2] == kind
+        for port in ports
+    )
     if not can_retarget:
         for port in ports:
             if port in _motor_commands:
@@ -570,6 +602,46 @@ def wait_until(predicate):
         yield_once()
 
 
+def _wait_for(name, predicate):
+    _reject_sync_event_wait(name)
+    if _in_async_task():
+        return _ConditionWait(predicate)
+    while not boolean(predicate()):
+        yield_once()
+
+
+def _number(value, name):
+    try:
+        value = float(value)
+    except Exception:
+        raise ValueError(name + " must be a number")
+    if value != value:
+        raise ValueError(name + " must be a number")
+    return value
+
+
+def _wait_numeric(name, read_value, comparator, value):
+    comparator = str(comparator)
+    threshold = _number(value, "comparison value")
+    if comparator == "changed":
+        baseline = _number(read_value(), "sensor value")
+        delta = _absolute(threshold)
+
+        def changed():
+            difference = _absolute(_number(read_value(), "sensor value") - baseline)
+            if delta == 0:
+                return difference != 0
+            return difference > delta
+
+        return _wait_for(name, changed)
+    if comparator not in ("less", "greater", "equal"):
+        raise ValueError("comparator must be less, greater, equal or changed")
+    return _wait_for(
+        name,
+        lambda: compare(_number(read_value(), "sensor value"), comparator, threshold),
+    )
+
+
 def timer_seconds():
     return _elapsed_ms(_timer_started_ms) / 1000
 
@@ -578,6 +650,16 @@ def reset_timer():
     global _timer_started_ms, _timer_generation
     _timer_started_ms = est.millis()
     _timer_generation += 1
+
+
+def random_int(first, last):
+    global _random_state
+    first = int(first)
+    last = int(last)
+    if first > last:
+        first, last = last, first
+    _random_state = (1664525 * _random_state + 1013904223) & 0xFFFFFFFF
+    return first + (_random_state % (last - first + 1))
 
 
 def compare(left, comparator, right):
@@ -726,8 +808,15 @@ def _get_drive_base():
     return _drive_base
 
 
+def _get_drive_pair():
+    global _drive_pair
+    if _drive_pair is None:
+        _drive_pair = est.MotorPair(_drive_left_port, _drive_right_port)
+    return _drive_pair
+
+
 def drive_set_pair(left_port, right_port):
-    global _drive_left_port, _drive_right_port, _drive_base
+    global _drive_left_port, _drive_right_port, _drive_base, _drive_pair
     left_port = _motor_port(left_port)
     right_port = _motor_port(right_port)
     if left_port == right_port:
@@ -735,6 +824,7 @@ def drive_set_pair(left_port, right_port):
     _drive_left_port = left_port
     _drive_right_port = right_port
     _drive_base = None
+    _drive_pair = None
 
 
 def drive_set_speed(speed):
@@ -862,6 +952,93 @@ def drive_start_steer(steering, speed=None):
         raise
 
 
+def drive_start_dual_speed(left_speed, right_speed):
+    left_speed = _percent(left_speed)
+    right_speed = _percent(right_speed)
+    ports = (_drive_left_port, _drive_right_port)
+    generation = _begin_motor_command(
+        ports, "drive-dual-continuous", allow_speed_retarget=True
+    )
+    try:
+        _get_drive_pair().run_speed(left_speed, right_speed)
+    except Exception:
+        if _command_is_current(ports, generation):
+            for port in ports:
+                _motor_commands.pop(port, None)
+        raise
+
+
+def _scaled_dual_degrees(degrees, speed, maximum_speed):
+    if speed == 0:
+        return 0
+    scaled = (degrees * _absolute(speed) + maximum_speed // 2) // maximum_speed
+    if scaled == 0:
+        scaled = 1
+    return -scaled if speed < 0 else scaled
+
+
+def drive_dual_speed_for(left_speed, right_speed, amount, unit):
+    _reject_sync_event_wait("drive_dual_speed_for")
+    left_speed = _percent(left_speed)
+    right_speed = _percent(right_speed)
+    pair = _get_drive_pair()
+    stop_mode = _stop_mode(_drive_stop_action)
+    ports = (_drive_left_port, _drive_right_port)
+
+    if unit == "seconds":
+        duration_ms = seconds_to_ms(_absolute(amount))
+        if duration_ms == 0:
+            return
+        generation = _begin_motor_command(ports, "drive-dual-timed")
+        try:
+            pair.run_time(
+                duration_ms, left_speed=left_speed,
+                right_speed=right_speed, stop=stop_mode,
+                wait=not _in_async_task()
+            )
+        except Exception:
+            if _command_is_current(ports, generation):
+                for port in ports:
+                    _motor_commands.pop(port, None)
+            raise
+        if _in_async_task():
+            return _OperationWait(
+                ports, generation, pair.state, pair.STATE_RUNNING,
+                pair.STATE_FAULT
+            )
+        return
+
+    degrees = _absolute(_degrees_for(amount, unit))
+    if degrees == 0:
+        return
+    maximum_speed = max(_absolute(left_speed), _absolute(right_speed))
+    generation = _begin_motor_command(ports, "drive-dual-position")
+    try:
+        if maximum_speed == 0:
+            pair.run_speed(0, 0)
+            if _in_async_task():
+                return _CommandWait(ports, generation)
+            while _command_is_current(ports, generation):
+                yield_once()
+            return
+        pair.run_angle(
+            _scaled_dual_degrees(degrees, left_speed, maximum_speed),
+            _scaled_dual_degrees(degrees, right_speed, maximum_speed),
+            speed=maximum_speed, stop=stop_mode,
+            wait=not _in_async_task()
+        )
+    except Exception:
+        if _command_is_current(ports, generation):
+            for port in ports:
+                _motor_commands.pop(port, None)
+        raise
+    if _in_async_task():
+        return _OperationWait(
+            ports, generation, pair.state, pair.STATE_RUNNING,
+            pair.STATE_FAULT
+        )
+
+
 def drive_stop():
     stop_mode = _stop_mode(_drive_stop_action)
     ports = (_drive_left_port, _drive_right_port)
@@ -959,11 +1136,140 @@ def infrared(port):
     return _sensor("infrared:", _Infrared, port)
 
 
+def _button_mask(button):
+    button = str(button).lower()
+    if button == "center":
+        button = "confirm"
+    names = ("left", "right", "up", "down", "confirm")
+    masks = (
+        est.buttons.LEFT, est.buttons.RIGHT, est.buttons.UP,
+        est.buttons.DOWN, est.buttons.CONFIRM,
+    )
+    for index in range(len(names)):
+        if button == names[index]:
+            return masks[index]
+    if button == "back":
+        raise ValueError("back is reserved for global program stop")
+    raise ValueError("button must be left, right, up, down or confirm")
+
+
+def _pressed_event(event):
+    event = str(event)
+    if event == "pressed":
+        return True
+    if event == "released":
+        return False
+    raise ValueError("event must be pressed or released")
+
+
+def wait_brick_button(button, event):
+    mask = _button_mask(button)
+    pressed = _pressed_event(event)
+    return _wait_for(
+        "wait_brick_button",
+        lambda: ((est.buttons.value() & mask) != 0) == pressed,
+    )
+
+
+def wait_color(port, color_event):
+    sensor = color(port)
+    color_event = str(color_event).lower()
+    if color_event == "changed":
+        initial_color = sensor.color()
+        return _wait_for(
+            "wait_color",
+            lambda: sensor.color() != initial_color,
+        )
+    if color_event not in _COLOR_IDS:
+        raise ValueError("unknown color")
+    color_id = _COLOR_IDS[color_event]
+    return _wait_for("wait_color", lambda: sensor.color() == color_id)
+
+
+def wait_touch(port, event):
+    sensor = touch(port)
+    pressed = _pressed_event(event)
+    return _wait_for("wait_touch", lambda: boolean(sensor.pressed()) == pressed)
+
+
+def wait_ultrasonic(port, comparator, value, unit):
+    sensor = ultrasonic(port)
+    unit = str(unit)
+    if unit != "centimeters" and unit != "inches":
+        raise ValueError("distance unit must be centimeters or inches")
+    return _wait_numeric(
+        "wait_ultrasonic",
+        lambda: sensor.distance(unit),
+        comparator,
+        value,
+    )
+
+
+def wait_ir_proximity(port, comparator, value):
+    sensor = infrared(port)
+    return _wait_numeric(
+        "wait_ir_proximity", sensor.proximity, comparator, value
+    )
+
+
+def _remote_button_active(code, event):
+    if event == "top_left_pressed":
+        return code in (1, 5, 6)
+    if event == "bottom_left_pressed":
+        return code in (2, 7, 8)
+    if event == "left_released":
+        return code not in (1, 2, 5, 6, 7, 8)
+    if event == "top_right_pressed":
+        return code in (3, 5, 7)
+    if event == "bottom_right_pressed":
+        return code in (4, 6, 8)
+    if event == "right_released":
+        return code not in (3, 4, 5, 6, 7, 8)
+    if event == "active":
+        return code != 0
+    raise ValueError("unknown infrared remote event")
+
+
+def wait_ir_beacon_button(port, channel, event):
+    try:
+        channel = int(channel)
+    except Exception:
+        raise ValueError("infrared remote channel must be 1")
+    if channel != 1:
+        raise ValueError("infrared remote channel must be 1")
+    sensor = infrared(port)
+    event = str(event)
+    if event not in (
+        "top_left_pressed", "bottom_left_pressed", "left_released",
+        "top_right_pressed", "bottom_right_pressed", "right_released",
+        "active",
+    ):
+        raise ValueError("unknown infrared remote event")
+    return _wait_for(
+        "wait_ir_beacon_button",
+        lambda: _remote_button_active(int(sensor.remote()), event),
+    )
+
+
+def wait_gyro(port, comparator, value):
+    sensor = gyro(port)
+    return _wait_numeric("wait_gyro", sensor.angle, comparator, value)
+
+
 def display_image_for(name, seconds):
     _reject_sync_event_wait("display_image_for")
     est.display.image(name)
     est.display.refresh()
     return sleep(seconds)
+
+
+def display_text(x, y, value, font="regular_black"):
+    est.display.text(int(x), int(y), str(value), font=font)
+    est.display.refresh()
+
+
+def display_text_line(line, value):
+    est.display.text_line(int(line), str(value))
 
 
 def stop(scope="all"):
@@ -988,8 +1294,6 @@ def stop_other_stacks():
 broadcast = _unsupported("broadcast")
 color_calibrate = _unsupported("color_calibrate")
 color_reset_calibration = _unsupported("color_reset_calibration")
-drive_dual_speed_for = _unsupported("drive_dual_speed_for")
-drive_start_dual_speed = _unsupported("drive_start_dual_speed")
 ir_beacon_compare = _unsupported("ir_beacon_compare")
 on_broadcast = _unsupported("on_broadcast")
 on_color = _unsupported("on_color")
@@ -998,10 +1302,3 @@ on_ir_beacon_button = _unsupported("on_ir_beacon_button")
 on_ir_proximity = _unsupported("on_ir_proximity")
 on_touch = _unsupported("on_touch")
 on_ultrasonic = _unsupported("on_ultrasonic")
-wait_brick_button = _unsupported("wait_brick_button")
-wait_color = _unsupported("wait_color")
-wait_gyro = _unsupported("wait_gyro")
-wait_ir_beacon_button = _unsupported("wait_ir_beacon_button")
-wait_ir_proximity = _unsupported("wait_ir_proximity")
-wait_touch = _unsupported("wait_touch")
-wait_ultrasonic = _unsupported("wait_ultrasonic")

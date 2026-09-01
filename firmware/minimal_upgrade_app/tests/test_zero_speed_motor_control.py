@@ -110,6 +110,28 @@ class ZeroSpeedMotorControlTests(unittest.TestCase):
         self.assertIn("pair_speed_target_magnitude", adjustment)
         self.assertIn("leader_port = BOARD_MOTOR_PORT_COUNT", correction)
 
+    def test_pair_position_accepts_exactly_one_stationary_side(self) -> None:
+        board = (SOURCE_DIR / "board_motor.c").read_text(encoding="utf-8")
+        drive = (SOURCE_DIR / "est_drive.c").read_text(encoding="utf-8")
+        module = (ROOT / "micropython_port" / "modest.c").read_text(
+            encoding="utf-8"
+        )
+        pair_start = section(
+            board, "bool board_motor_start_pair_position", "bool board_motor_stop_pair_position"
+        )
+        pair_service = section(
+            drive, "est_result_t est_motor_pair_run_angles", "est_result_t est_motor_pair_run_speeds"
+        )
+        pair_api = section(
+            module, "static mp_obj_t modest_motor_pair_run_angle", "static const mp_rom_map_elem_t modest_motor_pair_locals_table"
+        )
+
+        self.assertIn("(left_degrees == 0 && right_degrees == 0)", pair_start)
+        self.assertIn("start_pair_stationary_position", pair_start)
+        self.assertIn("left->target_count == left->start_count", board)
+        self.assertIn("(left_degrees == 0 && right_degrees == 0)", pair_service)
+        self.assertIn("(left_degrees == 0 && right_degrees == 0)", pair_api)
+
     def test_timed_zero_speed_uses_elapsed_time_and_all_program_exits_clean(self) -> None:
         board = (SOURCE_DIR / "board_motor.c").read_text(encoding="utf-8")
         vm = (ROOT / "micropython_port" / "est_micropython.c").read_text(
