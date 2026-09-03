@@ -22,6 +22,12 @@ from .constants import (
     FLASH_TEST_COMMAND,
     FLASH_STATUS_COMMAND,
     FLASH_MODE_PROBE_COMMAND,
+    FLASH_AUDIO_RESOURCE_ACTION_BEGIN,
+    FLASH_AUDIO_RESOURCE_ACTION_CHUNK,
+    FLASH_AUDIO_RESOURCE_ACTION_CLEAR,
+    FLASH_AUDIO_RESOURCE_ACTION_COMMIT,
+    FLASH_AUDIO_RESOURCE_ACTION_STATUS,
+    FLASH_AUDIO_RESOURCE_COMMAND,
     FRAME_END,
     FRAME_START,
     HEARTBEAT_COMMAND,
@@ -39,6 +45,9 @@ from .constants import (
     PERSISTENT_PROGRAM_COMMAND,
     PERSISTENT_PROGRAM_NAME_MAX_BYTES,
     PERSISTENT_PROGRAM_SLOT_COUNT,
+    AUDIO_RESOURCE_CHUNK_SIZE,
+    AUDIO_RESOURCE_NAME_MAX_BYTES,
+    AUDIO_RESOURCE_SLOT_COUNT,
     PYTHON_PROGRAM_ACTION_BEGIN,
     PYTHON_PROGRAM_ACTION_CHUNK,
     PYTHON_PROGRAM_ACTION_CLEAR,
@@ -106,6 +115,26 @@ class FlashModeProbe:
     status3_before: int
     status3_four_byte: int
     status3_restored: int
+
+
+@dataclass(frozen=True)
+class AudioResourceStatus:
+    schema_version: int
+    result: int
+    flags: int
+    last_error: int
+    slot_id: int
+    slot_count: int
+    name_length: int
+    region_start: int
+    region_size: int
+    slot_size: int
+    data_max_bytes: int
+    resource_length: int
+    resource_crc32: int
+    duration_ms: int
+    occupied_mask: int
+    resource_name: str
 
 
 @dataclass(frozen=True)
@@ -603,6 +632,77 @@ def build_flash_status_frame() -> bytes:
 
 def build_flash_mode_probe_frame() -> bytes:
     return build_frame(FLASH_MODE_PROBE_COMMAND)
+
+
+def _encode_audio_resource_name(name: str) -> bytes:
+    encoded = name.encode("ascii")
+    if not encoded or len(encoded) > AUDIO_RESOURCE_NAME_MAX_BYTES:
+        raise ValueError("audio resource name must be 1..47 ASCII bytes")
+    if (
+        encoded.startswith(b"/")
+        or encoded.endswith(b"/")
+        or b"\\" in encoded
+        or b":" in encoded
+        or b".." in encoded
+        or b"//" in encoded
+        or any(byte < 0x20 or byte >= 0x7F for byte in encoded)
+    ):
+        raise ValueError("audio resource name contains unsafe characters")
+    return encoded
+
+
+def build_audio_resource_status_frame(slot_id: int = 0) -> bytes:
+    if not 0 <= slot_id < AUDIO_RESOURCE_SLOT_COUNT:
+        raise ValueError("audio resource slot must be 0..18")
+    return build_frame(
+        FLASH_AUDIO_RESOURCE_COMMAND,
+        bytes((FLASH_AUDIO_RESOURCE_ACTION_STATUS, slot_id)),
+    )
+
+
+def build_audio_resource_begin_frame(
+    name: str, length: int, crc32: int, duration_ms: int = 0
+) -> bytes:
+    encoded_name = _encode_audio_resource_name(name)
+    if not 1 <= length <= 0x3F80:
+        raise ValueError("audio resource length must be 1..16256 bytes")
+    if not 0 <= crc32 <= 0xFFFFFFFF:
+        raise ValueError("audio resource CRC32 must fit uint32")
+    if not 0 <= duration_ms <= 0xFFFFFFFF:
+        raise ValueError("audio resource duration must fit uint32")
+    payload = bytes((FLASH_AUDIO_RESOURCE_ACTION_BEGIN, len(encoded_name)))
+    payload += length.to_bytes(4, "little")
+    payload += crc32.to_bytes(4, "little")
+    payload += duration_ms.to_bytes(4, "little")
+    payload += encoded_name
+    return build_frame(FLASH_AUDIO_RESOURCE_COMMAND, payload)
+
+
+def build_audio_resource_chunk_frame(offset: int, chunk: bytes) -> bytes:
+    if not 0 <= offset <= 0xFFFFFFFF:
+        raise ValueError("audio resource offset must fit uint32")
+    if not chunk or len(chunk) > AUDIO_RESOURCE_CHUNK_SIZE:
+        raise ValueError("audio resource chunk must be 1..1000 bytes")
+    payload = bytes((FLASH_AUDIO_RESOURCE_ACTION_CHUNK,))
+    payload += offset.to_bytes(4, "little")
+    payload += chunk
+    return build_frame(FLASH_AUDIO_RESOURCE_COMMAND, payload)
+
+
+def build_audio_resource_commit_frame() -> bytes:
+    return build_frame(
+        FLASH_AUDIO_RESOURCE_COMMAND,
+        bytes((FLASH_AUDIO_RESOURCE_ACTION_COMMIT,)),
+    )
+
+
+def build_audio_resource_clear_frame(slot_id: int) -> bytes:
+    if not 0 <= slot_id < AUDIO_RESOURCE_SLOT_COUNT:
+        raise ValueError("audio resource slot must be 0..18")
+    return build_frame(
+        FLASH_AUDIO_RESOURCE_COMMAND,
+        bytes((FLASH_AUDIO_RESOURCE_ACTION_CLEAR, slot_id)),
+    )
 
 
 def build_motor_test_frame(action: int) -> bytes:
@@ -1149,6 +1249,44 @@ def parse_flash_mode_probe_response(report: bytes) -> FlashModeProbe | None:
     if checksum(report[:11]) != report[11]:
         return None
     return FlashModeProbe(*report[5:11])
+
+
+def parse_audio_resource_response(report: bytes) -> AudioResourceStatus | None:
+    if len(report) < 95:
+        return None
+    if report[0] != FRAME_START:
+        return None
+    if report[1] != DEVICE_DIRECTION or report[2] != FLASH_AUDIO_RESOURCE_COMMAND:
+        return None
+    payload_length = int.from_bytes(report[3:5], "little")
+    if payload_length != 88:
+        return None
+    checksum_index = 5 + payload_length
+    if report[checksum_index + 1] != FRAME_END:
+        return None
+    if checksum(report[:checksum_index]) != report[checksum_index]:
+        return None
+    payload = report[5:checksum_index]
+    name_length = min(payload[6], AUDIO_RESOURCE_NAME_MAX_BYTES)
+    raw_name = payload[40 : 40 + name_length]
+    return AudioResourceStatus(
+        schema_version=payload[0],
+        result=payload[1],
+        flags=payload[2],
+        last_error=payload[3],
+        slot_id=payload[4],
+        slot_count=payload[5],
+        name_length=name_length,
+        region_start=int.from_bytes(payload[8:12], "little"),
+        region_size=int.from_bytes(payload[12:16], "little"),
+        slot_size=int.from_bytes(payload[16:20], "little"),
+        data_max_bytes=int.from_bytes(payload[20:24], "little"),
+        resource_length=int.from_bytes(payload[24:28], "little"),
+        resource_crc32=int.from_bytes(payload[28:32], "little"),
+        duration_ms=int.from_bytes(payload[32:36], "little"),
+        occupied_mask=int.from_bytes(payload[36:40], "little"),
+        resource_name=raw_name.decode("ascii", errors="replace"),
+    )
 
 
 def parse_motor_test_response(report: bytes) -> MotorTestResult | None:

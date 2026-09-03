@@ -37,6 +37,10 @@ _drive_speed = 50
 _drive_stop_action = "float"
 _drive_base = None
 _drive_pair = None
+_line_follow_previous_error = 0
+_line_follow_derivative = 0
+_line_follow_last_ms = 0
+_line_follow_ready = False
 _timer_started_ms = est.millis()
 _timer_generation = 0
 _random_state = (est.millis() ^ 0xA5A5A5A5) & 0xFFFFFFFF
@@ -966,6 +970,96 @@ def drive_start_dual_speed(left_speed, right_speed):
             for port in ports:
                 _motor_commands.pop(port, None)
         raise
+
+
+def drive_start_dual_power(left_power, right_power):
+    left_power = _percent(left_power)
+    right_power = _percent(right_power)
+    ports = (_drive_left_port, _drive_right_port)
+    generation = _begin_motor_command(
+        ports, "drive-dual-power", allow_speed_retarget=True
+    )
+    try:
+        motor(ports[0]).run_power(left_power)
+        motor(ports[1]).run_power(right_power)
+    except Exception:
+        if _command_is_current(ports, generation):
+            for port in ports:
+                try:
+                    motor(port).stop(_COAST)
+                except Exception:
+                    pass
+                _motor_commands.pop(port, None)
+        raise
+
+
+def line_follow_init():
+    global _line_follow_previous_error, _line_follow_derivative
+    global _line_follow_last_ms, _line_follow_ready
+    _line_follow_previous_error = 0
+    _line_follow_derivative = 0
+    _line_follow_last_ms = est.millis()
+    _line_follow_ready = False
+
+
+def line_follow_dual_step(
+    left_input, right_input, left_base_speed, right_base_speed, kp, kd
+):
+    global _line_follow_previous_error, _line_follow_derivative
+    global _line_follow_last_ms, _line_follow_ready
+    left_input = _number(left_input, "left input")
+    right_input = _number(right_input, "right input")
+    left_base_speed = _number(left_base_speed, "left base speed")
+    right_base_speed = _number(right_base_speed, "right base speed")
+    kp = _number(kp, "Kp")
+    kd = _number(kd, "Kd")
+    error = left_input - right_input
+    now_ms = est.millis()
+    derivative = 0
+    if _line_follow_ready:
+        elapsed_ms = (now_ms - _line_follow_last_ms) & 0xFFFFFFFF
+        if elapsed_ms != 0:
+            derivative = (
+                (error - _line_follow_previous_error) * 1000 / elapsed_ms
+            )
+    correction = kp * error + kd * derivative
+    left_speed = _percent(left_base_speed + correction)
+    right_speed = _percent(right_base_speed - correction)
+    drive_start_dual_speed(left_speed, right_speed)
+    _line_follow_previous_error = error
+    _line_follow_derivative = derivative
+    _line_follow_last_ms = now_ms
+    _line_follow_ready = True
+
+
+def line_follow_dual_power_step(
+    left_input, right_input, left_base_power, right_base_power, kp, kd
+):
+    global _line_follow_previous_error, _line_follow_derivative
+    global _line_follow_last_ms, _line_follow_ready
+    left_input = _number(left_input, "left input")
+    right_input = _number(right_input, "right input")
+    left_base_power = _number(left_base_power, "left base power")
+    right_base_power = _number(right_base_power, "right base power")
+    kp = _number(kp, "Kp")
+    kd = _number(kd, "Kd")
+    error = left_input - right_input
+    now_ms = est.millis()
+    derivative = 0
+    if _line_follow_ready:
+        elapsed_ms = (now_ms - _line_follow_last_ms) & 0xFFFFFFFF
+        if elapsed_ms != 0:
+            derivative = (
+                (error - _line_follow_previous_error) * 1000 / elapsed_ms
+            )
+    correction = kp * error + kd * derivative
+    left_power = _percent(left_base_power + correction)
+    right_power = _percent(right_base_power - correction)
+    drive_start_dual_power(left_power, right_power)
+    _line_follow_previous_error = error
+    _line_follow_derivative = derivative
+    _line_follow_last_ms = now_ms
+    _line_follow_ready = True
 
 
 def _scaled_dual_degrees(degrees, speed, maximum_speed):

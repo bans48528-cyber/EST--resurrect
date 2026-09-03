@@ -32,10 +32,10 @@ FIRMWARE_NETS = {
     "VS_SCK": "board_flash.c",
     "VS_MISO": "board_flash.c",
     "VS_MOSI": "board_flash.c",
-    "VS_CS": "board_audio.c",
-    "VS_DREQ": "board_audio.c",
-    "VS_RST": "board_audio.c",
-    "VS_XDCS": "board_audio.c",
+    "VS_CS": "board_audio_bus.c",
+    "VS_DREQ": "board_audio_bus.c",
+    "VS_RST": "board_audio_bus.c",
+    "VS_XDCS": "board_audio_bus.c",
     "MAPWM": "board_motor.c",
     "MAIN0": "board_motor.c",
     "MAIN1": "board_motor.c",
@@ -224,7 +224,7 @@ def validate_backlight(source_dir: Path, net_to_pin: dict[str, str]) -> None:
 
 
 def validate_audio(source_dir: Path, net_to_pin: dict[str, str]) -> None:
-    source = read_source(source_dir, "board_audio.c")
+    source = read_source(source_dir, "board_audio_bus.c")
     roles = {
         "VS_CS": ("AUDIO_COMMAND_SELECT_PORT", "AUDIO_COMMAND_SELECT_PIN"),
         "VS_DREQ": ("AUDIO_DREQ_PORT", "AUDIO_DREQ_PIN"),
@@ -236,13 +236,19 @@ def validate_audio(source_dir: Path, net_to_pin: dict[str, str]) -> None:
         pin_match = re.search(rf"#define {pin_macro} GPIO(\d+)", source)
         if port_match is None or pin_match is None:
             raise ValueError(
-                f"board_audio.c is missing the {port_macro}/{pin_macro} macros"
+                f"board_audio_bus.c is missing the {port_macro}/{pin_macro} macros"
             )
         actual_pin = f"P{port_match.group(1)}{int(pin_match.group(1))}"
         if actual_pin != net_to_pin[net]:
             raise ValueError(
-                f"board_audio.c uses {net}={actual_pin}, expected {net_to_pin[net]}"
+                f"board_audio_bus.c uses {net}={actual_pin}, expected {net_to_pin[net]}"
             )
+    # The legacy audio header swaps roles within the same three claimed pins.
+    legacy = {"DREQ": 6, "RESET": 7, "DATA_SELECT": 5}
+    for role, pin in legacy.items():
+        declaration = f"#define AUDIO_LEGACY_{role}_PIN GPIO{pin}"
+        if declaration not in source:
+            raise ValueError(f"board_audio_bus.c missing legacy pin mapping: {role}")
 
 
 def validate_external_flash(source_dir: Path, net_to_pin: dict[str, str]) -> None:

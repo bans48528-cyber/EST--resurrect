@@ -6,9 +6,11 @@
 #include "app_config.h"
 #include "app_version.h"
 #include "board_flash.h"
+#include "board_audio.h"
 #include "board_motor.h"
 #include "board_sensor.h"
 #include "est_battery.h"
+#include "est_audio_resource_store.h"
 #include "est_buttons.h"
 #include "est_drive.h"
 #include "est_micropython.h"
@@ -28,6 +30,10 @@
 #define PYTHON_PROGRAM_STATUS_PAYLOAD_LENGTH 32U
 #define PERSISTENT_PROGRAM_STATUS_PAYLOAD_LENGTH 76U
 #define PERSISTENT_PROGRAM_STATUS_SCHEMA_VERSION 3U
+#define AUDIO_RESOURCE_STATUS_PAYLOAD_LENGTH 88U
+#define AUDIO_RESOURCE_RESULT_SUCCESS 1U
+#define AUDIO_RESOURCE_RESULT_BUSY 2U
+#define AUDIO_RESOURCE_RESULT_REJECTED 3U
 
 enum update_ack_flag {
 	UPDATE_ACK_FAILURE = 0x00,
@@ -118,6 +124,9 @@ static bool report_starts_logical_frame(const uint8_t *report, size_t length)
 		return false;
 	}
 	data_length = read_u16_le(&report[3]);
+	if (report[2] == FLASH_READ_COMMAND) {
+		return data_length == 6U;
+	}
 	if (report[2] == HEARTBEAT_COMMAND || report[2] == KEY_STATUS_COMMAND ||
 	    report[2] == FLASH_ID_COMMAND || report[2] == FLASH_SCAN_COMMAND ||
 	    report[2] == FLASH_TEST_COMMAND || report[2] == FLASH_STATUS_COMMAND ||
@@ -165,6 +174,9 @@ static bool report_starts_logical_frame(const uint8_t *report, size_t length)
 	}
 	if (report[2] == PERSISTENT_PROGRAM_COMMAND) {
 		return data_length >= 1U && data_length <= 34U;
+	}
+	if (report[2] == FLASH_AUDIO_RESOURCE_COMMAND) {
+		return data_length >= 1U && data_length <= 1010U;
 	}
 	if (report[2] == INPUT_SENSOR_COMMAND) {
 		return data_length == 2U || data_length == 3U;
@@ -272,6 +284,33 @@ static void queue_flash_scan(uint32_t address)
 	(void)usb_hid_queue_report(report, false);
 }
 
+static void queue_flash_read(uint32_t address, uint16_t length)
+{
+	uint8_t report[USB_HID_REPORT_SIZE] = {0};
+	bool ok = length > 0U && length <= 1000U &&
+		address < 33554432U && length <= 33554432U - address;
+	/* Read-only diagnostic: never change flash mode, status or contents. */
+	if (est_micropython_program_is_executing()) {
+		ok = false;
+	}
+	if (ok) {
+		ok = board_flash_read_4byte(address, &report[12], length);
+	}
+	if (!ok) {
+		length = 0U;
+	}
+	report[0] = FRAME_START_BYTE;
+	report[1] = DEVICE_FRAME_DIRECTION;
+	report[2] = FLASH_READ_COMMAND;
+	write_u16_le(&report[3], (uint16_t)(length + 7U));
+	report[5] = ok ? 1U : 0U;
+	write_u32_le(&report[6], address);
+	write_u16_le(&report[10], length);
+	report[12U + length] = checksum(report, 12U + length);
+	report[13U + length] = FRAME_END_BYTE;
+	(void)usb_hid_queue_report(report, false);
+}
+
 static void queue_flash_test(void)
 {
 	uint8_t report[USB_HID_REPORT_SIZE] = {0};
@@ -337,6 +376,64 @@ static void queue_flash_mode_probe(void)
 	report[10] = probe.status3_restored;
 	report[11] = checksum(report, 11U);
 	report[12] = FRAME_END_BYTE;
+	(void)usb_hid_queue_report(report, false);
+}
+
+static uint8_t audio_resource_result_from_error(est_audio_resource_error_t error)
+{
+	if (error == EST_AUDIO_RESOURCE_ERROR_NONE) {
+		return AUDIO_RESOURCE_RESULT_SUCCESS;
+	}
+	if (error == EST_AUDIO_RESOURCE_ERROR_BUSY) {
+		return AUDIO_RESOURCE_RESULT_BUSY;
+	}
+	return AUDIO_RESOURCE_RESULT_REJECTED;
+}
+
+static void queue_audio_resource_status(uint8_t result,
+	const est_audio_resource_status_t *status)
+{
+	uint8_t report[USB_HID_REPORT_SIZE] = {0};
+	uint8_t *payload = &report[5];
+	uint8_t flags = 0U;
+	uint8_t name_length = 0U;
+
+	if (status->supported) {
+		flags |= EST_AUDIO_RESOURCE_STATUS_FLAG_SUPPORTED_DEVICE;
+	}
+	if (status->occupied) {
+		flags |= EST_AUDIO_RESOURCE_STATUS_FLAG_OCCUPIED;
+	}
+	if (status->busy) {
+		flags |= EST_AUDIO_RESOURCE_STATUS_FLAG_BUSY;
+	}
+	name_length = status->name_length;
+	if (name_length > EST_AUDIO_RESOURCE_NAME_MAX_BYTES) {
+		name_length = EST_AUDIO_RESOURCE_NAME_MAX_BYTES;
+	}
+	report[0] = FRAME_START_BYTE;
+	report[1] = DEVICE_FRAME_DIRECTION;
+	report[2] = FLASH_AUDIO_RESOURCE_COMMAND;
+	write_u16_le(&report[3], AUDIO_RESOURCE_STATUS_PAYLOAD_LENGTH);
+	payload[0] = EST_AUDIO_RESOURCE_STATUS_SCHEMA_VERSION;
+	payload[1] = result;
+	payload[2] = flags;
+	payload[3] = (uint8_t)status->last_error;
+	payload[4] = status->slot_id;
+	payload[5] = status->slot_count;
+	payload[6] = name_length;
+	write_u32_le(&payload[8], status->region_start);
+	write_u32_le(&payload[12], status->region_size);
+	write_u32_le(&payload[16], status->slot_size);
+	write_u32_le(&payload[20], status->data_max_bytes);
+	write_u32_le(&payload[24], status->resource_length);
+	write_u32_le(&payload[28], status->resource_crc32);
+	write_u32_le(&payload[32], status->duration_ms);
+	write_u32_le(&payload[36], status->occupied_mask);
+	memcpy(&payload[40], status->name, name_length);
+	report[5U + AUDIO_RESOURCE_STATUS_PAYLOAD_LENGTH] = checksum(report,
+		5U + AUDIO_RESOURCE_STATUS_PAYLOAD_LENGTH);
+	report[6U + AUDIO_RESOURCE_STATUS_PAYLOAD_LENGTH] = FRAME_END_BYTE;
 	(void)usb_hid_queue_report(report, false);
 }
 
@@ -740,6 +837,10 @@ static void queue_device_status(uint32_t now_ms)
 		DEVICE_CAPABILITY_COOPERATIVE_MULTITASK |
 		DEVICE_CAPABILITY_RUNTIME_BASIC_EVENT_HATS |
 		DEVICE_CAPABILITY_MOTOR_STALL_DETECTION;
+#ifndef AUDIO_RESOURCE_PROBE_ONLY
+	capabilities |= DEVICE_CAPABILITY_AUDIO_PLAYBACK;
+	capabilities |= DEVICE_CAPABILITY_AUDIO_RESOURCE_FLASH;
+#endif
 
 	(void)est_battery_get_status(&battery);
 	report[0] = FRAME_START_BYTE;
@@ -1449,6 +1550,73 @@ static void abort_session(void)
 	memset(&session, 0, sizeof(session));
 }
 
+static void handle_audio_resource(const uint8_t *data, uint16_t data_length,
+	uint32_t now_ms)
+{
+	est_audio_resource_status_t status;
+	est_audio_resource_error_t error = EST_AUDIO_RESOURCE_ERROR_INVALID_REQUEST;
+	uint8_t result = AUDIO_RESOURCE_RESULT_REJECTED;
+	uint8_t slot_id = 0U;
+	bool ok = false;
+
+	memset(&status, 0, sizeof(status));
+	if (data_length == 0U) {
+		(void)est_audio_resource_get_slot_status(0U, &status);
+		status.last_error = error;
+		queue_audio_resource_status(result, &status);
+		return;
+	}
+	switch (data[0]) {
+	case FLASH_AUDIO_RESOURCE_ACTION_STATUS:
+		if (data_length == 1U || data_length == 2U) {
+			slot_id = data_length == 2U ? data[1] : 0U;
+			ok = est_audio_resource_get_slot_status(slot_id, &status);
+			error = status.last_error;
+		}
+		break;
+	case FLASH_AUDIO_RESOURCE_ACTION_BEGIN:
+		if (data_length >= 14U && data_length ==
+		    (uint16_t)(14U + data[1])) {
+			board_audio_stop();
+			ok = est_audio_resource_begin(&data[14], data[1],
+				read_u32_le(&data[2]), read_u32_le(&data[6]),
+				read_u32_le(&data[10]), now_ms, &status);
+			error = status.last_error;
+		}
+		break;
+	case FLASH_AUDIO_RESOURCE_ACTION_CHUNK:
+		if (data_length > 5U) {
+			ok = est_audio_resource_write_chunk(read_u32_le(&data[1]),
+				&data[5], (uint16_t)(data_length - 5U), now_ms,
+				&status);
+			error = status.last_error;
+		}
+		break;
+	case FLASH_AUDIO_RESOURCE_ACTION_COMMIT:
+		if (data_length == 1U) {
+			ok = est_audio_resource_commit(&status);
+			error = status.last_error;
+		}
+		break;
+	case FLASH_AUDIO_RESOURCE_ACTION_CLEAR:
+		if (data_length == 2U) {
+			board_audio_stop();
+			slot_id = data[1];
+			ok = est_audio_resource_clear_slot(slot_id, &status);
+			error = status.last_error;
+		}
+		break;
+	default:
+		break;
+	}
+	if (!ok && status.slot_count == 0U) {
+		(void)est_audio_resource_get_slot_status(slot_id, &status);
+		status.last_error = error;
+	}
+	result = audio_resource_result_from_error(status.last_error);
+	queue_audio_resource_status(result, &status);
+}
+
 static void handle_update_frame(const uint8_t *frame, uint16_t data_length,
 	uint32_t now_ms)
 {
@@ -1563,12 +1731,18 @@ static void handle_logical_frame(uint32_t now_ms)
 			read_u32_le(&logical_frame[5]) : EXTERNAL_FLASH_TEST_ADDRESS;
 
 		queue_flash_scan(address);
+	} else if (logical_frame[2] == FLASH_READ_COMMAND && data_length == 6U) {
+		queue_flash_read(read_u32_le(&logical_frame[5]),
+			read_u16_le(&logical_frame[9]));
 	} else if (logical_frame[2] == FLASH_TEST_COMMAND && data_length == 0U) {
 		queue_flash_test();
 	} else if (logical_frame[2] == FLASH_STATUS_COMMAND && data_length == 0U) {
 		queue_flash_status();
 	} else if (logical_frame[2] == FLASH_MODE_PROBE_COMMAND && data_length == 0U) {
 		queue_flash_mode_probe();
+	} else if (logical_frame[2] == FLASH_AUDIO_RESOURCE_COMMAND &&
+		   data_length >= 1U && data_length <= 1010U) {
+		handle_audio_resource(&logical_frame[5], data_length, now_ms);
 	} else if (logical_frame[2] == MOTOR_TEST_COMMAND && data_length == 1U) {
 		handle_motor_test(logical_frame[5], now_ms);
 	} else if (logical_frame[2] == MOTOR_TACHO_TEST_COMMAND &&
@@ -1703,6 +1877,7 @@ void update_protocol_tick(uint32_t now_ms)
 		abort_session();
 		queue_update_ack(total_frames, frame_index, UPDATE_ACK_TIMEOUT, false);
 	}
+	est_audio_resource_tick(now_ms);
 }
 
 bool update_protocol_power_off_due(uint32_t now_ms)

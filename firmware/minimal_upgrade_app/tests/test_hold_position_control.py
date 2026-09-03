@@ -206,10 +206,10 @@ class HoldPositionControlTests(unittest.TestCase):
             ROOT.parents[1] / "tools" / "est_hid_sender" / "cli.py"
         ).read_text(encoding="utf-8")
 
-        self.assertIn("DEVICE_PROTOCOL_MINOR           26U", config)
+        self.assertIn("DEVICE_PROTOCOL_MINOR           27U", config)
         self.assertIn("DEVICE_CAPABILITY_HOLD_POSITION_CONTROL (1UL << 21U)", config)
         self.assertIn("DEVICE_CAPABILITY_HOLD_POSITION_CONTROL", protocol)
-        self.assertIn("DEVICE_PROTOCOL_MINOR = 26", tool_constants)
+        self.assertIn("DEVICE_PROTOCOL_MINOR = 27", tool_constants)
         self.assertIn("DEVICE_CAPABILITY_HOLD_POSITION_CONTROL = 1 << 21", tool_constants)
         self.assertIn('"hold-position-control"', tool_cli)
 

@@ -9,6 +9,11 @@ from typing import Literal, Protocol
 
 from .constants import (
     DEVICE_STATUS_TIMEOUT_SECONDS,
+    AUDIO_RESOURCE_CHUNK_SIZE,
+    AUDIO_RESOURCE_RESULT_BUSY,
+    AUDIO_RESOURCE_RESULT_SUCCESS,
+    AUDIO_RESOURCE_STATUS_FLAG_OCCUPIED,
+    AUDIO_RESOURCE_TIMEOUT_SECONDS,
     DRIVE_STRAIGHT_ACTION_START,
     DRIVE_STRAIGHT_ACTION_STATUS,
     DRIVE_STRAIGHT_ACTION_STOP,
@@ -96,6 +101,11 @@ from .protocol import (
     build_flash_test_frame,
     build_flash_status_frame,
     build_flash_mode_probe_frame,
+    build_audio_resource_status_frame,
+    build_audio_resource_begin_frame,
+    build_audio_resource_chunk_frame,
+    build_audio_resource_commit_frame,
+    build_audio_resource_clear_frame,
     build_key_status_frame,
     build_motor_control_frame,
     build_motor_dual_test_frame,
@@ -123,6 +133,7 @@ from .protocol import (
     parse_flash_test_response,
     parse_flash_status_response,
     parse_flash_mode_probe_response,
+    parse_audio_resource_response,
     parse_key_status_response,
     parse_motor_control_response,
     parse_motor_dual_test_response,
@@ -140,6 +151,7 @@ from .protocol import (
     FlashTestResult,
     FlashStatus,
     FlashModeProbe,
+    AudioResourceStatus,
     MotorTestResult,
     MotorTachoTestResult,
     MotorStopTestResult,
@@ -492,6 +504,89 @@ class FirmwareUpdater:
         raise DiagnosticTimeoutError(
             "设备没有返回 Flash 模式检测结果；请确认固件支持 flash-mode-probe 命令"
         )
+
+    def read_audio_resource_status(self, slot_id: int = 0) -> AudioResourceStatus:
+        return self._audio_resource_action(build_audio_resource_status_frame(slot_id))
+
+    def list_audio_resources(self) -> list[AudioResourceStatus]:
+        first = self.read_audio_resource_status(0)
+        statuses = [first]
+        for slot_id in range(1, first.slot_count):
+            statuses.append(self.read_audio_resource_status(slot_id))
+        return statuses
+
+    def write_audio_resource(
+        self,
+        name: str,
+        data: bytes,
+        duration_ms: int = 0,
+        replace: bool = False,
+        progress: ProgressCallback | None = None,
+    ) -> AudioResourceStatus:
+        if not data:
+            raise ValueError("audio resource must not be empty")
+        existing = [
+            status
+            for status in self.list_audio_resources()
+            if (
+                status.resource_name == name
+                and (status.flags & AUDIO_RESOURCE_STATUS_FLAG_OCCUPIED) != 0
+            )
+        ]
+        if existing and not replace:
+            raise EstUpdaterError("同名音效资源已存在；如需覆盖请使用 --replace")
+        resource_crc32 = binascii.crc32(data) & 0xFFFFFFFF
+        status = self._audio_resource_action(
+            build_audio_resource_begin_frame(
+                name, len(data), resource_crc32, duration_ms
+            )
+        )
+        self._require_audio_resource_success(status, "begin")
+        for offset in range(0, len(data), AUDIO_RESOURCE_CHUNK_SIZE):
+            chunk = data[offset : offset + AUDIO_RESOURCE_CHUNK_SIZE]
+            if progress is not None:
+                progress(PacketProgress(offset, len(data), "sending"))
+            status = self._audio_resource_action(
+                build_audio_resource_chunk_frame(offset, chunk)
+            )
+            self._require_audio_resource_success(status, "chunk")
+        if progress is not None:
+            progress(PacketProgress(len(data), len(data), "acked"))
+        status = self._audio_resource_action(build_audio_resource_commit_frame())
+        self._require_audio_resource_success(status, "commit")
+        if status.resource_crc32 != resource_crc32:
+            raise EstUpdaterError("设备返回的音效 CRC32 不匹配")
+        return status
+
+    def clear_audio_resource(self, slot_id: int) -> AudioResourceStatus:
+        status = self._audio_resource_action(build_audio_resource_clear_frame(slot_id))
+        self._require_audio_resource_success(status, "clear")
+        return status
+
+    def _audio_resource_action(self, frame: bytes) -> AudioResourceStatus:
+        self._write_frame(frame)
+        deadline = time.monotonic() + AUDIO_RESOURCE_TIMEOUT_SECONDS
+        while time.monotonic() < deadline:
+            response = self.transport.read_report()
+            if not response:
+                continue
+            status = parse_audio_resource_response(response)
+            if status is not None:
+                return status
+        raise DiagnosticTimeoutError(
+            "设备没有返回音效资源状态；请确认固件支持 0x27 命令"
+        )
+
+    @staticmethod
+    def _require_audio_resource_success(
+        status: AudioResourceStatus, operation: str
+    ) -> None:
+        if status.result == AUDIO_RESOURCE_RESULT_BUSY:
+            raise EstUpdaterError(f"音效资源存储忙：{operation}")
+        if status.result != AUDIO_RESOURCE_RESULT_SUCCESS:
+            raise EstUpdaterError(
+                f"音效资源请求被拒绝：{operation}，error={status.last_error}"
+            )
 
     def start_motor_test(self) -> MotorTestResult:
         return self._motor_test_action(MOTOR_TEST_ACTION_START)

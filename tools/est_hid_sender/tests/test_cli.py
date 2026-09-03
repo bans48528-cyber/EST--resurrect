@@ -23,6 +23,12 @@ class CliTests(unittest.TestCase):
             cli.DEVICE_CAPABILITY_NAMES,
         )
 
+    def test_audio_resource_flash_capability_has_a_stable_cli_name(self) -> None:
+        self.assertIn(
+            (1 << 27, "audio-resource-flash"),
+            cli.DEVICE_CAPABILITY_NAMES,
+        )
+
     def test_basic_event_hats_capability_has_a_stable_cli_name(self) -> None:
         self.assertIn(
             (1 << 24, "runtime-basic-event-hats"),
@@ -214,6 +220,36 @@ class CliTests(unittest.TestCase):
         self.assertIn("model=W25Q256JV", output.getvalue())
         self.assertIn("capacity_bytes=33554432", output.getvalue())
         self.assertIn("model_known=yes", output.getvalue())
+
+    def test_audio_resource_write_list_and_clear_commands(self) -> None:
+        transport = FakeTransport(jedec_id=bytes.fromhex("EF4019"))
+        with tempfile.TemporaryDirectory() as temp:
+            audio_path = Path(temp) / "hello.mp3"
+            audio_path.write_bytes(b"ID3 fake mp3 data")
+            output = io.StringIO()
+            with mock.patch.object(cli.HidTransport, "open", return_value=transport):
+                with contextlib.redirect_stdout(output):
+                    self.assertEqual(cli.main(["audio-resource-list"]), 0)
+                    self.assertEqual(
+                        cli.main(
+                            [
+                                "audio-resource-write",
+                                str(audio_path),
+                                "--name",
+                                "Sounds/Hello",
+                                "--duration-ms",
+                                "456",
+                            ]
+                        ),
+                        0,
+                    )
+                    self.assertEqual(cli.main(["audio-resource-clear", "--slot", "0"]), 0)
+        text = output.getvalue()
+        self.assertIn("slot_count=19", text)
+        self.assertIn("resource_name=Sounds/Hello", text)
+        self.assertIn("audio_resource_write=done", text)
+        self.assertIn("name=Sounds/Hello length=17", text)
+        self.assertIn("audio_resource_clear=done", text)
 
     def test_flash_scan_is_read_only_and_prints_empty_sector(self) -> None:
         output = io.StringIO()

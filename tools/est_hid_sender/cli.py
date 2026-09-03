@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import binascii
 import sys
 import time
 from pathlib import Path
@@ -19,11 +20,17 @@ from .constants import (
     DEVICE_CAPABILITY_KEYS,
     DEVICE_CAPABILITY_MICROPYTHON,
     DEVICE_CAPABILITY_MOTOR_STALL_DETECTION,
+    DEVICE_CAPABILITY_AUDIO_PLAYBACK,
+    DEVICE_CAPABILITY_AUDIO_RESOURCE_FLASH,
     DEVICE_CAPABILITY_PERSISTENT_PROGRAM,
     DEVICE_CAPABILITY_RUNTIME_TEMPERATURE,
     DEVICE_CAPABILITY_RUNTIME_BASIC_EVENT_HATS,
     DEVICE_CAPABILITY_UNLIMITED_PYTHON_RUN,
     DEVICE_CAPABILITY_ZERO_SPEED_MOTOR_CONTROL,
+    AUDIO_RESOURCE_SLOT_COUNT,
+    AUDIO_RESOURCE_STATUS_FLAG_BUSY,
+    AUDIO_RESOURCE_STATUS_FLAG_OCCUPIED,
+    AUDIO_RESOURCE_STATUS_FLAG_SUPPORTED_DEVICE,
     PERSISTENT_PROGRAM_SLOT_COUNT,
     DEVICE_CAPABILITY_PYTHON_PROGRAM,
     DEVICE_CAPABILITY_MOTOR_CONTROL,
@@ -177,6 +184,34 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "flash-mode-probe", help="检测写使能与 4 字节模式并立即恢复"
     )
     add_device_options(flash_mode_probe)
+
+    audio_resource_list = commands.add_parser(
+        "audio-resource-list", help="列出外部 Flash 音效资源槽"
+    )
+    add_device_options(audio_resource_list)
+
+    audio_resource_write = commands.add_parser(
+        "audio-resource-write", help="把 MP3 音效资源写入外部 Flash"
+    )
+    add_device_options(audio_resource_write)
+    audio_resource_write.add_argument("file", type=Path, help="MP3 文件")
+    audio_resource_write.add_argument(
+        "--name", help="资源名，例如 Sounds/Hello；默认由文件名推导"
+    )
+    audio_resource_write.add_argument(
+        "--duration-ms", type=int, default=0, help="可选时长，单位毫秒"
+    )
+    audio_resource_write.add_argument(
+        "--replace", action="store_true", help="允许覆盖同名音效资源"
+    )
+
+    audio_resource_clear = commands.add_parser(
+        "audio-resource-clear", help="清除外部 Flash 音效资源槽"
+    )
+    add_device_options(audio_resource_clear)
+    audio_resource_clear.add_argument(
+        "--slot", type=int, choices=range(AUDIO_RESOURCE_SLOT_COUNT), required=True
+    )
 
     motor_test = commands.add_parser(
         "motor-test", help="让输出 A 口低速正反转一次并自动停止"
@@ -701,6 +736,8 @@ DEVICE_CAPABILITY_NAMES = (
     (DEVICE_CAPABILITY_COOPERATIVE_MULTITASK, "cooperative-multitask"),
     (DEVICE_CAPABILITY_RUNTIME_BASIC_EVENT_HATS, "runtime-basic-event-hats"),
     (DEVICE_CAPABILITY_MOTOR_STALL_DETECTION, "motor-stall-detection"),
+    (DEVICE_CAPABILITY_AUDIO_PLAYBACK, "audio-playback"),
+    (DEVICE_CAPABILITY_AUDIO_RESOURCE_FLASH, "audio-resource-flash"),
 )
 
 
@@ -1279,6 +1316,111 @@ def run_flash_mode_probe(args: argparse.Namespace) -> int:
         mode_restored = not bool(probe.status3_restored & 0x01)
         print(f"four_byte_mode_entered={'yes' if mode_entered else 'no'}", flush=True)
         print(f"three_byte_mode_restored={'yes' if mode_restored else 'no'}", flush=True)
+    return 0
+
+
+AUDIO_RESOURCE_ERRORS = {
+    0: "none",
+    1: "unsupported-device",
+    2: "invalid-request",
+    3: "invalid-name",
+    4: "too-large",
+    5: "no-space",
+    6: "flash-io",
+    7: "verify",
+    8: "busy",
+    9: "invalid-slot",
+    10: "not-found",
+}
+
+
+def audio_resource_flags_text(flags: int) -> str:
+    names = []
+    if flags & AUDIO_RESOURCE_STATUS_FLAG_SUPPORTED_DEVICE:
+        names.append("supported")
+    if flags & AUDIO_RESOURCE_STATUS_FLAG_OCCUPIED:
+        names.append("occupied")
+    if flags & AUDIO_RESOURCE_STATUS_FLAG_BUSY:
+        names.append("busy")
+    return ",".join(names) if names else "none"
+
+
+def print_audio_resource_status(status: object) -> None:
+    error_name = AUDIO_RESOURCE_ERRORS.get(status.last_error, "unknown")
+    print(
+        f"slot={status.slot_id} flags={audio_resource_flags_text(status.flags)} "
+        f"name={status.resource_name or '-'} length={status.resource_length} "
+        f"crc32=0x{status.resource_crc32:08X} duration_ms={status.duration_ms}",
+        flush=True,
+    )
+    print(
+        f"  result={status.result} error={error_name} "
+        f"region_start=0x{status.region_start:08X} slot_size={status.slot_size} "
+        f"data_max={status.data_max_bytes}",
+        flush=True,
+    )
+
+
+def derive_audio_resource_name(path: Path) -> str:
+    resolved = path.resolve()
+    parts = [part.lower() for part in resolved.parts]
+    if "assets" in parts and "audio" in parts:
+        audio_index = parts.index("audio")
+        if audio_index > 0 and parts[audio_index - 1] == "assets":
+            return resolved.relative_to(Path(*resolved.parts[: audio_index + 1])).with_suffix(
+                ""
+            ).as_posix()
+    return path.with_suffix("").name
+
+
+def run_audio_resource_list(args: argparse.Namespace) -> int:
+    with open_transport(args) as transport:
+        print(f"device={transport.path}", flush=True)
+        updater = FirmwareUpdater(transport)
+        print(f"current_version={updater.ping()}", flush=True)
+        statuses = updater.list_audio_resources()
+        first = statuses[0]
+        print(f"schema={first.schema_version}", flush=True)
+        print(f"slot_count={first.slot_count}", flush=True)
+        print(f"occupied_mask=0x{first.occupied_mask:08X}", flush=True)
+        for status in statuses:
+            print_audio_resource_status(status)
+    return 0
+
+
+def run_audio_resource_write(args: argparse.Namespace) -> int:
+    if args.duration_ms < 0:
+        raise ValueError("--duration-ms 必须大于或等于 0")
+    data = args.file.read_bytes()
+    name = args.name or derive_audio_resource_name(args.file)
+    resource_crc32 = binascii.crc32(data) & 0xFFFFFFFF
+    with open_transport(args) as transport:
+        print(f"device={transport.path}", flush=True)
+        updater = FirmwareUpdater(transport)
+        print(f"current_version={updater.ping()}", flush=True)
+        print(f"resource_name={name}", flush=True)
+        print(f"bytes={len(data)}", flush=True)
+        print(f"crc32=0x{resource_crc32:08X}", flush=True)
+        status = updater.write_audio_resource(
+            name,
+            data,
+            duration_ms=args.duration_ms,
+            replace=args.replace,
+            progress=print_progress,
+        )
+        print("audio_resource_write=done", flush=True)
+        print_audio_resource_status(status)
+    return 0
+
+
+def run_audio_resource_clear(args: argparse.Namespace) -> int:
+    with open_transport(args) as transport:
+        print(f"device={transport.path}", flush=True)
+        updater = FirmwareUpdater(transport)
+        print(f"current_version={updater.ping()}", flush=True)
+        status = updater.clear_audio_resource(args.slot)
+        print("audio_resource_clear=done", flush=True)
+        print_audio_resource_status(status)
     return 0
 
 
@@ -2611,6 +2753,12 @@ def main(argv: list[str] | None = None) -> int:
             return run_flash_status(args)
         if args.mode == "flash-mode-probe":
             return run_flash_mode_probe(args)
+        if args.mode == "audio-resource-list":
+            return run_audio_resource_list(args)
+        if args.mode == "audio-resource-write":
+            return run_audio_resource_write(args)
+        if args.mode == "audio-resource-clear":
+            return run_audio_resource_clear(args)
         if args.mode == "motor-test":
             return run_motor_test(args)
         if args.mode == "motor-types":

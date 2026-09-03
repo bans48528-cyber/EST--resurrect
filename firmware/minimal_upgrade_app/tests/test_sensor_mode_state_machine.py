@@ -37,6 +37,8 @@ class SensorModeTrackerTests(unittest.TestCase):
                 board_sensor_mode_tracker_t *, uint8_t);
             _Bool board_sensor_mode_command_needed(
                 const board_sensor_mode_tracker_t *, uint32_t);
+            _Bool board_sensor_mode_recovery_needed(
+                const board_sensor_mode_tracker_t *, uint32_t);
             void board_sensor_mode_mark_command_sent(
                 board_sensor_mode_tracker_t *, uint32_t);
             _Bool board_sensor_mode_accept_data(
@@ -116,6 +118,12 @@ class SensorModeTrackerTests(unittest.TestCase):
 
         self.assertFalse(
             self.mode.board_sensor_mode_command_needed(tracker, 500)
+        )
+        self.assertFalse(
+            self.mode.board_sensor_mode_recovery_needed(tracker, 699)
+        )
+        self.assertTrue(
+            self.mode.board_sensor_mode_recovery_needed(tracker, 700)
         )
         self.assertTrue(tracker.pending)
         self.assertEqual(tracker.mode_command_count, 5)
@@ -316,6 +324,7 @@ class SensorWaitContractTests(unittest.TestCase):
 
         self.assertIn("MODEST_SENSOR_TYPE_TIMEOUT_MS 6000U", modest)
         self.assertIn("MODEST_SENSOR_VALUE_TIMEOUT_MS 3000U", modest)
+        self.assertIn("MODEST_SENSOR_RECOVERY_TIMEOUT_MS 7000U", modest)
         self.assertIn("MODEST_SENSOR_TYPE_WATCHDOG_BUDGET_MS 8000U", modest)
         self.assertIn("MODEST_SENSOR_TYPE_TIMEOUT_MS", type_wait)
         self.assertNotIn("MODEST_SENSOR_VALUE_TIMEOUT_MS", type_wait)
@@ -326,7 +335,9 @@ class SensorWaitContractTests(unittest.TestCase):
             "status.state == EST_SENSOR_STREAMING", type_wait
         )
         self.assertIn("MODEST_SENSOR_VALUE_TIMEOUT_MS", value_wait)
+        self.assertIn("MODEST_SENSOR_RECOVERY_TIMEOUT_MS", value_wait)
         self.assertNotIn("MODEST_SENSOR_TYPE_TIMEOUT_MS", value_wait)
+        self.assertIn("recovery_observed", value_wait)
         self.assertIn("est_micropython_vm_hook();", type_wait)
 
     def test_board_driver_has_stale_grace_and_mode_diagnostics(self) -> None:
@@ -364,6 +375,9 @@ class SensorWaitContractTests(unittest.TestCase):
         self.assertIn(
             "The streaming tick sends the request after draining complete RX frames.",
             sensor[set_mode:set_all_modes],
+        )
+        self.assertIn(
+            "board_sensor_mode_recovery_needed(", sensor[streaming:stale]
         )
         for field in (
             "requested_mode",

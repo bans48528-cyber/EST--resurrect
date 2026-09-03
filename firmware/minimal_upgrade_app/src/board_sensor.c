@@ -1182,6 +1182,11 @@ static void tick_port(enum board_sensor_port port, uint32_t now_ms)
 				runtime->last_keepalive_ms = now_ms;
 			}
 		}
+		if (board_sensor_mode_recovery_needed(
+		    &runtime->mode_tracker, now_ms)) {
+			start_sync(port, now_ms);
+			return;
+		}
 		if ((uint32_t)(now_ms -
 		    (runtime->mode_tracker.last_data_ms == 0U ?
 		     runtime->stream_started_ms :

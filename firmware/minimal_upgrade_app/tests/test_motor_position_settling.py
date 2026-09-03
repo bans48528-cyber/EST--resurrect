@@ -222,8 +222,8 @@ class MotorPositionSettlingTests(unittest.TestCase):
             "settling_entry =", 1
         )[0]
 
-        self.assertIn("motor_position_slowdown_degrees", pair_branch)
-        self.assertIn("MOTOR_POSITION_MIN_SPEED_PERCENT", pair_branch)
+        self.assertIn("motor_position_tracking_speed", pair_branch)
+        self.assertNotIn("target_speed = control->requested_speed < 0", pair_branch)
         self.assertIn("pair_adjust_position_speed", pair_branch)
         self.assertNotIn("update_position_settling", pair_branch)
 

@@ -203,7 +203,8 @@ class WatchdogSourceContractTests(unittest.TestCase):
         source = (ROOT / "micropython_port" / "modest.c").read_text(
             encoding="utf-8"
         )
-        self.assertIn("MODEST_SENSOR_WATCHDOG_BUDGET_MS 5000U", source)
+        self.assertIn("MODEST_SENSOR_WATCHDOG_BUDGET_MS 12000U", source)
+        self.assertIn("MODEST_SENSOR_RECOVERY_TIMEOUT_MS 7000U", source)
         self.assertIn("watchdog_guard_begin(&guard, started_ms", source)
         self.assertIn("watchdog_guard_progress(&guard, est_system_millis())", source)
         self.assertIn("modest_raise_sensor_error_guarded", source)

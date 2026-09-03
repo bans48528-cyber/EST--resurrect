@@ -37,7 +37,9 @@ DISPLAY_IMAGE_ASSET_DIRS := assets/display_images/Expressions \
 	assets/display_images/Eyes
 DISPLAY_IMAGE_SOURCE := $(BUILD_DIR)/generated/display_image_resources.c
 DISPLAY_IMAGE_OBJECT := $(BUILD_DIR)/obj/display_image_resources.o
-OBJECTS := $(SOURCE_OBJECTS) $(DISPLAY_IMAGE_OBJECT)
+AUDIO_SOURCE := $(BUILD_DIR)/generated/audio_resources.c
+AUDIO_OBJECT := $(BUILD_DIR)/obj/audio_resources.o
+OBJECTS := $(SOURCE_OBJECTS) $(DISPLAY_IMAGE_OBJECT) $(AUDIO_OBJECT)
 DEPS := $(OBJECTS:.o=.d)
 ELF := $(BUILD_DIR)/$(PROJECT).elf
 BIN := $(BUILD_DIR)/$(PROJECT).bin
@@ -64,6 +66,14 @@ $(DISPLAY_IMAGE_SOURCE): FORCE tools/generate_display_images.py \
 		--assets-dir assets/display_images --output $@
 
 $(DISPLAY_IMAGE_OBJECT): $(DISPLAY_IMAGE_SOURCE)
+	@$(MKDIR_P) $(dir $@)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -MMD -MP -c $< -o $@
+
+$(AUDIO_SOURCE): tools/generate_audio_resources.py
+	@$(MKDIR_P) $(dir $@)
+	$(PYTHON) tools/generate_audio_resources.py --output $@
+
+$(AUDIO_OBJECT): $(AUDIO_SOURCE)
 	@$(MKDIR_P) $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -MMD -MP -c $< -o $@
 

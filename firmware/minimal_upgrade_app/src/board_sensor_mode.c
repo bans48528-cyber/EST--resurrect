@@ -5,6 +5,7 @@
 
 #define BOARD_SENSOR_MODE_SELECT_ATTEMPTS 5U
 #define BOARD_SENSOR_MODE_SELECT_RETRY_MS 100U
+#define BOARD_SENSOR_MODE_RECOVERY_MS 300U
 
 void board_sensor_mode_init(struct board_sensor_mode_tracker *tracker,
 	uint8_t default_mode)
@@ -55,6 +56,15 @@ bool board_sensor_mode_command_needed(
 	return tracker->command_attempts == 0U ||
 		(uint32_t)(now_ms - tracker->last_command_ms) >=
 		BOARD_SENSOR_MODE_SELECT_RETRY_MS;
+}
+
+bool board_sensor_mode_recovery_needed(
+	const struct board_sensor_mode_tracker *tracker, uint32_t now_ms)
+{
+	return tracker != NULL && tracker->pending && tracker->command_sent &&
+		tracker->command_attempts >= BOARD_SENSOR_MODE_SELECT_ATTEMPTS &&
+		(uint32_t)(now_ms - tracker->last_command_ms) >=
+		BOARD_SENSOR_MODE_RECOVERY_MS;
 }
 
 void board_sensor_mode_mark_command_sent(

@@ -11,6 +11,8 @@
 #include "py/runtime.h"
 
 #include "est_battery.h"
+#include "board_audio.h"
+#include "board_audio_bus.h"
 #include "est_backlight.h"
 #include "est_buttons.h"
 #include "est_display.h"
@@ -1140,8 +1142,9 @@ typedef struct {
 
 #define MODEST_SENSOR_TYPE_TIMEOUT_MS 6000U
 #define MODEST_SENSOR_VALUE_TIMEOUT_MS 3000U
+#define MODEST_SENSOR_RECOVERY_TIMEOUT_MS 7000U
 #define MODEST_SENSOR_TYPE_WATCHDOG_BUDGET_MS 8000U
-#define MODEST_SENSOR_WATCHDOG_BUDGET_MS 5000U
+#define MODEST_SENSOR_WATCHDOG_BUDGET_MS 12000U
 
 static void modest_raise_sensor_error(est_result_t error)
 {
@@ -1473,9 +1476,11 @@ static int32_t modest_sensor_wait_value(mp_obj_t self_object,
 	est_sensor_type_t expected_type = self->expected_type;
 	est_result_t result;
 	uint32_t started_ms = est_system_millis();
+	uint32_t recovery_started_ms = 0U;
 	uint32_t request_generation = 0U;
 	bool mode_requested = false;
 	bool require_new_generation = false;
+	bool recovery_observed = false;
 	est_sensor_wait_decision_t decision;
 	watchdog_guard_t guard;
 
@@ -1492,6 +1497,14 @@ static int32_t modest_sensor_wait_value(mp_obj_t self_object,
 	}
 	modest_sensor_trace(self->port, &status, "initial");
 	for (;;) {
+		uint32_t now_ms = est_system_millis();
+
+		if (!recovery_observed &&
+		    (status.state == EST_SENSOR_SYNCING ||
+		     status.state == EST_SENSOR_STALE)) {
+			recovery_observed = true;
+			recovery_started_ms = now_ms;
+		}
 		if (!self->type_constrained &&
 		    expected_type == EST_SENSOR_TYPE_UNKNOWN &&
 		    status.type != EST_SENSOR_TYPE_NONE &&
@@ -1533,8 +1546,12 @@ static int32_t modest_sensor_wait_value(mp_obj_t self_object,
 			modest_raise_sensor_error_guarded(&guard,
 				EST_ERR_TYPE_MISMATCH);
 		}
-		if ((uint32_t)(est_system_millis() - started_ms) >=
-		    MODEST_SENSOR_VALUE_TIMEOUT_MS) {
+		if ((!recovery_observed &&
+		     (uint32_t)(now_ms - started_ms) >=
+			MODEST_SENSOR_VALUE_TIMEOUT_MS) ||
+		    (recovery_observed &&
+		     (uint32_t)(now_ms - recovery_started_ms) >=
+			MODEST_SENSOR_RECOVERY_TIMEOUT_MS)) {
 			est_result_t timeout_error = est_sensor_wait_timeout_error(
 				&status, expected_type);
 
@@ -2200,6 +2217,161 @@ static const mp_obj_module_t modest_display_module = {
 	.globals = (mp_obj_dict_t *)&modest_display_globals,
 };
 
+static void modest_audio_check(void)
+{
+	if (board_audio_state() == BOARD_AUDIO_FAULT) {
+		mp_raise_msg(&mp_type_RuntimeError,
+			MP_ERROR_TEXT("audio decoder unavailable or timed out"));
+	}
+}
+
+static void modest_audio_wait(uint32_t generation)
+{
+	while (board_audio_generation() == generation) {
+		est_micropython_vm_hook();
+		modest_audio_check();
+		if (board_audio_state() != BOARD_AUDIO_PLAYING) {
+			break;
+		}
+	}
+}
+
+static mp_obj_t modest_audio_play(size_t n_args, const mp_obj_t *args,
+	mp_map_t *keywords)
+{
+	enum { ARG_name, ARG_wait };
+	static const mp_arg_t allowed[] = {
+		{ MP_QSTR_name, MP_ARG_REQUIRED | MP_ARG_OBJ, {.u_obj = MP_OBJ_NULL} },
+		{ MP_QSTR_wait, MP_ARG_KW_ONLY | MP_ARG_BOOL, {.u_bool = false} },
+	};
+	mp_arg_val_t values[MP_ARRAY_SIZE(allowed)];
+	size_t length;
+	const char *name;
+	mp_arg_parse_all(n_args, args, keywords, MP_ARRAY_SIZE(allowed), allowed, values);
+	name = mp_obj_str_get_data(values[ARG_name].u_obj, &length);
+	if (memchr(name, 0, length) != NULL || !board_audio_has_resource(name)) {
+		mp_raise_ValueError(MP_ERROR_TEXT("unknown sound name"));
+	}
+	est_micropython_vm_hook();
+	if (!board_audio_play(name, est_system_millis())) {
+		mp_raise_msg(&mp_type_RuntimeError,
+			MP_ERROR_TEXT("audio resource missing or unreadable"));
+	}
+	if (values[ARG_wait].u_bool) {
+		modest_audio_wait(board_audio_generation());
+	}
+	return mp_const_none;
+}
+static MP_DEFINE_CONST_FUN_OBJ_KW(modest_audio_play_obj, 1, modest_audio_play);
+
+static mp_obj_t modest_audio_tone(size_t n_args, const mp_obj_t *args,
+	mp_map_t *keywords)
+{
+	enum { ARG_note, ARG_duration_ms, ARG_wait };
+	static const mp_arg_t allowed[] = {
+		{ MP_QSTR_note, MP_ARG_REQUIRED | MP_ARG_OBJ, {.u_obj = MP_OBJ_NULL} },
+		{ MP_QSTR_duration_ms, MP_ARG_OBJ, {.u_obj = MP_OBJ_NEW_SMALL_INT(-1)} },
+		{ MP_QSTR_wait, MP_ARG_KW_ONLY | MP_ARG_BOOL, {.u_bool = false} },
+	};
+	mp_arg_val_t values[MP_ARRAY_SIZE(allowed)];
+	int32_t note;
+	int32_t duration;
+	mp_arg_parse_all(n_args, args, keywords, MP_ARRAY_SIZE(allowed), allowed, values);
+	note = require_integer_range(values[ARG_note].u_obj, 0, 127,
+		MP_ERROR_TEXT("audio note must be 0..127"));
+	duration = require_integer_range(values[ARG_duration_ms].u_obj, -1,
+		INT32_MAX, MP_ERROR_TEXT("invalid audio duration"));
+	est_micropython_vm_hook();
+	(void)board_audio_tone((uint8_t)note, duration, est_system_millis());
+	if (values[ARG_wait].u_bool) {
+		modest_audio_wait(board_audio_generation());
+	}
+	return mp_const_none;
+}
+static MP_DEFINE_CONST_FUN_OBJ_KW(modest_audio_tone_obj, 1, modest_audio_tone);
+
+static mp_obj_t modest_audio_stop(void)
+{
+	board_audio_stop();
+	return mp_const_none;
+}
+static MP_DEFINE_CONST_FUN_OBJ_0(modest_audio_stop_obj, modest_audio_stop);
+
+static mp_obj_t modest_audio_volume(mp_obj_t value)
+{
+	int32_t percent = require_integer_range(value, 0, 100,
+		MP_ERROR_TEXT("volume must be 0..100"));
+	(void)board_audio_set_volume_percent((uint8_t)percent);
+	return mp_const_none;
+}
+static MP_DEFINE_CONST_FUN_OBJ_1(modest_audio_volume_obj, modest_audio_volume);
+
+static mp_obj_t modest_audio_state(void)
+{
+	modest_audio_check();
+	return mp_obj_new_int(board_audio_state());
+}
+static MP_DEFINE_CONST_FUN_OBJ_0(modest_audio_state_obj, modest_audio_state);
+
+static mp_obj_t modest_audio_generation(void)
+{
+	return mp_obj_new_int_from_uint(board_audio_generation());
+}
+static MP_DEFINE_CONST_FUN_OBJ_0(modest_audio_generation_obj, modest_audio_generation);
+
+static mp_obj_t modest_audio_diagnostics(void)
+{
+	mp_obj_t values[] = {
+		mp_obj_new_int(board_audio_state()),
+		mp_obj_new_int(board_audio_decoder_status()),
+		mp_obj_new_int_from_uint(board_audio_bytes_sent()),
+		mp_obj_new_bool(board_audio_ready()),
+		mp_obj_new_int(board_audio_volume_percent()),
+		mp_obj_new_int(board_audio_mode_register()),
+		mp_obj_new_int(board_audio_phase()),
+		mp_obj_new_int(board_audio_bus_pin_levels()),
+		mp_obj_new_int(board_audio_failure_phase()),
+		mp_obj_new_int_from_uint(board_audio_stream_crc32()),
+		mp_obj_new_int_from_uint(board_audio_dreq_waits()),
+		mp_obj_new_int(board_audio_bus_pin_layout()),
+		mp_obj_new_int(board_audio_bus_pin_probe()),
+	};
+	return mp_obj_new_tuple(MP_ARRAY_SIZE(values), values);
+}
+static MP_DEFINE_CONST_FUN_OBJ_0(modest_audio_diagnostics_obj, modest_audio_diagnostics);
+
+static mp_obj_t modest_audio_read_register(mp_obj_t reg_object)
+{
+	uint16_t value;
+	int32_t reg = require_integer_range(reg_object, 0, 11,
+		MP_ERROR_TEXT("invalid audio diagnostic register"));
+	if (reg == 2 || reg == 6 || reg == 7 || reg == 10) {
+		mp_raise_ValueError(MP_ERROR_TEXT("invalid audio diagnostic register"));
+	}
+	if (!board_audio_read_register((uint8_t)reg, &value)) {
+		return mp_const_none;
+	}
+	return mp_obj_new_int(value);
+}
+static MP_DEFINE_CONST_FUN_OBJ_1(modest_audio_read_register_obj, modest_audio_read_register);
+
+static const mp_rom_map_elem_t modest_audio_globals_table[] = {
+	{MP_ROM_QSTR(MP_QSTR___name__), MP_ROM_QSTR(MP_QSTR_audio)},
+	{MP_ROM_QSTR(MP_QSTR_play), MP_ROM_PTR(&modest_audio_play_obj)},
+	{MP_ROM_QSTR(MP_QSTR_tone), MP_ROM_PTR(&modest_audio_tone_obj)},
+	{MP_ROM_QSTR(MP_QSTR_stop), MP_ROM_PTR(&modest_audio_stop_obj)},
+	{MP_ROM_QSTR(MP_QSTR_set_volume), MP_ROM_PTR(&modest_audio_volume_obj)},
+	{MP_ROM_QSTR(MP_QSTR_state), MP_ROM_PTR(&modest_audio_state_obj)},
+	{MP_ROM_QSTR(MP_QSTR__generation), MP_ROM_PTR(&modest_audio_generation_obj)},
+	{MP_ROM_QSTR(MP_QSTR__diagnostics), MP_ROM_PTR(&modest_audio_diagnostics_obj)},
+	{MP_ROM_QSTR(MP_QSTR__read_register), MP_ROM_PTR(&modest_audio_read_register_obj)},
+};
+static MP_DEFINE_CONST_DICT(modest_audio_globals, modest_audio_globals_table);
+static const mp_obj_module_t modest_audio_module = {
+	.base = {&mp_type_module},
+	.globals = (mp_obj_dict_t *)&modest_audio_globals,
+};
+
 static mp_obj_t modest_led_set(mp_obj_t color_object)
 {
 	int32_t color = require_integer_range(color_object, EST_LED_OFF,
@@ -2475,6 +2647,7 @@ static const mp_rom_map_elem_t modest_module_globals_table[] = {
 	{MP_ROM_QSTR(MP_QSTR_InfraredSensor),
 		MP_ROM_PTR(&modest_infrared_sensor_type)},
 	{MP_ROM_QSTR(MP_QSTR_display), MP_ROM_PTR(&modest_display_module)},
+	{MP_ROM_QSTR(MP_QSTR_audio), MP_ROM_PTR(&modest_audio_module)},
 	{MP_ROM_QSTR(MP_QSTR_led), MP_ROM_PTR(&modest_led_module)},
 	{MP_ROM_QSTR(MP_QSTR_backlight),
 		MP_ROM_PTR(&modest_backlight_module)},

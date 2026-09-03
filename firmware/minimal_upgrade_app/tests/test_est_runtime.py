@@ -688,6 +688,170 @@ class RuntimeHardwareTests(unittest.TestCase):
         self.assertNotIn(("motor.stop", "A", 0), fake_est.events)
         self.assertNotIn(("motor.stop", "C", 0), fake_est.events)
 
+    def test_line_follow_init_and_dual_pd_steps(self) -> None:
+        runtime, fake_est = load_runtime()
+        fake_est.millis_step = 20
+        runtime.drive_set_pair("B", "C")
+
+        runtime.line_follow_init()
+        self.assertEqual(
+            [event for event in fake_est.events if event[0] == "pair.run_speed"],
+            [],
+        )
+
+        runtime.line_follow_dual_step(60, 40, 30, 30, 1, 0.01)
+        runtime.line_follow_dual_step(50, 40, 30, 30, 1, 0.01)
+
+        self.assertEqual(
+            [
+                ("pair.run_speed", 50, 10),
+                ("pair.run_speed", 35, 25),
+            ],
+            [event for event in fake_est.events if event[0] == "pair.run_speed"],
+        )
+
+    def test_line_follow_clamps_outputs_and_validates_numbers(self) -> None:
+        runtime, fake_est = load_runtime()
+        runtime.line_follow_init()
+        runtime.line_follow_dual_step(100, -100, 90, -90, 2, 0)
+        self.assertIn(("pair.run_speed", 100, -100), fake_est.events)
+
+        with self.assertRaisesRegex(ValueError, "left input must be a number"):
+            runtime.line_follow_dual_step("bad", 0, 30, 30, 1, 0)
+
+    def test_line_follow_new_task_owner_survives_old_task_cleanup(self) -> None:
+        runtime, fake_est = load_runtime()
+
+        @runtime.on_start
+        async def old_owner():
+            runtime.line_follow_init()
+            runtime.line_follow_dual_step(60, 40, 30, 30, 1, 0)
+            await runtime.yield_once()
+            await runtime.yield_once()
+
+        @runtime.on_start
+        async def new_owner():
+            await runtime.yield_once()
+            runtime.line_follow_init()
+            runtime.line_follow_dual_step(40, 60, 50, 50, 1, 0)
+            await runtime.yield_once()
+
+        runtime.run()
+
+        takeover = fake_est.events.index(("pair.run_speed", 30, 70))
+        self.assertEqual(
+            [("motor.stop", "B", 0), ("motor.stop", "C", 0)],
+            [event for event in fake_est.events[takeover + 1:] if event[0] == "motor.stop"],
+        )
+
+    def test_dual_power_drive_clamps_and_retargets_without_speed_control(self) -> None:
+        runtime, fake_est = load_runtime()
+        runtime.drive_set_pair("B", "C")
+
+        runtime.drive_start_dual_power(101, -101)
+        first_generation = runtime._motor_commands["B"][1]
+        self.assertEqual(first_generation, runtime._motor_commands["C"][1])
+        runtime.drive_start_dual_power(25, 75)
+
+        self.assertEqual(
+            [
+                ("motor.run_power", "B", 100),
+                ("motor.run_power", "C", -100),
+                ("motor.run_power", "B", 25),
+                ("motor.run_power", "C", 75),
+            ],
+            [event for event in fake_est.events if event[0] == "motor.run_power"],
+        )
+        self.assertEqual(
+            [event for event in fake_est.events if event[0] == "pair.run_speed"],
+            [],
+        )
+        self.assertEqual(
+            [event for event in fake_est.events if event[0] == "motor.stop"],
+            [],
+        )
+
+    def test_dual_power_failure_coasts_both_ports(self) -> None:
+        runtime, fake_est = load_runtime()
+        runtime.drive_set_pair("B", "C")
+        right_motor = runtime.motor("C")
+
+        def fail_run_power(_power):
+            raise RuntimeError("right motor start failed")
+
+        right_motor.run_power = fail_run_power
+        with self.assertRaisesRegex(RuntimeError, "right motor start failed"):
+            runtime.drive_start_dual_power(40, 60)
+
+        self.assertIn(("motor.run_power", "B", 40), fake_est.events)
+        self.assertIn(("motor.stop", "B", 0), fake_est.events)
+        self.assertIn(("motor.stop", "C", 0), fake_est.events)
+        self.assertNotIn("B", runtime._motor_commands)
+        self.assertNotIn("C", runtime._motor_commands)
+
+    def test_pwm_line_follow_init_and_dual_pd_steps(self) -> None:
+        runtime, fake_est = load_runtime()
+        fake_est.millis_step = 20
+        runtime.drive_set_pair("B", "C")
+
+        runtime.line_follow_init()
+        runtime.line_follow_dual_power_step(60, 40, 30, 30, 1, 0.01)
+        runtime.line_follow_dual_power_step(50, 40, 30, 30, 1, 0.01)
+
+        self.assertEqual(
+            [
+                ("motor.run_power", "B", 50),
+                ("motor.run_power", "C", 10),
+                ("motor.run_power", "B", 35),
+                ("motor.run_power", "C", 25),
+            ],
+            [event for event in fake_est.events if event[0] == "motor.run_power"],
+        )
+        self.assertEqual(
+            [event for event in fake_est.events if event[0] == "pair.run_speed"],
+            [],
+        )
+
+    def test_pwm_line_follow_clamps_and_validates_power(self) -> None:
+        runtime, fake_est = load_runtime()
+        runtime.line_follow_init()
+        runtime.line_follow_dual_power_step(100, -100, 90, -90, 2, 0)
+        self.assertIn(("motor.run_power", "B", 100), fake_est.events)
+        self.assertIn(("motor.run_power", "C", -100), fake_est.events)
+
+        with self.assertRaisesRegex(ValueError, "left input must be a number"):
+            runtime.line_follow_dual_power_step("bad", 0, 30, 30, 1, 0)
+
+    def test_pwm_line_follow_new_owner_survives_old_task_cleanup(self) -> None:
+        runtime, fake_est = load_runtime()
+
+        @runtime.on_start
+        async def old_owner():
+            runtime.line_follow_init()
+            runtime.line_follow_dual_power_step(60, 40, 30, 30, 1, 0)
+            await runtime.yield_once()
+            await runtime.yield_once()
+
+        @runtime.on_start
+        async def new_owner():
+            await runtime.yield_once()
+            runtime.line_follow_init()
+            runtime.line_follow_dual_power_step(40, 60, 50, 50, 1, 0)
+            await runtime.yield_once()
+
+        runtime.run()
+
+        takeover = fake_est.events.index(("motor.run_power", "B", 30))
+        self.assertEqual(
+            [
+                ("motor.run_power", "B", 30),
+                ("motor.run_power", "C", 70),
+                ("motor.stop", "B", 0),
+                ("motor.stop", "C", 0),
+            ],
+            fake_est.events[takeover:takeover + 4],
+        )
+
     def test_dual_speed_drive_for_time_and_proportional_degrees(self) -> None:
         runtime, fake_est = load_runtime()
         runtime.drive_set_pair("B", "C")
@@ -1325,9 +1489,10 @@ class RuntimeContractTests(unittest.TestCase):
             "display_text", "display_text_line",
             "drive_dual_speed_for", "drive_move_for", "drive_set_pair",
             "drive_set_speed", "drive_set_stop_action",
-            "drive_start_dual_speed", "drive_start_steer",
+            "drive_start_dual_power", "drive_start_dual_speed", "drive_start_steer",
             "drive_steer_for", "drive_stop", "gyro", "infrared",
             "ir_beacon_compare", "motor", "motor_run_for",
+            "line_follow_dual_power_step", "line_follow_dual_step", "line_follow_init",
             "motor_set_speed", "motor_set_stop_action", "motor_stalled", "motor_start",
             "motor_start_power", "motor_start_speed", "motor_stop",
             "on_brick_button", "on_broadcast", "on_color",

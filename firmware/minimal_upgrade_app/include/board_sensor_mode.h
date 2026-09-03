@@ -24,6 +24,8 @@ bool board_sensor_mode_request(struct board_sensor_mode_tracker *tracker,
 	uint8_t mode);
 bool board_sensor_mode_command_needed(
 	const struct board_sensor_mode_tracker *tracker, uint32_t now_ms);
+bool board_sensor_mode_recovery_needed(
+	const struct board_sensor_mode_tracker *tracker, uint32_t now_ms);
 void board_sensor_mode_mark_command_sent(
 	struct board_sensor_mode_tracker *tracker, uint32_t now_ms);
 bool board_sensor_mode_accept_data(struct board_sensor_mode_tracker *tracker,

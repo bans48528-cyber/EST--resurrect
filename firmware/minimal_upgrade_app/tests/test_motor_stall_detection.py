@@ -79,18 +79,18 @@ class MotorStallDetectionTests(unittest.TestCase):
         self.assertIn("motor(port).stalled()", runtime)
         self.assertIn("port = _motor_port(port)", runtime)
 
-    def test_protocol_126_advertises_bit25(self) -> None:
+    def test_protocol_advertises_bit25(self) -> None:
         config = (ROOT / "include" / "app_config.h").read_text(encoding="utf-8")
         protocol = (SOURCE_DIR / "update_protocol.c").read_text(encoding="utf-8")
         constants = (TOOLS_ROOT / "constants.py").read_text(encoding="utf-8")
         cli = (TOOLS_ROOT / "cli.py").read_text(encoding="utf-8")
 
-        self.assertIn("DEVICE_PROTOCOL_MINOR           26U", config)
+        self.assertIn("DEVICE_PROTOCOL_MINOR           27U", config)
         self.assertIn(
             "DEVICE_CAPABILITY_MOTOR_STALL_DETECTION (1UL << 25U)", config
         )
         self.assertIn("DEVICE_CAPABILITY_MOTOR_STALL_DETECTION", protocol)
-        self.assertIn("DEVICE_PROTOCOL_MINOR = 26", constants)
+        self.assertIn("DEVICE_PROTOCOL_MINOR = 27", constants)
         self.assertIn("DEVICE_CAPABILITY_MOTOR_STALL_DETECTION = 1 << 25", constants)
         self.assertIn('"motor-stall-detection"', cli)
 

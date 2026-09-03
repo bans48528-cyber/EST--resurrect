@@ -20,6 +20,7 @@
 #include "est_micropython.h"
 #include "est_buttons.h"
 #include "est_motor.h"
+#include "board_audio.h"
 #include "est_runtime.h"
 #include "est_sensor.h"
 #include "est_system.h"
@@ -235,6 +236,7 @@ void est_micropython_deinit(void)
 {
 	program_stop_requested = true;
 	(void)est_motor_stop_all(EST_STOP_COAST);
+	board_audio_stop();
 	if (micropython_initialized) {
 		mp_deinit();
 		micropython_initialized = false;
@@ -270,6 +272,7 @@ void est_micropython_tick(void)
 	program_last_usb_poll_ms = program_started_ms;
 	program_executing = true;
 	(void)est_motor_stop_all(EST_STOP_COAST);
+	board_audio_stop();
 	reset_vm();
 	script_succeeded = execute_script((const char *)program_source,
 		program_status.expected_length, &exception_line);
@@ -279,6 +282,7 @@ void est_micropython_tick(void)
 	program_status.flags &=
 		(uint8_t)~EST_MICROPYTHON_PROGRAM_FLAG_TIMEOUT_ARMED;
 	(void)est_motor_stop_all(EST_STOP_COAST);
+	board_audio_stop();
 	refresh_heap_status();
 
 	if (script_succeeded) {
@@ -441,6 +445,7 @@ est_result_t est_micropython_program_stop(void)
 		program_status.state = EST_MICROPYTHON_PROGRAM_STOPPED;
 		program_status.error = EST_MICROPYTHON_PROGRAM_ERROR_STOPPED;
 		(void)est_motor_stop_all(EST_STOP_COAST);
+		board_audio_stop();
 		return EST_OK;
 	}
 	if (!program_executing ||
@@ -450,6 +455,7 @@ est_result_t est_micropython_program_stop(void)
 	program_stop_requested = true;
 	program_abort_error = EST_MICROPYTHON_PROGRAM_ERROR_STOPPED;
 	(void)est_motor_stop_all(EST_STOP_COAST);
+	board_audio_stop();
 	return EST_OK;
 }
 
@@ -461,6 +467,7 @@ void est_micropython_program_stop_from_vm(void)
 	program_stop_requested = true;
 	program_abort_error = EST_MICROPYTHON_PROGRAM_ERROR_STOPPED;
 	(void)est_motor_stop_all(EST_STOP_COAST);
+	board_audio_stop();
 	mp_sched_vm_abort();
 	mp_handle_pending(MP_HANDLE_PENDING_CALLBACKS_AND_EXCEPTIONS);
 }
@@ -528,6 +535,7 @@ void est_micropython_vm_hook(void)
 		program_stop_requested = true;
 		program_abort_error = EST_MICROPYTHON_PROGRAM_ERROR_STOPPED;
 		(void)est_motor_stop_all(EST_STOP_COAST);
+		board_audio_stop();
 	}
 	if ((uint32_t)(now_ms - program_last_watchdog_ms) >= 10U) {
 		program_last_watchdog_ms = now_ms;

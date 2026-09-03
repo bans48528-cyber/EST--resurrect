@@ -11,6 +11,11 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT.parent))
 
 from est_hid_sender.constants import (  # noqa: E402
+    AUDIO_RESOURCE_RESULT_SUCCESS,
+    AUDIO_RESOURCE_STATUS_FLAG_OCCUPIED,
+    AUDIO_RESOURCE_STATUS_FLAG_SUPPORTED_DEVICE,
+    AUDIO_RESOURCE_SLOT_COUNT,
+    FLASH_AUDIO_RESOURCE_COMMAND,
     FRAME_END,
     LEGACY_REPORT_SIZE,
     MAX_PAYLOAD,
@@ -19,6 +24,7 @@ from est_hid_sender.firmware import detect_header, load_firmware_package  # noqa
 from est_hid_sender.errors import (  # noqa: E402
     AckRejectedError,
     AckTimeoutError,
+    EstUpdaterError,
     FirmwareValidationError,
     HeartbeatTimeoutError,
 )
@@ -46,6 +52,11 @@ from est_hid_sender.protocol import (  # noqa: E402
     build_flash_test_frame,
     build_flash_status_frame,
     build_flash_mode_probe_frame,
+    build_audio_resource_status_frame,
+    build_audio_resource_begin_frame,
+    build_audio_resource_chunk_frame,
+    build_audio_resource_commit_frame,
+    build_audio_resource_clear_frame,
     build_heartbeat_frame,
     build_input_sensor_frame,
     build_key_status_frame,
@@ -76,6 +87,7 @@ from est_hid_sender.protocol import (  # noqa: E402
     parse_flash_test_response,
     parse_flash_status_response,
     parse_flash_mode_probe_response,
+    parse_audio_resource_response,
     parse_key_status_response,
     parse_motor_control_response,
     parse_motor_dual_test_response,
@@ -643,6 +655,45 @@ def build_persistent_program_result(
     return bytes(frame)
 
 
+def build_audio_resource_result(
+    result: int = AUDIO_RESOURCE_RESULT_SUCCESS,
+    flags: int = AUDIO_RESOURCE_STATUS_FLAG_SUPPORTED_DEVICE,
+    last_error: int = 0,
+    slot_id: int = 0,
+    name: str = "",
+    resource_length: int = 0,
+    resource_crc32: int = 0,
+    duration_ms: int = 0,
+    occupied_mask: int = 0,
+) -> bytes:
+    name_bytes = name.encode("ascii")
+    if len(name_bytes) > 47:
+        raise ValueError("test resource name is too long")
+    payload = bytearray(88)
+    payload[0] = 1
+    payload[1] = result
+    payload[2] = flags
+    payload[3] = last_error
+    payload[4] = slot_id
+    payload[5] = AUDIO_RESOURCE_SLOT_COUNT
+    payload[6] = len(name_bytes)
+    payload[8:12] = (0x01F81000).to_bytes(4, "little")
+    payload[12:16] = (0x0004C000).to_bytes(4, "little")
+    payload[16:20] = (0x00004000).to_bytes(4, "little")
+    payload[20:24] = (0x00003F80).to_bytes(4, "little")
+    payload[24:28] = resource_length.to_bytes(4, "little")
+    payload[28:32] = resource_crc32.to_bytes(4, "little")
+    payload[32:36] = duration_ms.to_bytes(4, "little")
+    payload[36:40] = occupied_mask.to_bytes(4, "little")
+    payload[40 : 40 + len(name_bytes)] = name_bytes
+    frame = bytearray((0x68, 0x21, FLASH_AUDIO_RESOURCE_COMMAND))
+    frame += len(payload).to_bytes(2, "little")
+    frame += payload
+    frame.append(checksum(frame))
+    frame.append(0x16)
+    return bytes(frame).ljust(LEGACY_REPORT_SIZE, b"\x00")
+
+
 class ProtocolTests(unittest.TestCase):
     def test_heartbeat_frame_preserves_legacy_frame_format(self) -> None:
         frame = build_heartbeat_frame()
@@ -1206,6 +1257,64 @@ class ProtocolTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "1..31"):
             build_persistent_program_save_frame(0, "x" * 32)
 
+    def test_audio_resource_frames_and_status_round_trip(self) -> None:
+        data = b"mp3-data"
+        crc32 = binascii.crc32(data) & 0xFFFFFFFF
+        self.assertEqual(
+            build_audio_resource_status_frame(3),
+            build_frame(0x27, b"\x00\x03"),
+        )
+        self.assertEqual(
+            build_audio_resource_begin_frame("Sounds/Hello", len(data), crc32, 1234),
+            build_frame(
+                0x27,
+                b"\x01\x0c"
+                + len(data).to_bytes(4, "little")
+                + crc32.to_bytes(4, "little")
+                + (1234).to_bytes(4, "little")
+                + b"Sounds/Hello",
+            ),
+        )
+        self.assertEqual(
+            build_audio_resource_chunk_frame(4, data),
+            build_frame(0x27, b"\x02\x04\x00\x00\x00" + data),
+        )
+        self.assertEqual(build_audio_resource_commit_frame(), build_frame(0x27, b"\x03"))
+        self.assertEqual(
+            build_audio_resource_clear_frame(2),
+            build_frame(0x27, b"\x04\x02"),
+        )
+        status = parse_audio_resource_response(
+            build_audio_resource_result(
+                flags=(
+                    AUDIO_RESOURCE_STATUS_FLAG_SUPPORTED_DEVICE
+                    | AUDIO_RESOURCE_STATUS_FLAG_OCCUPIED
+                ),
+                slot_id=2,
+                name="Sounds/Hello",
+                resource_length=len(data),
+                resource_crc32=crc32,
+                duration_ms=1234,
+                occupied_mask=0x04,
+            )
+        )
+        self.assertIsNotNone(status)
+        self.assertEqual(status.schema_version, 1)
+        self.assertEqual(status.slot_id, 2)
+        self.assertEqual(status.slot_count, 19)
+        self.assertEqual(status.region_start, 0x01F81000)
+        self.assertEqual(status.region_size, 0x0004C000)
+        self.assertEqual(status.slot_size, 0x00004000)
+        self.assertEqual(status.data_max_bytes, 0x00003F80)
+        self.assertEqual(status.resource_name, "Sounds/Hello")
+        self.assertEqual(status.resource_crc32, crc32)
+        with self.assertRaisesRegex(ValueError, "0..18"):
+            build_audio_resource_status_frame(19)
+        with self.assertRaisesRegex(ValueError, "unsafe"):
+            build_audio_resource_begin_frame("../bad", 1, 0)
+        with self.assertRaisesRegex(ValueError, "1..16256"):
+            build_audio_resource_begin_frame("TooLarge", 16257, 0)
+
     def test_motor_type_query_parses_all_four_output_ports(self) -> None:
         self.assertEqual(build_motor_type_frame(), build_frame(0x1A))
         self.assertEqual(build_motor_type_frame(1, 1), build_frame(0x1A, bytes((1, 1))))
@@ -1344,6 +1453,11 @@ class FakeTransport:
             }
             for slot_id in range(8)
         ]
+        self.audio_slots = [
+            {"name": "", "data": b"", "duration_ms": 0}
+            for _ in range(AUDIO_RESOURCE_SLOT_COUNT)
+        ]
+        self.audio_upload = None
         self.python_state = 0
         self.python_error = 0
         self.python_flags = 0
@@ -1365,6 +1479,9 @@ class FakeTransport:
 
     def write_payload(self, payload: bytes) -> None:
         self.payloads.append(payload)
+        if payload[0:3] == b"\x68\x11\x27":
+            self._handle_audio_resource(payload)
+            return
         if payload[0:3] == b"\x68\x11\x24":
             self._handle_python_program(payload)
             return
@@ -2008,6 +2125,9 @@ class FakeTransport:
         if report[0:3] == b"\x68\x11\x25":
             self._handle_persistent_program(report)
             return
+        if report[0:3] == b"\x68\x11\x27":
+            self._handle_audio_resource(report)
+            return
         if report[0:3] == b"\x68\x11\x1A":
             self.acks.append(build_motor_type_result())
             return
@@ -2095,6 +2215,113 @@ class FakeTransport:
                 result_value=self.python_result_value,
             )
         )
+
+    def _audio_occupied_mask(self) -> int:
+        mask = 0
+        for slot_id, slot in enumerate(self.audio_slots):
+            if slot["data"]:
+                mask |= 1 << slot_id
+        return mask
+
+    def _audio_status(
+        self,
+        slot_id: int,
+        *,
+        result: int = 1,
+        last_error: int = 0,
+        busy: bool = False,
+    ) -> bytes:
+        slot = self.audio_slots[slot_id]
+        occupied = bool(slot["data"])
+        flags = AUDIO_RESOURCE_STATUS_FLAG_SUPPORTED_DEVICE
+        if occupied:
+            flags |= AUDIO_RESOURCE_STATUS_FLAG_OCCUPIED
+        if busy:
+            flags |= 0x04
+        data = slot["data"]
+        return build_audio_resource_result(
+            result=result,
+            flags=flags,
+            last_error=last_error,
+            slot_id=slot_id,
+            name=slot["name"] if occupied else "",
+            resource_length=len(data),
+            resource_crc32=binascii.crc32(data) & 0xFFFFFFFF if data else 0,
+            duration_ms=slot["duration_ms"] if occupied else 0,
+            occupied_mask=self._audio_occupied_mask(),
+        )
+
+    def _find_audio_slot(self, name: str) -> int:
+        for slot_id, slot in enumerate(self.audio_slots):
+            if slot["data"] and slot["name"] == name:
+                return slot_id
+        for slot_id, slot in enumerate(self.audio_slots):
+            if not slot["data"]:
+                return slot_id
+        return -1
+
+    def _handle_audio_resource(self, frame: bytes) -> None:
+        action = frame[5]
+        payload_length = int.from_bytes(frame[3:5], "little")
+        slot_id = frame[6] if payload_length >= 2 else 0
+        if action == 0:
+            self.acks.append(self._audio_status(slot_id))
+            return
+        if action == 1 and payload_length >= 14:
+            name_length = frame[6]
+            name = bytes(frame[19 : 19 + name_length]).decode("ascii")
+            slot_id = self._find_audio_slot(name)
+            if slot_id < 0:
+                self.acks.append(self._audio_status(0, result=3, last_error=5))
+                return
+            self.audio_upload = {
+                "slot_id": slot_id,
+                "name": name,
+                "length": int.from_bytes(frame[7:11], "little"),
+                "crc32": int.from_bytes(frame[11:15], "little"),
+                "duration_ms": int.from_bytes(frame[15:19], "little"),
+                "data": bytearray(),
+            }
+            self.acks.append(self._audio_status(slot_id, busy=True))
+            return
+        if action == 2 and payload_length >= 5:
+            if self.audio_upload is None:
+                self.acks.append(self._audio_status(0, result=3, last_error=2))
+                return
+            offset = int.from_bytes(frame[6:10], "little")
+            chunk = frame[10 : 5 + payload_length]
+            slot_id = self.audio_upload["slot_id"]
+            if offset != len(self.audio_upload["data"]):
+                self.acks.append(self._audio_status(slot_id, result=3, last_error=2))
+                return
+            self.audio_upload["data"].extend(chunk)
+            self.acks.append(self._audio_status(slot_id, busy=True))
+            return
+        if action == 3:
+            if self.audio_upload is None:
+                self.acks.append(self._audio_status(0, result=3, last_error=2))
+                return
+            slot_id = self.audio_upload["slot_id"]
+            data = bytes(self.audio_upload["data"])
+            if (
+                len(data) != self.audio_upload["length"]
+                or (binascii.crc32(data) & 0xFFFFFFFF) != self.audio_upload["crc32"]
+            ):
+                self.acks.append(self._audio_status(slot_id, result=3, last_error=7))
+                return
+            self.audio_slots[slot_id] = {
+                "name": self.audio_upload["name"],
+                "data": data,
+                "duration_ms": self.audio_upload["duration_ms"],
+            }
+            self.audio_upload = None
+            self.acks.append(self._audio_status(slot_id))
+            return
+        if action == 4 and payload_length >= 2:
+            self.audio_slots[slot_id] = {"name": "", "data": b"", "duration_ms": 0}
+            self.acks.append(self._audio_status(slot_id))
+            return
+        self.acks.append(self._audio_status(0, result=3, last_error=2))
 
     def _handle_persistent_program(self, frame: bytes) -> None:
         action = frame[5]
@@ -2310,6 +2537,35 @@ class UpdaterTests(unittest.TestCase):
         updater.clear_persistent_program(2)
         self.assertEqual(updater.read_persistent_program_status(2).record_type, 2)
         self.assertEqual(updater.read_persistent_program_status(5).program_name, "机械臂")
+
+    def test_writes_lists_and_clears_audio_resource(self) -> None:
+        data = b"ID3 fake mp3 data"
+        resource_crc32 = binascii.crc32(data) & 0xFFFFFFFF
+        transport = FakeTransport(jedec_id=bytes.fromhex("EF4019"))
+        updater = FirmwareUpdater(transport)
+        progress: list[PacketProgress] = []
+
+        empty = updater.list_audio_resources()
+        self.assertEqual(len(empty), AUDIO_RESOURCE_SLOT_COUNT)
+        self.assertEqual(empty[0].occupied_mask, 0)
+
+        status = updater.write_audio_resource(
+            "Sounds/Hello", data, duration_ms=456, progress=progress.append
+        )
+        self.assertEqual(status.resource_name, "Sounds/Hello")
+        self.assertEqual(status.resource_length, len(data))
+        self.assertEqual(status.resource_crc32, resource_crc32)
+        self.assertEqual(status.duration_ms, 456)
+        self.assertEqual(status.occupied_mask, 1)
+        self.assertEqual([item.phase for item in progress], ["sending", "acked"])
+
+        listed = updater.list_audio_resources()
+        self.assertEqual(listed[0].resource_name, "Sounds/Hello")
+        with self.assertRaisesRegex(EstUpdaterError, "同名音效资源已存在"):
+            updater.write_audio_resource("Sounds/Hello", data)
+
+        cleared = updater.clear_audio_resource(0)
+        self.assertEqual(cleared.occupied_mask, 0)
 
     def test_reads_large_and_medium_motor_identification(self) -> None:
         result = FirmwareUpdater(FakeTransport()).read_motor_types()

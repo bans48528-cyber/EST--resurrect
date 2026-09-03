@@ -25,6 +25,7 @@ est_result_t est_system_emergency_stop(void)
 {
 	est_result_t result = est_motor_stop_all(EST_STOP_COAST);
 
+	board_audio_stop();
 	board_sensor_stop();
 	return result;
 }
