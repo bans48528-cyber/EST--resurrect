@@ -504,6 +504,7 @@ void est_ui_tick(uint32_t now_ms)
 	est_ui_page_t page_before_events;
 
 	ui_now_ms = now_ms;
+	(void)est_ui_state_tick(&ui_state, now_ms);
 	est_key_events_tick();
 	update_transfer_state();
 	update_program_state();

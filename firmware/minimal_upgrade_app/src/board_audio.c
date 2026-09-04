@@ -18,6 +18,14 @@
 #define AUDIO_DAC_DRAIN_MS 150U
 #define AUDIO_STARTUP_MUTE_ATTENUATION 100U
 #define AUDIO_USER_VOLUME_ATTENUATION_RANGE 20U
+#define AUDIO_FEEDBACK_MUTE_ATTENUATION 0xFEU
+#define AUDIO_FEEDBACK_MUTE_MS 2U
+#define AUDIO_FEEDBACK_FADE_MS 8U
+#define AUDIO_FEEDBACK_HEADER_GATE_BYTES 64U
+#define AUDIO_FEEDBACK_PREROLL_END_BYTES 556U
+#define AUDIO_WAV_HDAT0 0x7761U
+#define AUDIO_WAV_HDAT1 0x7665U
+#define AUDIO_FEEDBACK_RESOURCE "System/FastClick"
 #define AUDIO_LEGACY_PIANO_PREFIX "Piano/"
 #define AUDIO_MODE_NEW 0x0800U
 #define AUDIO_CLOCK_NORMAL 0x9800U
@@ -36,7 +44,11 @@ static bool ready;
 static bool decoder_prefilled;
 static bool volume_pending;
 static bool stream_started;
+static bool feedback_playback;
+static bool feedback_volume_muted;
+static bool feedback_decoder_active;
 static uint8_t volume_percent;
+static uint8_t feedback_attenuation;
 static uint8_t tone_note;
 static int32_t tone_duration_ms;
 static uint32_t generation;
@@ -45,6 +57,7 @@ static uint32_t phase_started_ms;
 static uint32_t last_progress_ms;
 static uint32_t stream_started_ms;
 static uint32_t tone_started_ms;
+static uint32_t feedback_started_ms;
 static uint32_t stream_offset;
 static uint32_t fill_offset;
 static uint32_t tone_phase;
@@ -59,6 +72,7 @@ static char flash_resource_name[EST_AUDIO_RESOURCE_NAME_MAX_BYTES + 1U];
 
 static bool write_attenuation(uint8_t attenuation);
 static bool write_volume_level(uint8_t percent);
+static uint8_t volume_attenuation(uint8_t percent);
 
 /* A large PCM stream is ended by the duration timer or explicit stop/reset. */
 static const uint8_t tone_header[44] = {
@@ -98,6 +112,12 @@ static bool resource_is_legacy_piano(const struct audio_resource *item)
 	return item != NULL &&
 		strncmp(item->name, AUDIO_LEGACY_PIANO_PREFIX,
 			sizeof(AUDIO_LEGACY_PIANO_PREFIX) - 1U) == 0;
+}
+
+static bool resource_is_feedback(const struct audio_resource *item)
+{
+	return item != NULL &&
+		strcmp(item->name, AUDIO_FEEDBACK_RESOURCE) == 0;
 }
 
 static bool phase_timed_out(uint32_t now_ms, uint32_t timeout_ms)
@@ -154,11 +174,16 @@ static void begin_reset(uint32_t now_ms, uint32_t hold_ms)
 
 static void finish_playback(void)
 {
+	bool restore_volume = feedback_volume_muted;
+
 	resource = NULL;
 	tone = false;
+	feedback_playback = false;
+	feedback_volume_muted = false;
+	feedback_decoder_active = false;
 	tone_started_ms = 0U;
 	phase = AUDIO_IDLE;
-	volume_pending = false;
+	volume_pending = restore_volume;
 	stream_started = false;
 	decoder_prefilled = true;
 	generation++;
@@ -171,7 +196,11 @@ void board_audio_init(void)
 	tone = false;
 	ready = false;
 	decoder_prefilled = false;
+	feedback_playback = false;
+	feedback_volume_muted = false;
+	feedback_decoder_active = false;
 	volume_percent = 80U;
+	feedback_attenuation = AUDIO_FEEDBACK_MUTE_ATTENUATION;
 	generation = 0U;
 	reset_hold_ms = AUDIO_RESET_HOLD_MS;
 	decoder_status = 0U;
@@ -205,6 +234,10 @@ bool board_audio_play(const char *name, uint32_t now_ms)
 	}
 	resource = next;
 	tone = false;
+	feedback_playback = resource_is_feedback(next);
+	feedback_volume_muted = false;
+	feedback_decoder_active = false;
+	feedback_started_ms = now_ms;
 	if (ready && phase == AUDIO_IDLE && board_audio_bus_ready()) {
 		reset_stream_state(now_ms);
 		volume_pending = pending_volume;
@@ -226,6 +259,9 @@ bool board_audio_tone(uint8_t note, int32_t duration_ms, uint32_t now_ms)
 	}
 	resource = NULL;
 	tone = true;
+	feedback_playback = false;
+	feedback_volume_muted = false;
+	feedback_decoder_active = false;
 	tone_note = note;
 	tone_duration_ms = duration_ms;
 	tone_started_ms = now_ms;
@@ -249,6 +285,9 @@ void board_audio_stop(void)
 	decoder_prefilled = false;
 	resource = NULL;
 	tone = false;
+	feedback_playback = false;
+	feedback_volume_muted = false;
+	feedback_decoder_active = false;
 	tone_started_ms = 0U;
 	phase = AUDIO_IDLE;
 	volume_pending = false;
@@ -354,10 +393,14 @@ static bool write_attenuation(uint8_t attenuation)
 
 static bool write_volume_level(uint8_t percent)
 {
-	uint8_t attenuation = percent == 0U ? 0xFEU :
+	return write_attenuation(volume_attenuation(percent));
+}
+
+static uint8_t volume_attenuation(uint8_t percent)
+{
+	return percent == 0U ? 0xFEU :
 		(uint8_t)(((100U - percent) *
 			AUDIO_USER_VOLUME_ATTENUATION_RANGE + 50U) / 100U);
-	return write_attenuation(attenuation);
 }
 
 static bool write_volume(void)
@@ -383,6 +426,53 @@ static uint8_t next_tone_byte(void)
 	return byte;
 }
 
+static bool update_feedback_volume(uint32_t now_ms)
+{
+	uint32_t elapsed_ms;
+	uint32_t fade_elapsed_ms;
+	uint16_t hdat0;
+	uint16_t hdat1;
+	uint8_t target;
+	uint8_t attenuation;
+
+	if (!feedback_volume_muted) {
+		return true;
+	}
+	if (!feedback_decoder_active) {
+		if (!board_audio_bus_ready()) {
+			return true;
+		}
+		if (!board_audio_bus_read(8U, &hdat0) ||
+		    !board_audio_bus_read(9U, &hdat1)) {
+			return false;
+		}
+		if (hdat0 != AUDIO_WAV_HDAT0 || hdat1 != AUDIO_WAV_HDAT1) {
+			return true;
+		}
+		feedback_decoder_active = true;
+		feedback_started_ms = now_ms;
+	}
+	elapsed_ms = now_ms - feedback_started_ms;
+	if (elapsed_ms < AUDIO_FEEDBACK_MUTE_MS) {
+		return true;
+	}
+	target = volume_attenuation(volume_percent);
+	fade_elapsed_ms = elapsed_ms - AUDIO_FEEDBACK_MUTE_MS;
+	if (fade_elapsed_ms >= AUDIO_FEEDBACK_FADE_MS) {
+		feedback_volume_muted = false;
+		return write_attenuation(target);
+	}
+	attenuation = (uint8_t)(target +
+		(((uint32_t)AUDIO_FEEDBACK_MUTE_ATTENUATION - target) *
+		 (AUDIO_FEEDBACK_FADE_MS - fade_elapsed_ms) +
+		 AUDIO_FEEDBACK_FADE_MS / 2U) / AUDIO_FEEDBACK_FADE_MS);
+	if (attenuation == feedback_attenuation) {
+		return true;
+	}
+	feedback_attenuation = attenuation;
+	return write_attenuation(attenuation);
+}
+
 void board_audio_tick(uint32_t now_ms)
 {
 	uint32_t chunk;
@@ -394,6 +484,10 @@ void board_audio_tick(uint32_t now_ms)
 		return;
 	}
 	if (phase == AUDIO_ERROR) {
+		return;
+	}
+	if (!update_feedback_volume(now_ms)) {
+		fail();
 		return;
 	}
 	if (tone && stream_started && tone_duration_ms >= 0 &&
@@ -453,7 +547,16 @@ void board_audio_tick(uint32_t now_ms)
 			phase = AUDIO_PREROLL;
 			return;
 		}
-		if (volume_pending && !write_volume()) {
+		if (feedback_playback && !feedback_volume_muted) {
+			if (!write_attenuation(AUDIO_FEEDBACK_MUTE_ATTENUATION)) {
+				fail();
+				return;
+			}
+			feedback_volume_muted = true;
+			feedback_decoder_active = false;
+			feedback_attenuation = AUDIO_FEEDBACK_MUTE_ATTENUATION;
+		}
+		if (volume_pending && !feedback_volume_muted && !write_volume()) {
 			fail();
 			return;
 		}
@@ -509,7 +612,18 @@ void board_audio_tick(uint32_t now_ms)
 				}
 			} else {
 				uint32_t limit = resource_stream_limit(resource);
+				uint32_t feedback_gate = feedback_decoder_active ?
+					AUDIO_FEEDBACK_PREROLL_END_BYTES :
+					AUDIO_FEEDBACK_HEADER_GATE_BYTES;
 				uint32_t remaining = limit - stream_offset;
+				if (feedback_playback && feedback_volume_muted) {
+					if (stream_offset >= feedback_gate) {
+						break;
+					}
+					if (feedback_gate - stream_offset < remaining) {
+						remaining = feedback_gate - stream_offset;
+					}
+				}
 				if (remaining < count) {
 					count = remaining;
 				}

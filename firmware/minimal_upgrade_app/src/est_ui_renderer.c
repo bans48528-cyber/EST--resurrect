@@ -12,7 +12,9 @@
 #define HOME_ZONE_WIDTH 44U
 #define HOME_ZONE_X 2U
 #define HOME_ZONE_Y 23U
-#define HOME_ZONE_HEIGHT 55U
+#define HOME_ZONE_HEIGHT 53U
+#define HOME_SELECTION_RADIUS 3U
+#define HOME_SELECTED_LIFT_PX 2U
 #define HOME_ICON_Y 26U
 #define HOME_LABEL_Y 59U
 #define HOME_DETAIL_Y 84U
@@ -270,7 +272,73 @@ static bool bitmap_pixel(const uint8_t *bitmap, uint8_t x, uint8_t y)
 		(uint8_t)(0x80U >> (x % 8U))) != 0U;
 }
 
-static void draw_home_icon(uint16_t x, uint16_t y, const uint8_t *bitmap,
+static int16_t round_motion_q8(int32_t value_q8)
+{
+	if (value_q8 >= 0) {
+		return (int16_t)((value_q8 + EST_UI_HOME_MOTION_SCALE / 2) /
+			EST_UI_HOME_MOTION_SCALE);
+	}
+	return (int16_t)((value_q8 - EST_UI_HOME_MOTION_SCALE / 2) /
+		EST_UI_HOME_MOTION_SCALE);
+}
+
+static uint8_t home_motion_index(int16_t value_q8)
+{
+	int16_t index = round_motion_q8(value_q8);
+
+	if (index < 0) {
+		return 0U;
+	}
+	if (index >= (int16_t)EST_UI_HOME_ITEM_COUNT) {
+		return EST_UI_HOME_ITEM_COUNT - 1U;
+	}
+	return (uint8_t)index;
+}
+
+static uint8_t selection_motion_index(int16_t value_q8, uint8_t count)
+{
+	int16_t index = round_motion_q8(value_q8);
+
+	if (index < 0 || count == 0U) {
+		return 0U;
+	}
+	if (index >= (int16_t)count) {
+		return (uint8_t)(count - 1U);
+	}
+	return (uint8_t)index;
+}
+
+static uint16_t home_eased_progress_q8(uint8_t step)
+{
+	uint32_t remaining = EST_UI_HOME_ANIMATION_STEPS - step;
+	uint32_t full_cube = EST_UI_HOME_ANIMATION_STEPS *
+		EST_UI_HOME_ANIMATION_STEPS * EST_UI_HOME_ANIMATION_STEPS;
+
+	return (uint16_t)(((full_cube - remaining * remaining * remaining) *
+		EST_UI_HOME_MOTION_SCALE + full_cube / 2U) / full_cube);
+}
+
+static void draw_home_selection(int16_t x)
+{
+	uint16_t row;
+
+	for (row = 0U; row < HOME_ZONE_HEIGHT; row++) {
+		uint16_t distance = row < HOME_ZONE_HEIGHT - 1U - row ?
+			row : (uint16_t)(HOME_ZONE_HEIGHT - 1U - row);
+		uint16_t inset = distance == 0U ? HOME_SELECTION_RADIUS :
+			(distance == 1U ? 1U : 0U);
+		int16_t start_x = (int16_t)(x + inset);
+		uint16_t width = (uint16_t)(HOME_ZONE_WIDTH - inset * 2U);
+
+		if (start_x >= 0 && start_x + (int16_t)width <=
+		    (int16_t)BOARD_LCD_WIDTH) {
+			(void)board_lcd_draw_rectangle((uint16_t)start_x,
+				(uint16_t)(HOME_ZONE_Y + row), width, 1U, true, true);
+		}
+	}
+}
+
+static void draw_home_icon(int16_t x, int16_t y, const uint8_t *bitmap,
 	bool inverse)
 {
 	uint8_t icon_x;
@@ -280,36 +348,89 @@ static void draw_home_icon(uint16_t x, uint16_t y, const uint8_t *bitmap,
 		for (icon_x = 0U; icon_x < EST_MENU_ICON_WIDTH; icon_x++) {
 			bool on = bitmap_pixel(bitmap, icon_x, icon_y);
 
-			(void)board_lcd_set_pixel((uint16_t)(x + icon_x),
-				(uint16_t)(y + icon_y), inverse ? !on : on);
+			int16_t pixel_x = (int16_t)(x + icon_x);
+			int16_t pixel_y = (int16_t)(y + icon_y);
+
+			if (pixel_x >= 0 && pixel_x < (int16_t)BOARD_LCD_WIDTH &&
+			    pixel_y >= 0 && pixel_y < (int16_t)BOARD_LCD_HEIGHT) {
+				(void)board_lcd_set_pixel((uint16_t)pixel_x,
+					(uint16_t)pixel_y, inverse ? !on : on);
+			}
 		}
 	}
 }
 
 static void draw_home(const est_ui_state_t *state, const est_ui_view_t *view)
 {
-	uint8_t slot;
+	int16_t selected_q8 = state->home_motion_active ?
+		state->home_motion_item_q8 :
+		(int16_t)(state->home_item * EST_UI_HOME_MOTION_SCALE);
+	int16_t first_q8 = state->home_motion_active ?
+		state->home_motion_first_q8 :
+		(int16_t)(state->home_first_item * EST_UI_HOME_MOTION_SCALE);
+	uint16_t progress_q8 = state->home_motion_active ?
+		home_eased_progress_q8(state->home_motion_step) :
+		EST_UI_HOME_MOTION_SCALE;
+	uint8_t painted_index = home_motion_index(selected_q8);
+	uint8_t start_index = state->home_motion_active ?
+		home_motion_index(state->home_motion_start_item_q8) :
+		state->home_item;
+	int16_t selected_x = (int16_t)(HOME_ZONE_X + round_motion_q8(
+		((int32_t)selected_q8 - first_q8) * HOME_ZONE_WIDTH));
+	uint8_t index;
 
 	draw_header(state, view);
-	for (slot = 0U; slot < EST_UI_HOME_VISIBLE_ITEM_COUNT; slot++) {
-		uint8_t index = (uint8_t)(state->home_first_item + slot);
-		uint16_t zone_x = (uint16_t)(HOME_ZONE_X + slot * HOME_ZONE_WIDTH);
-		uint16_t icon_x = (uint16_t)(zone_x +
-			(HOME_ZONE_WIDTH - EST_MENU_ICON_WIDTH) / 2U);
-		bool selected = index == state->home_item;
-		est_ui_text_style_t label_style = selected ?
-			EST_UI_TEXT_COMPACT_INVERSE : EST_UI_TEXT_COMPACT;
-		uint16_t label_width = est_ui_text_width(state->language,
-			home_labels[index], label_style);
+	if (selected_x > -(int16_t)HOME_ZONE_WIDTH &&
+	    selected_x < (int16_t)BOARD_LCD_WIDTH) {
+		draw_home_selection(selected_x);
+		(void)board_lcd_draw_rectangle((uint16_t)(selected_x + 17),
+			(uint16_t)(HOME_ZONE_Y + HOME_ZONE_HEIGHT + 2U),
+			10U, 2U, true, true);
+	}
+	for (index = 0U; index < EST_UI_HOME_ITEM_COUNT; index++) {
+		int16_t zone_x = (int16_t)(HOME_ZONE_X + round_motion_q8(
+			((int32_t)index * EST_UI_HOME_MOTION_SCALE - first_q8) *
+			HOME_ZONE_WIDTH));
+		bool selected;
+		uint16_t target_lift;
+		uint16_t start_lift;
+		uint16_t lift_progress;
+		uint8_t lift;
+		est_ui_text_style_t label_style;
+		uint16_t label_width;
+		int16_t label_x;
+		bool label_visible;
 
-		if (selected) {
-			(void)board_lcd_draw_rectangle(zone_x, HOME_ZONE_Y,
-				HOME_ZONE_WIDTH, HOME_ZONE_HEIGHT, true, true);
+		if (zone_x <= -(int16_t)HOME_ZONE_WIDTH ||
+		    zone_x >= (int16_t)BOARD_LCD_WIDTH) {
+			continue;
 		}
-		draw_home_icon(icon_x, HOME_ICON_Y, home_icons[index], selected);
-		(void)est_ui_text_draw(centered_in_zone(zone_x, HOME_ZONE_WIDTH,
-			label_width), HOME_LABEL_Y,
-			state->language, home_labels[index], label_style);
+		selected = index == painted_index;
+		label_style = selected ? EST_UI_TEXT_COMPACT_INVERSE :
+			EST_UI_TEXT_COMPACT;
+		label_width = est_ui_text_width(state->language,
+			home_labels[index], label_style);
+		target_lift = index == state->home_item ? progress_q8 : 0U;
+		start_lift = index == start_index && start_index != state->home_item ?
+			(uint16_t)(EST_UI_HOME_MOTION_SCALE - progress_q8) : 0U;
+		lift_progress = target_lift > start_lift ? target_lift : start_lift;
+		lift = (uint8_t)((HOME_SELECTED_LIFT_PX * lift_progress +
+			EST_UI_HOME_MOTION_SCALE / 2U) /
+			EST_UI_HOME_MOTION_SCALE);
+		label_x = (int16_t)(zone_x +
+			((int16_t)HOME_ZONE_WIDTH - (int16_t)label_width) / 2);
+		label_visible = label_x >= 0 && label_width <= BOARD_LCD_WIDTH &&
+			label_x + (int16_t)label_width <=
+			(int16_t)BOARD_LCD_WIDTH;
+
+		draw_home_icon((int16_t)(zone_x +
+			(HOME_ZONE_WIDTH - EST_MENU_ICON_WIDTH) / 2U),
+			(int16_t)(HOME_ICON_Y - lift), home_icons[index], selected);
+		if (label_visible) {
+			(void)est_ui_text_draw((uint16_t)label_x,
+				(uint16_t)(HOME_LABEL_Y - lift),
+				state->language, home_labels[index], label_style);
+		}
 	}
 	if (state->home_item == 0U) {
 		if (state->has_recent_program && view->recent_program_name != NULL) {
@@ -326,10 +447,10 @@ static void draw_home(const est_ui_state_t *state, const est_ui_view_t *view)
 				EST_UI_STRING_HOME_RECENT_EMPTY, EST_UI_TEXT_COMPACT);
 		}
 	}
-	for (slot = 0U; slot < 3U; slot++) {
-		bool selected_window = state->home_first_item == slot;
+	for (index = 0U; index < 3U; index++) {
+		bool selected_window = state->home_first_item == index;
 
-		(void)board_lcd_draw_rectangle((uint16_t)(78U + slot * 9U), 105U,
+		(void)board_lcd_draw_rectangle((uint16_t)(78U + index * 9U), 105U,
 			6U, 2U, true, selected_window);
 	}
 	draw_status(view);
@@ -381,8 +502,16 @@ static void draw_page_title(const est_ui_state_t *state,
 
 static void draw_programs(const est_ui_state_t *state)
 {
-	uint8_t first;
-	uint8_t row;
+	bool motion_active = state->selection_motion_active &&
+		state->selection_motion_page == EST_UI_PAGE_PROGRAMS;
+	int16_t selected_q8 = motion_active ? state->selection_motion_item_q8 :
+		(int16_t)(state->program_item * EST_UI_SELECTION_MOTION_SCALE);
+	int16_t first_q8 = motion_active ? state->selection_motion_first_q8 :
+		(int16_t)((state->program_item < EST_UI_PROGRAM_VISIBLE_ITEM_COUNT ?
+		0U : state->program_item - EST_UI_PROGRAM_VISIBLE_ITEM_COUNT + 1U) *
+		EST_UI_SELECTION_MOTION_SCALE);
+	uint8_t painted_index;
+	uint8_t index;
 
 	draw_page_title(state, EST_UI_STRING_PROGRAMS_TITLE);
 	draw_text_right(1U, state, EST_UI_STRING_DELETE_HINT);
@@ -409,22 +538,33 @@ static void draw_programs(const est_ui_state_t *state)
 			EST_UI_STRING_PROGRAMS_EMPTY, EST_UI_TEXT_NORMAL);
 		return;
 	}
-	first = state->program_item < 5U ? 0U :
-		(uint8_t)(state->program_item - 4U);
-	for (row = 0U; row < 5U && first + row < ui_view.program_count; row++) {
-		uint8_t index = (uint8_t)(first + row);
-		uint16_t y = (uint16_t)(22U + row * 20U);
-		bool selected = index == state->program_item;
+	painted_index = selection_motion_index(selected_q8,
+		ui_view.program_count);
+	{
+		int16_t selected_y = (int16_t)(22 + round_motion_q8(
+			((int32_t)selected_q8 - first_q8) * 20));
+
+		if (selected_y >= 19 && selected_y + EST_UI_FONT_HEIGHT <=
+		    (int16_t)BOARD_LCD_HEIGHT) {
+			(void)board_lcd_draw_rectangle(1U, (uint16_t)selected_y,
+				BOARD_LCD_WIDTH - 2U, EST_UI_FONT_HEIGHT, true, true);
+		}
+	}
+	for (index = 0U; index < ui_view.program_count; index++) {
+		int16_t row_y = (int16_t)(22 + round_motion_q8(
+			((int32_t)index * EST_UI_SELECTION_MOTION_SCALE - first_q8) *
+			20));
+		bool selected = index == painted_index;
 		est_ui_text_style_t style = selected ?
 			EST_UI_TEXT_COMPACT_INVERSE : EST_UI_TEXT_COMPACT;
 		char slot[3] = {(char)('0' + ui_view.program_slots[index]), ':', '\0'};
 
-		if (selected) {
-			(void)board_lcd_draw_rectangle(1U, y,
-				BOARD_LCD_WIDTH - 2U, EST_UI_FONT_HEIGHT, true, true);
+		if (row_y < 19 || row_y + EST_UI_FONT_HEIGHT >
+		    (int16_t)BOARD_LCD_HEIGHT) {
+			continue;
 		}
-		(void)est_ui_text_draw_raw(4U, y, slot, style);
-		draw_raw_fitted(22U, y, ui_view.program_names[index],
+		(void)est_ui_text_draw_raw(4U, (uint16_t)row_y, slot, style);
+		draw_raw_fitted(22U, (uint16_t)row_y, ui_view.program_names[index],
 			BOARD_LCD_WIDTH - 26U, style);
 	}
 }
@@ -458,20 +598,28 @@ static void draw_running(const est_ui_state_t *state)
 		EST_UI_TEXT_NORMAL);
 }
 
-static void draw_port_selector(uint8_t selected)
+static void draw_port_selector(const est_ui_state_t *state)
 {
+	bool motion_active = state->selection_motion_active &&
+		state->selection_motion_page == EST_UI_PAGE_PORTS;
+	int16_t selected_q8 = motion_active ? state->selection_motion_item_q8 :
+		(int16_t)(state->port_item * EST_UI_SELECTION_MOTION_SCALE);
+	uint8_t painted_index = selection_motion_index(selected_q8, 8U);
+	int16_t selected_x = (int16_t)(2 + round_motion_q8(
+		(int32_t)selected_q8 * 22));
 	uint8_t index;
 
+	if (selected_x >= 0 && selected_x + 20 <= (int16_t)BOARD_LCD_WIDTH) {
+		(void)board_lcd_draw_rectangle((uint16_t)selected_x, 21U,
+			20U, 16U, true, true);
+	}
 	for (index = 0U; index < 8U; index++) {
 		char label[2] = {index < 4U ?
 			(char)((uint8_t)'A' + index) :
 			(char)((uint8_t)'1' + index - 4U), '\0'};
 		uint16_t x = (uint16_t)(2U + index * 22U);
-		bool inverse = selected == index;
+		bool inverse = painted_index == index;
 
-		if (inverse) {
-			(void)board_lcd_draw_rectangle(x, 21U, 20U, 16U, true, true);
-		}
 		(void)est_ui_text_draw_raw((uint16_t)(x + 7U), 21U, label, inverse ?
 			EST_UI_TEXT_INVERSE : EST_UI_TEXT_NORMAL);
 	}
@@ -566,7 +714,7 @@ static void draw_sensor_detail(const est_ui_state_t *state,
 static void draw_ports(const est_ui_state_t *state)
 {
 	draw_page_title(state, EST_UI_STRING_PORTS_TITLE);
-	draw_port_selector(state->port_item);
+	draw_port_selector(state);
 	if (state->port_item < 4U) {
 		draw_motor_detail(state, state->port_item,
 			&ui_view.ports.motors[state->port_item]);
@@ -746,18 +894,14 @@ static void draw_program_transfer_complete(const est_ui_view_t *view)
 }
 
 static void draw_setting_row(const est_ui_state_t *state, uint8_t index,
-	est_ui_string_id_t label, const char *value)
+	uint8_t painted_index, est_ui_string_id_t label, const char *value)
 {
 	uint16_t y = (uint16_t)(CONTENT_TOP + index * ROW_HEIGHT);
-	bool selected = state->settings_item == index;
+	bool selected = painted_index == index;
 	est_ui_text_style_t style = selected ? EST_UI_TEXT_INVERSE :
 		EST_UI_TEXT_NORMAL;
 	uint16_t value_width = est_ui_font_measure(value, style);
 
-	if (selected) {
-		(void)board_lcd_draw_rectangle(1U, y, BOARD_LCD_WIDTH - 2U,
-			EST_UI_FONT_HEIGHT, true, true);
-	}
 	(void)est_ui_text_draw(4U, y, state->language, label, style);
 	(void)est_ui_text_draw_raw((uint16_t)(BOARD_LCD_WIDTH - value_width - 4U),
 		y, value, style);
@@ -765,6 +909,14 @@ static void draw_setting_row(const est_ui_state_t *state, uint8_t index,
 
 static void draw_settings(const est_ui_state_t *state)
 {
+	bool motion_active = state->selection_motion_active &&
+		state->selection_motion_page == EST_UI_PAGE_SETTINGS;
+	int16_t selected_q8 = motion_active ? state->selection_motion_item_q8 :
+		(int16_t)(state->settings_item * EST_UI_SELECTION_MOTION_SCALE);
+	uint8_t painted_index = selection_motion_index(selected_q8,
+		EST_UI_SETTINGS_ITEM_COUNT);
+	int16_t selected_y = (int16_t)(CONTENT_TOP + round_motion_q8(
+		(int32_t)selected_q8 * ROW_HEIGHT));
 	char backlight[6];
 	char volume[6];
 	const char *language = "English";
@@ -780,10 +932,18 @@ static void draw_settings(const est_ui_state_t *state)
 	format_percent(state->backlight_percent, backlight);
 	format_percent(state->volume_percent, volume);
 	draw_page_title(state, EST_UI_STRING_SETTINGS_TITLE);
-	draw_setting_row(state, 0U, EST_UI_STRING_BACKLIGHT, backlight);
-	draw_setting_row(state, 1U, EST_UI_STRING_VOLUME, volume);
-	draw_setting_row(state, 2U, EST_UI_STRING_LANGUAGE, language);
-	draw_setting_row(state, 3U, EST_UI_STRING_DEVICE_INFO, ">");
+	if (selected_y >= 19 && selected_y + EST_UI_FONT_HEIGHT <=
+	    (int16_t)BOARD_LCD_HEIGHT) {
+		(void)board_lcd_draw_rectangle(1U, (uint16_t)selected_y,
+			BOARD_LCD_WIDTH - 2U, EST_UI_FONT_HEIGHT, true, true);
+	}
+	draw_setting_row(state, 0U, painted_index, EST_UI_STRING_BACKLIGHT,
+		backlight);
+	draw_setting_row(state, 1U, painted_index, EST_UI_STRING_VOLUME, volume);
+	draw_setting_row(state, 2U, painted_index, EST_UI_STRING_LANGUAGE,
+		language);
+	draw_setting_row(state, 3U, painted_index, EST_UI_STRING_DEVICE_INFO,
+		">");
 }
 
 static void draw_info_row(const est_ui_state_t *state, uint16_t y,

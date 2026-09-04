@@ -19,6 +19,7 @@ PIANO_DURATIONS_MS = (
 )
 
 FEEDBACK_TONE_DURATION_MS = 60
+FEEDBACK_TONE_PREROLL_MS = 16
 FEEDBACK_TONE_SAMPLE_RATE = 16000
 FEEDBACK_TONE_FREQUENCY_HZ = 700
 
@@ -26,7 +27,8 @@ FEEDBACK_TONE_FREQUENCY_HZ = 700
 def feedback_tone_wav():
     sample_count = FEEDBACK_TONE_SAMPLE_RATE * FEEDBACK_TONE_DURATION_MS // 1000
     ramp_samples = FEEDBACK_TONE_SAMPLE_RATE * 5 // 1000
-    payload = bytearray()
+    preroll_samples = FEEDBACK_TONE_SAMPLE_RATE * FEEDBACK_TONE_PREROLL_MS // 1000
+    payload = bytearray(preroll_samples * 2)
     for index in range(sample_count):
         envelope = min(1.0, index / ramp_samples,
                        (sample_count - 1 - index) / ramp_samples)
@@ -63,7 +65,7 @@ def generate(source=None):
     lines.append('const struct audio_resource audio_resources[] = {')
     lines.append(
         '    {"System/FastClick", feedback_tone_pcm, '
-        'sizeof(feedback_tone_pcm), 60U, 0U},'
+        'sizeof(feedback_tone_pcm), 76U, 0U},'
     )
     if source is not None:
         lines.append('    {"communication_hello", hello_mp3, sizeof(hello_mp3), 792U, 0U},')

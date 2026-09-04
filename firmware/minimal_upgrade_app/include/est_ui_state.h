@@ -9,6 +9,13 @@
 
 #define EST_UI_HOME_ITEM_COUNT 6U
 #define EST_UI_HOME_VISIBLE_ITEM_COUNT 4U
+#define EST_UI_HOME_ANIMATION_DURATION_MS 160U
+#define EST_UI_HOME_ANIMATION_STEPS 16U
+#define EST_UI_HOME_MOTION_SCALE 256
+#define EST_UI_SELECTION_ANIMATION_DURATION_MS 160U
+#define EST_UI_SELECTION_ANIMATION_STEPS 16U
+#define EST_UI_SELECTION_MOTION_SCALE 256
+#define EST_UI_PROGRAM_VISIBLE_ITEM_COUNT 5U
 #define EST_UI_SETTINGS_ITEM_COUNT 4U
 #define EST_UI_MOTOR_OUTPUT_PORT_COUNT 4U
 #define EST_UI_ERROR_SOURCE_LINE_FLAG 0x8000U
@@ -76,6 +83,22 @@ typedef struct {
 	uint16_t error_code;
 	bool has_recent_program;
 	bool dirty;
+	int16_t home_motion_item_q8;
+	int16_t home_motion_first_q8;
+	int16_t home_motion_start_item_q8;
+	int16_t home_motion_start_first_q8;
+	uint32_t home_motion_started_ms;
+	uint32_t home_motion_now_ms;
+	uint8_t home_motion_step;
+	bool home_motion_active;
+	int16_t selection_motion_item_q8;
+	int16_t selection_motion_first_q8;
+	int16_t selection_motion_start_item_q8;
+	int16_t selection_motion_start_first_q8;
+	uint32_t selection_motion_started_ms;
+	uint8_t selection_motion_step;
+	est_ui_page_t selection_motion_page;
+	bool selection_motion_active;
 } est_ui_state_t;
 
 void est_ui_state_init(est_ui_state_t *state);
@@ -88,6 +111,7 @@ void est_ui_state_set_error(est_ui_state_t *state, uint16_t error_code,
 	est_ui_page_t return_page);
 void est_ui_state_set_python_error(est_ui_state_t *state, uint16_t source_line,
 	est_ui_page_t return_page);
+bool est_ui_state_tick(est_ui_state_t *state, uint32_t now_ms);
 est_ui_action_t est_ui_state_handle_short(est_ui_state_t *state,
 	est_button_t button);
 est_ui_action_t est_ui_state_handle_long(est_ui_state_t *state,

@@ -331,17 +331,37 @@ class UiStateTests(unittest.TestCase):
                 uint16_t error_code;
                 _Bool has_recent_program;
                 _Bool dirty;
+                int16_t home_motion_item_q8;
+                int16_t home_motion_first_q8;
+                int16_t home_motion_start_item_q8;
+                int16_t home_motion_start_first_q8;
+                uint32_t home_motion_started_ms;
+                uint32_t home_motion_now_ms;
+                uint8_t home_motion_step;
+                _Bool home_motion_active;
+                int16_t selection_motion_item_q8;
+                int16_t selection_motion_first_q8;
+                int16_t selection_motion_start_item_q8;
+                int16_t selection_motion_start_first_q8;
+                uint32_t selection_motion_started_ms;
+                uint8_t selection_motion_step;
+                int selection_motion_page;
+                _Bool selection_motion_active;
             } est_ui_state_t;
             void est_ui_state_init(est_ui_state_t *);
             void est_ui_state_set_recent(est_ui_state_t *, _Bool);
             void est_ui_state_set_program_count(est_ui_state_t *, uint8_t);
             int est_ui_state_handle_short(est_ui_state_t *, int);
             int est_ui_state_handle_long(est_ui_state_t *, int);
+            _Bool est_ui_state_tick(est_ui_state_t *, uint32_t);
             _Bool est_ui_state_take_dirty(est_ui_state_t *);
             """
         )
         source = ROOT / "src" / "est_ui_state.c"
-        source_hash = hashlib.sha256(source.read_bytes()).hexdigest()[:16]
+        source_hash = hashlib.sha256(
+            source.read_bytes()
+            + (ROOT / "include" / "est_ui_state.h").read_bytes()
+        ).hexdigest()[:16]
         cls.state_api = cls.ffi.verify(
             f'#define EST_UI_STATE_TEST_SOURCE_HASH "{source_hash}"\n'
             '#include "est_ui_state.h"',
@@ -369,6 +389,42 @@ class UiStateTests(unittest.TestCase):
             self.ACTION_POWER_OFF,
         )
 
+    def test_home_animation_has_sixteen_ease_out_frames_and_retargets(self) -> None:
+        state = self.new_state()
+        self.state_api.est_ui_state_take_dirty(state)
+        self.state_api.est_ui_state_handle_short(state, self.RIGHT)
+        self.assertTrue(state.home_motion_active)
+        self.assertEqual(state.home_motion_step, 0)
+        self.state_api.est_ui_state_take_dirty(state)
+
+        frames = []
+        for now_ms in range(1, 161):
+            if self.state_api.est_ui_state_tick(state, now_ms):
+                frames.append(state.home_motion_step)
+                self.state_api.est_ui_state_take_dirty(state)
+        self.assertEqual(frames, list(range(1, 17)))
+        self.assertFalse(state.home_motion_active)
+        self.assertEqual(state.home_motion_item_q8, 256)
+
+        state = self.new_state()
+        self.state_api.est_ui_state_handle_short(state, self.RIGHT)
+        self.state_api.est_ui_state_tick(state, 20)
+        in_flight_position = state.home_motion_item_q8
+        self.assertGreater(in_flight_position, 0)
+        self.assertLess(in_flight_position, 256)
+        self.state_api.est_ui_state_handle_short(state, self.RIGHT)
+        self.assertEqual(state.home_item, 2)
+        self.assertEqual(state.home_motion_start_item_q8, in_flight_position)
+        self.assertEqual(state.home_motion_started_ms, 20)
+
+        state = self.new_state()
+        self.state_api.est_ui_state_handle_short(state, self.LEFT)
+        self.state_api.est_ui_state_tick(state, 20)
+        self.assertGreater(state.home_motion_item_q8, 0)
+        self.assertLess(state.home_motion_item_q8, 5 * 256)
+        self.assertGreaterEqual(state.home_motion_first_q8, 0)
+        self.assertLess(state.home_motion_first_q8, 2 * 256)
+
     def test_recent_and_program_delete_flow(self) -> None:
         state = self.new_state()
         self.assertEqual(
@@ -395,6 +451,42 @@ class UiStateTests(unittest.TestCase):
             self.state_api.est_ui_state_handle_short(state, self.CONFIRM),
             self.ACTION_DELETE_SELECTED,
         )
+
+    def test_program_port_and_settings_selections_animate_and_retarget(self) -> None:
+        state = self.new_state()
+        state.page = self.PROGRAMS
+        self.state_api.est_ui_state_set_program_count(state, 8)
+        for _ in range(5):
+            self.state_api.est_ui_state_handle_short(state, self.DOWN)
+        self.assertEqual(state.program_item, 5)
+        self.assertTrue(state.selection_motion_active)
+        self.state_api.est_ui_state_tick(state, 80)
+        self.assertGreater(state.selection_motion_item_q8, 4 * 256)
+        self.assertLess(state.selection_motion_item_q8, 5 * 256)
+        self.assertGreater(state.selection_motion_first_q8, 0)
+        self.assertLess(state.selection_motion_first_q8, 256)
+        in_flight_position = state.selection_motion_item_q8
+        self.state_api.est_ui_state_handle_short(state, self.DOWN)
+        self.assertEqual(state.selection_motion_start_item_q8,
+                         in_flight_position)
+        self.state_api.est_ui_state_tick(state, 240)
+        self.assertFalse(state.selection_motion_active)
+        self.assertEqual(state.selection_motion_item_q8, 6 * 256)
+        self.assertEqual(state.selection_motion_first_q8, 2 * 256)
+
+        state = self.new_state()
+        state.page = self.PORTS
+        self.state_api.est_ui_state_handle_short(state, self.RIGHT)
+        self.state_api.est_ui_state_tick(state, 80)
+        self.assertGreater(state.selection_motion_item_q8, 0)
+        self.assertLess(state.selection_motion_item_q8, 256)
+
+        state = self.new_state()
+        state.page = self.SETTINGS
+        self.state_api.est_ui_state_handle_short(state, self.DOWN)
+        self.state_api.est_ui_state_tick(state, 80)
+        self.assertGreater(state.selection_motion_item_q8, 0)
+        self.assertLess(state.selection_motion_item_q8, 256)
 
     def test_settings_bounds_language_and_device_info(self) -> None:
         state = self.new_state()

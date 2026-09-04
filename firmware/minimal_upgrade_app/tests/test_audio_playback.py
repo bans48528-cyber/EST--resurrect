@@ -40,6 +40,7 @@ class AudioPlaybackTests(unittest.TestCase):
             extern uint32_t mock_sent, mock_reads, mock_max_chunk, mock_address;
             extern uint32_t mock_volume_writes;
             extern uint16_t mock_volume, mock_mode, mock_mode_write;
+            extern uint16_t mock_hdat0, mock_hdat1;
         """)
         stub = r"""
             #include <stdbool.h>
@@ -51,12 +52,15 @@ class AudioPlaybackTests(unittest.TestCase):
             uint32_t mock_sent, mock_reads, mock_max_chunk, mock_address;
             uint32_t mock_volume_writes;
             uint16_t mock_volume, mock_mode, mock_mode_write;
+            uint16_t mock_hdat0, mock_hdat1;
             uint32_t system_time_millis(void) { return 0; }
             void board_audio_bus_init(void) {}
             void board_audio_bus_reset(bool asserted) { mock_reset = asserted; }
             bool board_audio_bus_ready(void) { return mock_dreq; }
             bool board_audio_bus_read(uint8_t reg, uint16_t *value) {
-                *value = reg == 0 ? mock_mode : 0x0030;
+                *value = reg == 0 ? mock_mode :
+                    (reg == 8 ? mock_hdat0 :
+                    (reg == 9 ? mock_hdat1 : 0x0030));
                 return mock_bus_ok;
             }
             bool board_audio_bus_write(uint8_t reg, uint16_t value) {
@@ -107,6 +111,7 @@ class AudioPlaybackTests(unittest.TestCase):
         n.mock_volume_writes = 0
         n.mock_mode_write = 0
         n.mock_mode = 0x0800
+        n.mock_hdat0 = n.mock_hdat1 = 0
         n.board_audio_init()
 
     def tick(self, start=0, end=2200):
@@ -122,7 +127,7 @@ class AudioPlaybackTests(unittest.TestCase):
         generated = GENERATOR.generate()
         self.assertEqual(generated.count('"Piano/'), 37)
         self.assertIn('"System/FastClick"', generated)
-        self.assertEqual(len(GENERATOR.feedback_tone_wav()), 1964)
+        self.assertEqual(len(GENERATOR.feedback_tone_wav()), 2476)
         self.assertIn('0x01F7F000U', generated)
         self.assertNotIn('hello_mp3', generated)
         self.assertEqual(sum(GENERATOR.PIANO_LENGTHS), 206906)
@@ -224,6 +229,8 @@ class AudioPlaybackTests(unittest.TestCase):
         self.assertEqual(n.board_audio_state(), 1)
         self.assertFalse(n.mock_reset)
         self.assertGreater(n.board_audio_generation(), generation)
+        n.mock_hdat0 = 0x7761
+        n.mock_hdat1 = 0x7665
         self.tick(42, 300)
         self.assertEqual(
             n.mock_sent,
@@ -232,6 +239,36 @@ class AudioPlaybackTests(unittest.TestCase):
         self.assertEqual(n.board_audio_state(), 0)
         self.assertTrue(n.board_audio_ready())
         self.assertFalse(n.mock_reset)
+
+    def test_feedback_tone_mutes_startup_transient_then_fades_in(self):
+        n = self.native
+        self.tick(0, 40)
+        self.assertTrue(n.board_audio_set_volume_percent(100))
+        self.assertTrue(n.board_audio_feedback_tone(41))
+        n.board_audio_tick(41)
+        self.assertEqual(n.mock_volume, 0xFEFE)
+        n.board_audio_tick(42)
+        self.assertEqual(n.mock_volume, 0xFEFE)
+        n.mock_hdat0 = 0x7761
+        n.mock_hdat1 = 0x7665
+        n.board_audio_tick(43)
+        n.board_audio_tick(47)
+        self.assertGreater(n.mock_volume, 0x0000)
+        self.tick(48, 54)
+        self.assertEqual(n.mock_volume, 0x0000)
+
+    def test_feedback_waits_for_wav_decoder_before_sending_tone_samples(self):
+        n = self.native
+        self.tick(0, 40)
+        sent = n.mock_sent
+        self.assertTrue(n.board_audio_feedback_tone(41))
+        self.tick(41, 60)
+        self.assertEqual(n.mock_sent, sent + 64)
+        self.assertEqual(n.mock_volume, 0xFEFE)
+        n.mock_hdat0 = 0x7761
+        n.mock_hdat1 = 0x7665
+        self.tick(60, 72)
+        self.assertGreater(n.mock_sent, sent + 64)
 
     def test_user_volume_expands_audible_hardware_range(self):
         n = self.native

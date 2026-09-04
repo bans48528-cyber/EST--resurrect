@@ -64,6 +64,22 @@ class UiRendererTests(unittest.TestCase):
                 uint16_t error_code;
                 _Bool has_recent_program;
                 _Bool dirty;
+                int16_t home_motion_item_q8;
+                int16_t home_motion_first_q8;
+                int16_t home_motion_start_item_q8;
+                int16_t home_motion_start_first_q8;
+                uint32_t home_motion_started_ms;
+                uint32_t home_motion_now_ms;
+                uint8_t home_motion_step;
+                _Bool home_motion_active;
+                int16_t selection_motion_item_q8;
+                int16_t selection_motion_first_q8;
+                int16_t selection_motion_start_item_q8;
+                int16_t selection_motion_start_first_q8;
+                uint32_t selection_motion_started_ms;
+                uint8_t selection_motion_step;
+                int selection_motion_page;
+                _Bool selection_motion_active;
             } est_ui_state_t;
             typedef struct {
                 const char *app_version;
@@ -107,8 +123,9 @@ class UiRendererTests(unittest.TestCase):
             ROOT / "src" / "est_ui_state.c",
             ROOT / "src" / "est_ui_text.c",
         ]
+        hash_paths = source_paths + [ROOT / "include" / "est_ui_state.h"]
         source_hash = hashlib.sha256(
-            b"".join(path.read_bytes() for path in source_paths)
+            b"".join(path.read_bytes() for path in hash_paths)
         ).hexdigest()[:16]
         cls.renderer = cls.ffi.verify(
             f"""
@@ -236,6 +253,49 @@ class UiRendererTests(unittest.TestCase):
             self.assertLess(self.count_pixels(zone, 23, 44, 55), 1400)
         self.assertGreater(self.count_pixels(0, 113, 180, 15), 20)
 
+    def test_home_selection_has_pixel_radius_and_selected_content_lift(self) -> None:
+        state, view, _ = self.new_model()
+        self.renderer.fake_lcd_reset()
+        self.renderer.est_ui_renderer_render(state, view)
+        lifted_frame = bytes(
+            self.ffi.buffer(self.renderer.fake_lcd_framebuffer(), 180 * 16)
+        )
+        self.assertFalse(self.pixel(2, 23))
+        self.assertTrue(self.pixel(5, 23))
+        self.assertFalse(self.pixel(2, 24))
+        self.assertTrue(self.pixel(3, 24))
+        self.assertTrue(self.pixel(2, 25))
+        self.assertTrue(self.pixel(19, 78))
+
+        state.home_motion_active = True
+        state.home_motion_item_q8 = 0
+        state.home_motion_first_q8 = 0
+        state.home_motion_start_item_q8 = 0
+        state.home_motion_start_first_q8 = 0
+        state.home_motion_step = 0
+        self.renderer.est_ui_renderer_render(state, view)
+        unlifted_frame = bytes(
+            self.ffi.buffer(self.renderer.fake_lcd_framebuffer(), 180 * 16)
+        )
+        self.assertNotEqual(lifted_frame, unlifted_frame)
+
+    def test_home_cross_window_motion_uses_intermediate_slide_position(self) -> None:
+        state, view, _ = self.new_model()
+        state.home_item = 4
+        state.home_first_item = 1
+        state.home_motion_active = True
+        state.home_motion_item_q8 = 512
+        state.home_motion_first_q8 = 128
+        state.home_motion_start_item_q8 = 0
+        state.home_motion_start_first_q8 = 0
+        state.home_motion_step = 3
+        self.renderer.fake_lcd_reset()
+        self.renderer.est_ui_renderer_render(state, view)
+        self.assertFalse(self.pixel(68, 23))
+        self.assertTrue(self.pixel(71, 23))
+        self.assertTrue(self.pixel(68, 25))
+        self.assertGreater(self.count_pixels(68, 23, 44, 53), 1400)
+
     def test_english_home_labels_remain_visible_with_letter_spacing(self) -> None:
         state, view, _ = self.new_model()
         state.language = 1
@@ -259,6 +319,43 @@ class UiRendererTests(unittest.TestCase):
         self.renderer.est_ui_renderer_render(state, view)
         self.assertGreater(self.count_pixels(1, 42, 178, 16), 1800)
         self.assertLess(self.count_pixels(1, 22, 178, 16), 800)
+
+    def test_program_port_and_settings_render_intermediate_selection_positions(self) -> None:
+        state, view, keepalive = self.new_model()
+        names = [self.ffi.new("char[]", f"Program {i}".encode())
+                 for i in range(6)]
+        keepalive.extend(names)
+        state.page = 2
+        state.program_count = 6
+        state.program_item = 5
+        state.selection_motion_page = 2
+        state.selection_motion_active = True
+        state.selection_motion_item_q8 = 4 * 256 + 128
+        state.selection_motion_first_q8 = 128
+        view.program_count = 6
+        for index, name in enumerate(names):
+            view.program_names[index] = name
+            view.program_slots[index] = index
+        self.renderer.fake_lcd_reset()
+        self.renderer.est_ui_renderer_render(state, view)
+        self.assertGreater(self.count_pixels(1, 92, 178, 16), 1200)
+
+        state.page = 5
+        state.port_item = 1
+        state.selection_motion_page = 5
+        state.selection_motion_active = True
+        state.selection_motion_item_q8 = 128
+        self.renderer.fake_lcd_reset()
+        self.renderer.est_ui_renderer_render(state, view)
+        self.assertGreater(self.count_pixels(12, 21, 20, 16), 180)
+
+        state.page = 8
+        state.settings_item = 1
+        state.selection_motion_page = 8
+        state.selection_motion_item_q8 = 128
+        self.renderer.fake_lcd_reset()
+        self.renderer.est_ui_renderer_render(state, view)
+        self.assertGreater(self.count_pixels(1, 32, 178, 16), 1200)
 
     def test_portuguese_menu_program_list_and_recent_name_render(self) -> None:
         state, view, keepalive = self.new_model()

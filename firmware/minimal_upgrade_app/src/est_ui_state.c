@@ -28,9 +28,147 @@ static void update_home_window(est_ui_state_t *state)
 	}
 }
 
+static int16_t home_target_q8(uint8_t item)
+{
+	return (int16_t)((int16_t)item * EST_UI_HOME_MOTION_SCALE);
+}
+
+static int16_t home_interpolate_q8(int16_t start, int16_t target,
+	uint8_t step)
+{
+	int32_t delta = (int32_t)target - start;
+	uint32_t remaining = EST_UI_HOME_ANIMATION_STEPS - step;
+	uint32_t full_cube = EST_UI_HOME_ANIMATION_STEPS *
+		EST_UI_HOME_ANIMATION_STEPS * EST_UI_HOME_ANIMATION_STEPS;
+	uint32_t eased_q8 = ((full_cube - remaining * remaining * remaining) *
+		EST_UI_HOME_MOTION_SCALE + full_cube / 2U) / full_cube;
+	int32_t scaled = delta * (int32_t)eased_q8;
+
+	if (scaled > 0) {
+		scaled += EST_UI_HOME_MOTION_SCALE / 2;
+	} else if (scaled < 0) {
+		scaled -= EST_UI_HOME_MOTION_SCALE / 2;
+	}
+	return (int16_t)(start + scaled / EST_UI_HOME_MOTION_SCALE);
+}
+
+static uint8_t home_animation_step(uint32_t elapsed_ms)
+{
+	const uint32_t duration = EST_UI_HOME_ANIMATION_DURATION_MS;
+
+	if (elapsed_ms >= duration) {
+		return EST_UI_HOME_ANIMATION_STEPS;
+	}
+	return (uint8_t)((elapsed_ms * EST_UI_HOME_ANIMATION_STEPS) /
+		duration);
+}
+
+static void start_home_animation(est_ui_state_t *state)
+{
+	int16_t target_item = home_target_q8(state->home_item);
+	int16_t target_first = home_target_q8(state->home_first_item);
+
+	state->home_motion_start_item_q8 = state->home_motion_item_q8;
+	state->home_motion_start_first_q8 = state->home_motion_first_q8;
+	if (state->home_motion_start_item_q8 == target_item &&
+	    state->home_motion_start_first_q8 == target_first) {
+		state->home_motion_active = false;
+		state->home_motion_step = EST_UI_HOME_ANIMATION_STEPS;
+		return;
+	}
+	state->home_motion_started_ms = state->home_motion_now_ms;
+	state->home_motion_step = 0U;
+	state->home_motion_active = true;
+}
+
+static bool page_has_selection_motion(est_ui_page_t page)
+{
+	return page == EST_UI_PAGE_PROGRAMS || page == EST_UI_PAGE_PORTS ||
+		page == EST_UI_PAGE_SETTINGS;
+}
+
+static uint8_t program_first_item(uint8_t item)
+{
+	return item < EST_UI_PROGRAM_VISIBLE_ITEM_COUNT ? 0U :
+		(uint8_t)(item - EST_UI_PROGRAM_VISIBLE_ITEM_COUNT + 1U);
+}
+
+static uint8_t selection_item(const est_ui_state_t *state,
+	est_ui_page_t page)
+{
+	if (page == EST_UI_PAGE_PROGRAMS) {
+		return state->program_item;
+	}
+	if (page == EST_UI_PAGE_PORTS) {
+		return state->port_item;
+	}
+	return state->settings_item;
+}
+
+static uint8_t selection_first_item(const est_ui_state_t *state,
+	est_ui_page_t page)
+{
+	return page == EST_UI_PAGE_PROGRAMS ?
+		program_first_item(state->program_item) : 0U;
+}
+
+static int16_t selection_target_q8(uint8_t item)
+{
+	return (int16_t)((int16_t)item * EST_UI_SELECTION_MOTION_SCALE);
+}
+
+static void snap_selection_motion(est_ui_state_t *state,
+	est_ui_page_t page)
+{
+	state->selection_motion_item_q8 = selection_target_q8(
+		selection_item(state, page));
+	state->selection_motion_first_q8 = selection_target_q8(
+		selection_first_item(state, page));
+	state->selection_motion_start_item_q8 = state->selection_motion_item_q8;
+	state->selection_motion_start_first_q8 = state->selection_motion_first_q8;
+	state->selection_motion_step = EST_UI_SELECTION_ANIMATION_STEPS;
+	state->selection_motion_page = page;
+	state->selection_motion_active = false;
+}
+
+static void prepare_selection_motion(est_ui_state_t *state)
+{
+	if (page_has_selection_motion(state->page) &&
+	    state->selection_motion_page != state->page) {
+		snap_selection_motion(state, state->page);
+	}
+}
+
+static void start_selection_animation(est_ui_state_t *state)
+{
+	int16_t target_item;
+	int16_t target_first;
+
+	prepare_selection_motion(state);
+	target_item = selection_target_q8(selection_item(state, state->page));
+	target_first = selection_target_q8(selection_first_item(state,
+		state->page));
+	state->selection_motion_start_item_q8 = state->selection_motion_item_q8;
+	state->selection_motion_start_first_q8 = state->selection_motion_first_q8;
+	if (state->selection_motion_start_item_q8 == target_item &&
+	    state->selection_motion_start_first_q8 == target_first) {
+		state->selection_motion_active = false;
+		state->selection_motion_step = EST_UI_SELECTION_ANIMATION_STEPS;
+		return;
+	}
+	state->selection_motion_started_ms = state->home_motion_now_ms;
+	state->selection_motion_step = 0U;
+	state->selection_motion_active = true;
+}
+
 static void set_page(est_ui_state_t *state, est_ui_page_t page)
 {
 	state->page = page;
+	if (page_has_selection_motion(page)) {
+		snap_selection_motion(state, page);
+	} else {
+		state->selection_motion_active = false;
+	}
 	state->dirty = true;
 }
 
@@ -60,6 +198,22 @@ void est_ui_state_init(est_ui_state_t *state)
 	state->error_code = 0U;
 	state->has_recent_program = false;
 	state->dirty = true;
+	state->home_motion_item_q8 = 0;
+	state->home_motion_first_q8 = 0;
+	state->home_motion_start_item_q8 = 0;
+	state->home_motion_start_first_q8 = 0;
+	state->home_motion_started_ms = 0U;
+	state->home_motion_now_ms = 0U;
+	state->home_motion_step = EST_UI_HOME_ANIMATION_STEPS;
+	state->home_motion_active = false;
+	state->selection_motion_item_q8 = 0;
+	state->selection_motion_first_q8 = 0;
+	state->selection_motion_start_item_q8 = 0;
+	state->selection_motion_start_first_q8 = 0;
+	state->selection_motion_started_ms = 0U;
+	state->selection_motion_step = EST_UI_SELECTION_ANIMATION_STEPS;
+	state->selection_motion_page = EST_UI_PAGE_HOME;
+	state->selection_motion_active = false;
 }
 
 void est_ui_state_set_recent(est_ui_state_t *state, bool available)
@@ -80,6 +234,9 @@ void est_ui_state_set_program_count(est_ui_state_t *state, uint8_t count)
 		state->program_item = 0U;
 	} else if (state->program_item >= count) {
 		state->program_item = (uint8_t)(count - 1U);
+	}
+	if (state->page == EST_UI_PAGE_PROGRAMS) {
+		snap_selection_motion(state, EST_UI_PAGE_PROGRAMS);
 	}
 	state->dirty = true;
 }
@@ -139,11 +296,13 @@ static est_ui_action_t handle_home(est_ui_state_t *state, est_button_t button)
 		state->home_item = previous_wrapped(state->home_item,
 			EST_UI_HOME_ITEM_COUNT);
 		update_home_window(state);
+		start_home_animation(state);
 		state->dirty = true;
 	} else if (button == EST_BUTTON_RIGHT || button == EST_BUTTON_DOWN) {
 		state->home_item = next_wrapped(state->home_item,
 			EST_UI_HOME_ITEM_COUNT);
 		update_home_window(state);
+		start_home_animation(state);
 		state->dirty = true;
 	} else if (button == EST_BUTTON_CONFIRM) {
 		if (state->home_item == 0U) {
@@ -178,18 +337,94 @@ static est_ui_action_t handle_home(est_ui_state_t *state, est_button_t button)
 	return EST_UI_ACTION_NONE;
 }
 
+bool est_ui_state_tick(est_ui_state_t *state, uint32_t now_ms)
+{
+	uint32_t elapsed_ms;
+	uint8_t step;
+	bool changed = false;
+
+	if (state == NULL) {
+		return false;
+	}
+	state->home_motion_now_ms = now_ms;
+	if (state->home_motion_active) {
+		if (state->page != EST_UI_PAGE_HOME &&
+		    state->page != EST_UI_PAGE_POWER_CONFIRM) {
+			state->home_motion_item_q8 = home_target_q8(state->home_item);
+			state->home_motion_first_q8 = home_target_q8(
+				state->home_first_item);
+			state->home_motion_step = EST_UI_HOME_ANIMATION_STEPS;
+			state->home_motion_active = false;
+		} else {
+			elapsed_ms = now_ms - state->home_motion_started_ms;
+			step = home_animation_step(elapsed_ms);
+			if (step != state->home_motion_step) {
+				state->home_motion_step = step;
+				state->home_motion_item_q8 = home_interpolate_q8(
+					state->home_motion_start_item_q8,
+					home_target_q8(state->home_item), step);
+				state->home_motion_first_q8 = home_interpolate_q8(
+					state->home_motion_start_first_q8,
+					home_target_q8(state->home_first_item), step);
+				state->dirty = true;
+				changed = true;
+			}
+			if (elapsed_ms >= EST_UI_HOME_ANIMATION_DURATION_MS) {
+				state->home_motion_item_q8 = home_target_q8(
+					state->home_item);
+				state->home_motion_first_q8 = home_target_q8(
+					state->home_first_item);
+				state->home_motion_active = false;
+			}
+		}
+	}
+	if (state->selection_motion_active) {
+		if (state->page != state->selection_motion_page ||
+		    !page_has_selection_motion(state->page)) {
+			state->selection_motion_active = false;
+		} else {
+			elapsed_ms = now_ms - state->selection_motion_started_ms;
+			step = home_animation_step(elapsed_ms);
+			if (step != state->selection_motion_step) {
+				state->selection_motion_step = step;
+				state->selection_motion_item_q8 = home_interpolate_q8(
+					state->selection_motion_start_item_q8,
+					selection_target_q8(selection_item(state,
+						state->page)), step);
+				state->selection_motion_first_q8 = home_interpolate_q8(
+					state->selection_motion_start_first_q8,
+					selection_target_q8(selection_first_item(state,
+						state->page)), step);
+				state->dirty = true;
+				changed = true;
+			}
+			if (elapsed_ms >= EST_UI_SELECTION_ANIMATION_DURATION_MS) {
+				state->selection_motion_item_q8 = selection_target_q8(
+					selection_item(state, state->page));
+				state->selection_motion_first_q8 = selection_target_q8(
+					selection_first_item(state, state->page));
+				state->selection_motion_active = false;
+			}
+		}
+	}
+	return changed;
+}
+
 static est_ui_action_t handle_programs(est_ui_state_t *state,
 	est_button_t button)
 {
+	prepare_selection_motion(state);
 	if (button == EST_BUTTON_BACK) {
 		set_page(state, EST_UI_PAGE_HOME);
 	} else if (state->program_count != 0U && button == EST_BUTTON_UP) {
 		state->program_item = previous_wrapped(state->program_item,
 			state->program_count);
+		start_selection_animation(state);
 		state->dirty = true;
 	} else if (state->program_count != 0U && button == EST_BUTTON_DOWN) {
 		state->program_item = next_wrapped(state->program_item,
 			state->program_count);
+		start_selection_animation(state);
 		state->dirty = true;
 	} else if (state->program_count != 0U && button == EST_BUTTON_CONFIRM) {
 		return EST_UI_ACTION_RUN_SELECTED;
@@ -220,13 +455,16 @@ static est_ui_action_t handle_delete_confirm(est_ui_state_t *state,
 static est_ui_action_t handle_ports(est_ui_state_t *state,
 	est_button_t button)
 {
+	prepare_selection_motion(state);
 	if (button == EST_BUTTON_BACK) {
 		set_page(state, EST_UI_PAGE_HOME);
 	} else if (button == EST_BUTTON_LEFT) {
 		state->port_item = previous_wrapped(state->port_item, 8U);
+		start_selection_animation(state);
 		state->dirty = true;
 	} else if (button == EST_BUTTON_RIGHT) {
 		state->port_item = next_wrapped(state->port_item, 8U);
+		start_selection_animation(state);
 		state->dirty = true;
 	} else if (button == EST_BUTTON_CONFIRM && state->port_item >= 4U) {
 		return EST_UI_ACTION_CYCLE_SENSOR_MODE;
@@ -325,15 +563,18 @@ static est_ui_action_t change_setting(est_ui_state_t *state,
 static est_ui_action_t handle_settings(est_ui_state_t *state,
 	est_button_t button)
 {
+	prepare_selection_motion(state);
 	if (button == EST_BUTTON_BACK) {
 		set_page(state, EST_UI_PAGE_HOME);
 	} else if (button == EST_BUTTON_UP) {
 		state->settings_item = previous_wrapped(state->settings_item,
 			EST_UI_SETTINGS_ITEM_COUNT);
+		start_selection_animation(state);
 		state->dirty = true;
 	} else if (button == EST_BUTTON_DOWN) {
 		state->settings_item = next_wrapped(state->settings_item,
 			EST_UI_SETTINGS_ITEM_COUNT);
+		start_selection_animation(state);
 		state->dirty = true;
 	} else if (button == EST_BUTTON_LEFT) {
 		return change_setting(state, false);
