@@ -8,9 +8,9 @@
 #include "audio_resources.h"
 
 #define EST_AUDIO_RESOURCE_FLASH_SIZE 33554432U
-#define EST_AUDIO_RESOURCE_REGION_START 0x01F81000U
-#define EST_AUDIO_RESOURCE_REGION_SIZE 0x0004C000U
-#define EST_AUDIO_RESOURCE_SLOT_SIZE 0x00004000U
+#define EST_AUDIO_RESOURCE_REGION_START 0x01B40000U
+#define EST_AUDIO_RESOURCE_REGION_SIZE 0x00400000U
+#define EST_AUDIO_RESOURCE_SLOT_SIZE 0x00008000U
 #define EST_AUDIO_RESOURCE_HEADER_SIZE 128U
 #define EST_AUDIO_RESOURCE_SLOT_COUNT \
 	(EST_AUDIO_RESOURCE_REGION_SIZE / EST_AUDIO_RESOURCE_SLOT_SIZE)
@@ -56,6 +56,7 @@ typedef struct {
 	est_audio_resource_error_t last_error;
 } est_audio_resource_status_t;
 
+void est_audio_resource_init(void);
 bool est_audio_resource_get_slot_status(uint8_t slot_id,
 	est_audio_resource_status_t *status);
 bool est_audio_resource_begin(const uint8_t *name, uint8_t name_length,

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import io
+import json
 import sys
 import tempfile
 import unittest
@@ -245,11 +246,85 @@ class CliTests(unittest.TestCase):
                     )
                     self.assertEqual(cli.main(["audio-resource-clear", "--slot", "0"]), 0)
         text = output.getvalue()
-        self.assertIn("slot_count=19", text)
+        self.assertIn("slot_count=128", text)
         self.assertIn("resource_name=Sounds/Hello", text)
         self.assertIn("audio_resource_write=done", text)
         self.assertIn("name=Sounds/Hello length=17", text)
         self.assertIn("audio_resource_clear=done", text)
+
+    def test_audio_resource_sync_command_uses_inventory_delta_sync(self) -> None:
+        transport = FakeTransport(jedec_id=bytes.fromhex("EF4019"))
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            assets = root / "assets" / "audio"
+            sound_path = assets / "System" / "Ready.mp3"
+            sound_path.parent.mkdir(parents=True)
+            data = b"ID3 ready"
+            sound_path.write_bytes(data)
+            inventory = root / "inventory.json"
+            inventory.write_text(
+                json.dumps({
+                    "resources": [{
+                        "name": "System/Ready.mp3",
+                        "bytes": len(data),
+                        "duration_ms": 250,
+                    }]
+                }),
+                encoding="utf-8",
+            )
+            output = io.StringIO()
+            with mock.patch.object(cli.HidTransport, "open", return_value=transport):
+                with contextlib.redirect_stdout(output):
+                    self.assertEqual(
+                        cli.main([
+                            "audio-resource-sync",
+                            "--assets-dir",
+                            str(assets),
+                            "--inventory",
+                            str(inventory),
+                        ]),
+                        0,
+                    )
+                    begin_count = sum(
+                        1 for payload in transport.payloads
+                        if payload[0:3] == b"\x68\x11\x27" and payload[5] == 1
+                    )
+                    self.assertEqual(begin_count, 1)
+                    self.assertEqual(
+                        cli.main([
+                            "audio-resource-sync",
+                            "--assets-dir",
+                            str(assets),
+                            "--inventory",
+                            str(inventory),
+                        ]),
+                        0,
+                    )
+                    self.assertEqual(
+                        sum(
+                            1 for payload in transport.payloads
+                            if payload[0:3] == b"\x68\x11\x27" and payload[5] == 1
+                        ),
+                        begin_count,
+                    )
+                    transport.audio_slots[0]["data"] = b"ID3 stale"
+                    self.assertEqual(
+                        cli.main([
+                            "audio-resource-sync",
+                            "--assets-dir",
+                            str(assets),
+                            "--inventory",
+                            str(inventory),
+                        ]),
+                        0,
+                    )
+        text = output.getvalue()
+        self.assertIn("resource_count=1", text)
+        self.assertIn("writing 1/1 System/Ready", text)
+        self.assertIn("skipping 1/1 System/Ready", text)
+        self.assertEqual(text.count("writing 1/1 System/Ready"), 2)
+        self.assertIn("audio_resource_sync=done count=1 written=1 skipped=0", text)
+        self.assertIn("audio_resource_sync=done count=1 written=0 skipped=1", text)
 
     def test_flash_scan_is_read_only_and_prints_empty_sector(self) -> None:
         output = io.StringIO()

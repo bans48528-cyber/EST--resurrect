@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import math
 from pathlib import Path
+import struct
 
 HELLO_SHA256 = "63c6356edf88ecc6e5726136fd44db6076cf1f0e3f21a019bd0a3027d9479449"
 PIANO_LENGTHS = (
@@ -17,9 +18,40 @@ PIANO_DURATIONS_MS = (
     1204, 1125, 943, 812, 1439, 1491, 681, 629, 864, 864, 1308, 1256, 629,
 )
 
+FEEDBACK_TONE_DURATION_MS = 60
+FEEDBACK_TONE_SAMPLE_RATE = 16000
+FEEDBACK_TONE_FREQUENCY_HZ = 700
+
+
+def feedback_tone_wav():
+    sample_count = FEEDBACK_TONE_SAMPLE_RATE * FEEDBACK_TONE_DURATION_MS // 1000
+    ramp_samples = FEEDBACK_TONE_SAMPLE_RATE * 5 // 1000
+    payload = bytearray()
+    for index in range(sample_count):
+        envelope = min(1.0, index / ramp_samples,
+                       (sample_count - 1 - index) / ramp_samples)
+        sample = round(14000 * envelope *
+                       math.sin(2 * math.pi * FEEDBACK_TONE_FREQUENCY_HZ * index /
+                                FEEDBACK_TONE_SAMPLE_RATE))
+        payload += struct.pack('<h', sample)
+    header = struct.pack(
+        '<4sI4s4sIHHIIHH4sI',
+        b'RIFF', 36 + len(payload), b'WAVE', b'fmt ', 16, 1, 1,
+        FEEDBACK_TONE_SAMPLE_RATE, FEEDBACK_TONE_SAMPLE_RATE * 2,
+        2, 16, b'data', len(payload),
+    )
+    return header + payload
+
 
 def generate(source=None):
     lines = ['#include <stddef.h>', '#include "audio_resources.h"', '']
+    feedback_data = feedback_tone_wav()
+    lines.append('static const uint8_t feedback_tone_pcm[] = {')
+    for offset in range(0, len(feedback_data), 16):
+        lines.append('    ' + ', '.join(
+            f'0x{byte:02x}' for byte in feedback_data[offset:offset + 16]
+        ) + ',')
+    lines.append('};')
     if source is not None:
         data = source.read_bytes()
         if hashlib.sha256(data).hexdigest() != HELLO_SHA256:
@@ -29,6 +61,10 @@ def generate(source=None):
             lines.append('    ' + ', '.join(f'0x{byte:02x}' for byte in data[offset:offset + 16]) + ',')
         lines.append('};')
     lines.append('const struct audio_resource audio_resources[] = {')
+    lines.append(
+        '    {"System/FastClick", feedback_tone_pcm, '
+        'sizeof(feedback_tone_pcm), 60U, 0U},'
+    )
     if source is not None:
         lines.append('    {"communication_hello", hello_mp3, sizeof(hello_mp3), 792U, 0U},')
     notes = ('C', 'Cs', 'D', 'Ds', 'E', 'F', 'Fs', 'G', 'Gs', 'A', 'As', 'B')

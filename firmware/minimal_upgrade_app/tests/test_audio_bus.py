@@ -21,6 +21,7 @@ class AudioBusTests(unittest.TestCase):
             void mock_init(void);
             extern bool mock_dreq, mock_stuck, mock_reset;
             extern unsigned mock_violations, mock_polls, mock_accesses;
+            extern unsigned mock_phase0_calls, mock_phase1_calls;
             extern unsigned mock_layout, mock_output_pins;
         """)
         stub = r"""
@@ -51,12 +52,14 @@ class AudioBusTests(unittest.TestCase):
             #define SPI_CR1_BAUDRATE_FPCLK_DIV_64 64
             bool mock_dreq, mock_stuck, mock_reset;
             unsigned mock_violations, mock_polls, mock_accesses;
+            unsigned mock_phase0_calls, mock_phase1_calls;
             unsigned mock_layout, mock_output_pins;
             static unsigned pullups;
             static unsigned busy, selected, data;
             void mock_init(void) {
                 mock_dreq = true; mock_stuck = mock_reset = false;
                 mock_violations = mock_polls = mock_accesses = 0;
+                mock_phase0_calls = mock_phase1_calls = 0;
                 busy = selected = data = 0;
                 mock_layout = 1; mock_output_pins = pullups = 0;
             }
@@ -112,8 +115,9 @@ class AudioBusTests(unittest.TestCase):
             }
             #define spi_enable(x) ((void)(x))
             #define spi_set_baudrate_prescaler(x,y) ((void)0)
-            #define spi_set_clock_polarity_0(x) ((void)0)
-            #define spi_set_clock_phase_0(x) ((void)0)
+            #define spi_set_clock_polarity_0(x) ((void)(x))
+            #define spi_set_clock_phase_0(x) ((void)(x), mock_phase0_calls++)
+            #define spi_set_clock_phase_1(x) ((void)(x), mock_phase1_calls++)
             #define rcc_periph_clock_enable(x) ((void)0)
             #define gpio_set_output_options(a,b,c,d) ((void)0)
         """
@@ -133,6 +137,8 @@ class AudioBusTests(unittest.TestCase):
         self.assertTrue(n.board_audio_bus_send(bytes(range(32)), 32))
         self.assertEqual(n.mock_violations, 0)
         self.assertEqual(n.mock_accesses, (4 + 32) * 2)
+        self.assertEqual(n.mock_phase0_calls, 2)
+        self.assertEqual(n.mock_phase1_calls, 2)
 
     def test_stuck_busy_is_bounded_and_resets_decoder(self):
         n = self.native

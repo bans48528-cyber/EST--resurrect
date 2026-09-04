@@ -19,6 +19,7 @@
 
 #include "est_micropython.h"
 #include "est_buttons.h"
+#include "est_feedback.h"
 #include "est_motor.h"
 #include "board_audio.h"
 #include "est_runtime.h"
@@ -272,7 +273,7 @@ void est_micropython_tick(void)
 	program_last_usb_poll_ms = program_started_ms;
 	program_executing = true;
 	(void)est_motor_stop_all(EST_STOP_COAST);
-	board_audio_stop();
+	est_feedback_program_start(program_requires_host, program_started_ms);
 	reset_vm();
 	script_succeeded = execute_script((const char *)program_source,
 		program_status.expected_length, &exception_line);

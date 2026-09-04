@@ -195,6 +195,7 @@ class KeyEventTests(unittest.TestCase):
             f"""
             #include <stdint.h>
             #define EST_BUTTON_COUNT 6U
+            #define EST_BUTTON_BACK 0U
             static uint8_t fake_mask;
             static uint8_t fake_pressed;
             static uint8_t fake_released;
@@ -227,14 +228,23 @@ class KeyEventTests(unittest.TestCase):
         self.events.fake_buttons_set(0, 0, 0, 0)
         self.events.est_key_events_init()
 
-    def test_release_emits_one_short_press(self) -> None:
+    def test_navigation_press_emits_one_short_press_immediately(self) -> None:
         bit = 1 << 4
         self.events.fake_buttons_set(bit, bit, 0, 0)
         self.events.est_key_events_tick()
+        self.assertEqual(self.events.est_key_events_take_short(), bit)
+        self.events.fake_buttons_set(0, 0, bit, 0)
+        self.events.est_key_events_tick()
+        self.assertEqual(self.events.est_key_events_take_short(), 0)
+
+    def test_back_short_press_is_still_emitted_on_release(self) -> None:
+        bit = 1
+        self.events.fake_buttons_set(bit, bit, 0, 0)
+        self.events.est_key_events_tick()
+        self.assertEqual(self.events.est_key_events_take_short(), 0)
         self.events.fake_buttons_set(0, 0, bit, 0)
         self.events.est_key_events_tick()
         self.assertEqual(self.events.est_key_events_take_short(), bit)
-        self.assertEqual(self.events.est_key_events_take_short(), 0)
 
     def test_long_press_suppresses_release_short_press(self) -> None:
         bit = 1

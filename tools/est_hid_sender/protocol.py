@@ -46,6 +46,7 @@ from .constants import (
     PERSISTENT_PROGRAM_NAME_MAX_BYTES,
     PERSISTENT_PROGRAM_SLOT_COUNT,
     AUDIO_RESOURCE_CHUNK_SIZE,
+    AUDIO_RESOURCE_DATA_MAX_BYTES,
     AUDIO_RESOURCE_NAME_MAX_BYTES,
     AUDIO_RESOURCE_SLOT_COUNT,
     PYTHON_PROGRAM_ACTION_BEGIN,
@@ -653,7 +654,7 @@ def _encode_audio_resource_name(name: str) -> bytes:
 
 def build_audio_resource_status_frame(slot_id: int = 0) -> bytes:
     if not 0 <= slot_id < AUDIO_RESOURCE_SLOT_COUNT:
-        raise ValueError("audio resource slot must be 0..18")
+        raise ValueError(f"audio resource slot must be 0..{AUDIO_RESOURCE_SLOT_COUNT - 1}")
     return build_frame(
         FLASH_AUDIO_RESOURCE_COMMAND,
         bytes((FLASH_AUDIO_RESOURCE_ACTION_STATUS, slot_id)),
@@ -664,8 +665,8 @@ def build_audio_resource_begin_frame(
     name: str, length: int, crc32: int, duration_ms: int = 0
 ) -> bytes:
     encoded_name = _encode_audio_resource_name(name)
-    if not 1 <= length <= 0x3F80:
-        raise ValueError("audio resource length must be 1..16256 bytes")
+    if not 1 <= length <= AUDIO_RESOURCE_DATA_MAX_BYTES:
+        raise ValueError(f"audio resource length must be 1..{AUDIO_RESOURCE_DATA_MAX_BYTES} bytes")
     if not 0 <= crc32 <= 0xFFFFFFFF:
         raise ValueError("audio resource CRC32 must fit uint32")
     if not 0 <= duration_ms <= 0xFFFFFFFF:
@@ -698,7 +699,7 @@ def build_audio_resource_commit_frame() -> bytes:
 
 def build_audio_resource_clear_frame(slot_id: int) -> bytes:
     if not 0 <= slot_id < AUDIO_RESOURCE_SLOT_COUNT:
-        raise ValueError("audio resource slot must be 0..18")
+        raise ValueError(f"audio resource slot must be 0..{AUDIO_RESOURCE_SLOT_COUNT - 1}")
     return build_frame(
         FLASH_AUDIO_RESOURCE_COMMAND,
         bytes((FLASH_AUDIO_RESOURCE_ACTION_CLEAR, slot_id)),

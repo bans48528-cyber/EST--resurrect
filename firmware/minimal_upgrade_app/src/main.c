@@ -6,8 +6,10 @@
 #include "board_sensor.h"
 #include "est_backlight.h"
 #include "est_battery.h"
+#include "est_audio_resource_store.h"
 #include "est_buttons.h"
 #include "est_display.h"
+#include "est_feedback.h"
 #include "est_led.h"
 #include "est_micropython.h"
 #include "est_runtime.h"
@@ -25,7 +27,9 @@ int main(void)
 	est_led_init();
 	est_buttons_init(est_system_millis());
 	board_flash_init();
+	est_audio_resource_init();
 	board_audio_init();
+	est_feedback_init();
 	board_motor_init();
 	board_sensor_init(est_system_millis());
 	est_battery_init(est_system_millis());
@@ -36,7 +40,7 @@ int main(void)
 	est_display_init();
 	est_micropython_init();
 	est_ui_init(est_system_millis());
-	(void)est_led_set(EST_LED_OFF);
+	(void)est_led_set(EST_LED_BLUE);
 
 	while (1) {
 		uint32_t now_ms;

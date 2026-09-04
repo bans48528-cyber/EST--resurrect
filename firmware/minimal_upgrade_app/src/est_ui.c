@@ -6,7 +6,9 @@
 #include "est_backlight.h"
 #include "est_battery.h"
 #include "est_buttons.h"
+#include "est_feedback.h"
 #include "est_key_events.h"
+#include "est_led.h"
 #include "est_micropython.h"
 #include "est_motor.h"
 #include "est_program_store.h"
@@ -24,6 +26,8 @@
 #define EST_UI_PORT_REFRESH_MS 100U
 #define EST_UI_SETTINGS_SAVE_DELAY_MS 750U
 #define EST_UI_SETTINGS_RETRY_DELAY_MS 5000U
+#define EST_UI_TRANSFER_COMPLETE_MS 900U
+#define EST_UI_TRANSFER_COMPLETE_FRAME_MS 150U
 
 static est_ui_state_t ui_state;
 static est_ui_view_t ui_view;
@@ -32,6 +36,7 @@ static bool view_initialized;
 static uint32_t ui_now_ms;
 static uint32_t next_port_refresh_ms;
 static uint32_t settings_save_due_ms;
+static uint32_t transfer_complete_started_ms;
 static uint8_t settings_recent_slot;
 static bool settings_dirty;
 
@@ -42,6 +47,7 @@ static bool update_view(void)
 	est_battery_status_t battery = {0};
 	bool changed = false;
 	bool usb_connected = usb_hid_host_connected();
+	bool usb_was_connected = ui_view.usb_connected;
 
 	(void)est_battery_get_status(&battery);
 	if (!view_initialized || ui_view.usb_connected != usb_connected ||
@@ -54,6 +60,9 @@ static bool update_view(void)
 	ui_view.battery_valid = battery.valid;
 	ui_view.battery_percent = battery.percent;
 	ui_view.battery_low = battery.low;
+	if (view_initialized && !usb_was_connected && usb_connected) {
+		est_feedback_usb_connected(ui_now_ms);
+	}
 	view_initialized = true;
 	return changed;
 }
@@ -291,6 +300,7 @@ static void handle_action(est_ui_action_t action)
 static void handle_event_mask(uint8_t events, bool long_press)
 {
 	uint8_t index;
+	bool feedback_played = false;
 
 	for (index = 0U; index < EST_BUTTON_COUNT; index++) {
 		uint8_t bit = (uint8_t)(1U << index);
@@ -302,6 +312,13 @@ static void handle_event_mask(uint8_t events, bool long_press)
 				est_ui_state_handle_short(&ui_state,
 					(est_button_t)index);
 
+			if (!feedback_played &&
+			    action != EST_UI_ACTION_RUN_RECENT &&
+			    action != EST_UI_ACTION_RUN_SELECTED) {
+				est_feedback_button(ui_now_ms);
+				feedback_played = true;
+			}
+
 			handle_action(action);
 		}
 	}
@@ -310,10 +327,16 @@ static void handle_event_mask(uint8_t events, bool long_press)
 static void update_transfer_state(void)
 {
 	est_micropython_program_status_t status = {0};
+	bool status_valid;
+	bool was_active = ui_view.transfer_active;
 	bool transfer_active = false;
+	bool transfer_complete = ui_view.transfer_complete;
 	uint8_t progress = 0U;
+	uint8_t complete_frame = ui_view.transfer_complete_frame;
+	uint32_t elapsed_ms;
 
-	if (est_micropython_program_get_status(&status) &&
+	status_valid = est_micropython_program_get_status(&status);
+	if (status_valid &&
 	    status.state == EST_MICROPYTHON_PROGRAM_RECEIVING) {
 		transfer_active = true;
 		if (status.expected_length != 0U) {
@@ -321,10 +344,48 @@ static void update_transfer_state(void)
 				status.expected_length);
 		}
 	}
+	if (transfer_active) {
+		if (!was_active) {
+			(void)est_led_set(EST_LED_RED);
+		}
+		transfer_complete = false;
+		complete_frame = 0U;
+	} else if (was_active) {
+		bool succeeded = status_valid &&
+			(status.state == EST_MICROPYTHON_PROGRAM_READY ||
+			 status.state == EST_MICROPYTHON_PROGRAM_QUEUED ||
+			 status.state == EST_MICROPYTHON_PROGRAM_RUNNING);
+
+		(void)est_led_set(EST_LED_BLUE);
+		if (succeeded) {
+			transfer_complete = true;
+			progress = 100U;
+			complete_frame = 0U;
+			transfer_complete_started_ms = ui_now_ms;
+			est_feedback_transfer_complete(ui_now_ms);
+		} else {
+			transfer_complete = false;
+			complete_frame = 0U;
+		}
+	} else if (transfer_complete) {
+		elapsed_ms = ui_now_ms - transfer_complete_started_ms;
+		if (elapsed_ms >= EST_UI_TRANSFER_COMPLETE_MS) {
+			transfer_complete = false;
+			complete_frame = 0U;
+		} else {
+			progress = 100U;
+			complete_frame = (uint8_t)(elapsed_ms /
+				EST_UI_TRANSFER_COMPLETE_FRAME_MS);
+		}
+	}
 	if (ui_view.transfer_active != transfer_active ||
-	    ui_view.transfer_progress != progress) {
+	    ui_view.transfer_complete != transfer_complete ||
+	    ui_view.transfer_progress != progress ||
+	    ui_view.transfer_complete_frame != complete_frame) {
 		ui_view.transfer_active = transfer_active;
+		ui_view.transfer_complete = transfer_complete;
 		ui_view.transfer_progress = progress;
+		ui_view.transfer_complete_frame = complete_frame;
 		est_ui_state_invalidate(&ui_state);
 	}
 }
@@ -415,7 +476,9 @@ void est_ui_init(uint32_t now_ms)
 	ui_view.remote_fault = (uint8_t)EST_UI_REMOTE_FAULT_CONNECT_IR;
 	ui_view.remote_output_enabled = false;
 	ui_view.transfer_active = false;
+	ui_view.transfer_complete = false;
 	ui_view.transfer_progress = 0U;
+	ui_view.transfer_complete_frame = 0U;
 	ui_view.battery_percent = 0U;
 	ui_view.battery_valid = false;
 	ui_view.battery_low = false;
@@ -423,6 +486,7 @@ void est_ui_init(uint32_t now_ms)
 	power_off_requested = false;
 	view_initialized = false;
 	ui_now_ms = now_ms;
+	transfer_complete_started_ms = now_ms;
 	est_ui_programs_init(now_ms);
 	est_ui_remote_init();
 	update_program_view();

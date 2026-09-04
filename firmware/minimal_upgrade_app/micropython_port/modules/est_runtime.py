@@ -10,6 +10,10 @@ _MAX_TASKS = 8
 _MAX_EVENTS = 16
 _BUTTON_DEBOUNCE_MS = 20
 _MOTOR_PORTS = ("A", "B", "C", "D")
+_BROADCAST_MESSAGES = (
+    "message_1", "message_2", "message_3", "message_4",
+    "message_5", "message_6", "message_7", "message_8",
+)
 _COLOR_IDS = {
     "none": 0,
     "black": 1,
@@ -73,6 +77,7 @@ class _Event:
         self.candidate_value = None
         self.candidate_since_ms = 0
         self.timer_generation = _timer_generation
+        self.completed_count = 0
 
 
 _tasks = [_Task(task_id) for task_id in range(_MAX_TASKS)]
@@ -151,6 +156,23 @@ class _CommandWait:
         if not _command_is_current(self._ports, self._generation):
             raise StopIteration
         return None
+
+
+class _BroadcastWait:
+    def __init__(self, targets):
+        self._targets = targets
+
+    def __iter__(self):
+        return self
+
+    def __await__(self):
+        return self
+
+    def __next__(self):
+        for event, completed_count in self._targets:
+            if event.completed_count < completed_count:
+                return None
+        raise StopIteration
 
 
 def _not_implemented(name):
@@ -318,6 +340,7 @@ def _finish_task(task, cancelled=False):
     _release_task_motors(task)
     if event is not None and event.active_task is task:
         event.active_task = None
+        event.completed_count += 1
     task.iterator = None
     task.event = None
     task.synchronous = False
@@ -359,6 +382,7 @@ def _start_async_task(iterator, event=None):
 
 def _launch_event(event):
     global _current_task
+    previous_task = _current_task
     task = _free_task_slot()
     if task is None:
         event.pending = True
@@ -378,7 +402,7 @@ def _launch_event(event):
             _cancel_task(task)
         return
     finally:
-        _current_task = None
+        _current_task = previous_task
     if hasattr(result, "send"):
         if task.active:
             task.iterator = result
@@ -388,10 +412,12 @@ def _launch_event(event):
 
 
 def _trigger_event(event):
+    target_count = event.completed_count + 1
     if event.active_task is not None:
         event.pending = True
-        return
+        return target_count + 1
     _launch_event(event)
+    return target_count
 
 
 def _dispatch_pending_events():
@@ -460,7 +486,7 @@ def _sample_events(now_ms):
             _sample_button_event(event, button_mask, now_ms)
         elif event.type == "condition":
             _sample_condition_event(event)
-        else:
+        elif event.type == "timer":
             _sample_timer_event(event, now_ms)
 
 
@@ -523,6 +549,42 @@ def on_timer_gt(seconds):
     return decorator
 
 
+def _broadcast_message(message):
+    message = str(message)
+    if message not in _BROADCAST_MESSAGES:
+        raise ValueError("broadcast message must be message_1..message_8")
+    return message
+
+
+def on_broadcast(message):
+    message = _broadcast_message(message)
+
+    def decorator(handler):
+        return _register_event("broadcast", handler, message)
+
+    return decorator
+
+
+def broadcast(message, wait=False):
+    message = _broadcast_message(message)
+    if wait is not True and wait is not False:
+        raise ValueError("broadcast wait must be True or False")
+    if wait and not _in_async_task():
+        raise RuntimeError("broadcast wait requires an async task")
+
+    targets = []
+    sender = _current_task
+    for event in _event_handlers:
+        if event.type != "broadcast" or event.argument != message:
+            continue
+        is_self_event = event.active_task is sender
+        target_count = _trigger_event(event)
+        if wait and not is_self_event:
+            targets.append((event, target_count))
+    if wait:
+        return _BroadcastWait(targets)
+
+
 def run():
     global _current_task, _scheduler_running
     if len(_start_handlers) > _MAX_TASKS:
@@ -538,6 +600,7 @@ def run():
         event.armed = True
         event.candidate_value = None
         event.timer_generation = _timer_generation
+        event.completed_count = 0
     for function in _start_handlers:
         try:
             result = function()
@@ -1002,36 +1065,6 @@ def line_follow_init():
     _line_follow_ready = False
 
 
-def line_follow_dual_step(
-    left_input, right_input, left_base_speed, right_base_speed, kp, kd
-):
-    global _line_follow_previous_error, _line_follow_derivative
-    global _line_follow_last_ms, _line_follow_ready
-    left_input = _number(left_input, "left input")
-    right_input = _number(right_input, "right input")
-    left_base_speed = _number(left_base_speed, "left base speed")
-    right_base_speed = _number(right_base_speed, "right base speed")
-    kp = _number(kp, "Kp")
-    kd = _number(kd, "Kd")
-    error = left_input - right_input
-    now_ms = est.millis()
-    derivative = 0
-    if _line_follow_ready:
-        elapsed_ms = (now_ms - _line_follow_last_ms) & 0xFFFFFFFF
-        if elapsed_ms != 0:
-            derivative = (
-                (error - _line_follow_previous_error) * 1000 / elapsed_ms
-            )
-    correction = kp * error + kd * derivative
-    left_speed = _percent(left_base_speed + correction)
-    right_speed = _percent(right_base_speed - correction)
-    drive_start_dual_speed(left_speed, right_speed)
-    _line_follow_previous_error = error
-    _line_follow_derivative = derivative
-    _line_follow_last_ms = now_ms
-    _line_follow_ready = True
-
-
 def line_follow_dual_power_step(
     left_input, right_input, left_base_power, right_base_power, kp, kd
 ):
@@ -1210,22 +1243,6 @@ class _Infrared:
     def remote(self):
         return self._sensor.remote()
 
-    def beacon_heading(self, channel):
-        _not_implemented("infrared beacon_heading")
-
-    def beacon_proximity(self, channel):
-        _not_implemented("infrared beacon_proximity")
-
-    def beacon_buttons(self, channel):
-        _not_implemented("infrared beacon_buttons")
-
-    def beacon_button_pressed(self, channel, button):
-        _not_implemented("infrared beacon_button_pressed")
-
-    def beacon_active(self, channel):
-        _not_implemented("infrared beacon_active")
-
-
 def infrared(port):
     return _sensor("infrared:", _Infrared, port)
 
@@ -1383,16 +1400,3 @@ def stop_other_stacks():
     for task in _tasks:
         if task is not _current_task:
             _cancel_task(task)
-
-
-broadcast = _unsupported("broadcast")
-color_calibrate = _unsupported("color_calibrate")
-color_reset_calibration = _unsupported("color_reset_calibration")
-ir_beacon_compare = _unsupported("ir_beacon_compare")
-on_broadcast = _unsupported("on_broadcast")
-on_color = _unsupported("on_color")
-on_gyro_angle = _unsupported("on_gyro_angle")
-on_ir_beacon_button = _unsupported("on_ir_beacon_button")
-on_ir_proximity = _unsupported("on_ir_proximity")
-on_touch = _unsupported("on_touch")
-on_ultrasonic = _unsupported("on_ultrasonic")

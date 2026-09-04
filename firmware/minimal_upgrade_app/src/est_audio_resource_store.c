@@ -48,6 +48,9 @@ struct audio_resource_upload_session {
 
 static struct audio_resource_upload_session upload_session;
 static est_audio_resource_error_t last_error;
+static struct audio_resource_header resource_catalog[EST_AUDIO_RESOURCE_SLOT_COUNT];
+static bool resource_catalog_valid[EST_AUDIO_RESOURCE_SLOT_COUNT];
+static bool resource_catalog_ready;
 
 static uint32_t read_u32_le(const uint8_t *bytes)
 {
@@ -161,6 +164,30 @@ static bool read_header(uint8_t slot_id, struct audio_resource_header *header)
 	return true;
 }
 
+static void catalog_update_slot(uint8_t slot_id)
+{
+	resource_catalog_valid[slot_id] = read_header(slot_id,
+		&resource_catalog[slot_id]);
+}
+
+void est_audio_resource_init(void)
+{
+	uint8_t slot;
+
+	memset(resource_catalog_valid, 0, sizeof(resource_catalog_valid));
+	for (slot = 0U; slot < EST_AUDIO_RESOURCE_SLOT_COUNT; slot++) {
+		catalog_update_slot(slot);
+	}
+	resource_catalog_ready = true;
+}
+
+static void ensure_resource_catalog(void)
+{
+	if (!resource_catalog_ready) {
+		est_audio_resource_init();
+	}
+}
+
 static bool slot_header_is_erased(uint8_t slot_id)
 {
 	uint8_t raw[16];
@@ -219,7 +246,7 @@ static uint32_t occupied_mask(void)
 	for (slot = 0U; slot < EST_AUDIO_RESOURCE_SLOT_COUNT; slot++) {
 		struct audio_resource_header header;
 
-		if (read_header(slot, &header)) {
+		if (slot < 32U && read_header(slot, &header)) {
 			mask |= 1UL << slot;
 		}
 	}
@@ -411,6 +438,7 @@ bool est_audio_resource_begin(const uint8_t *name, uint8_t name_length,
 		fill_status(slot_id, last_error, status);
 		return false;
 	}
+	resource_catalog_valid[slot_id] = false;
 	memset(&upload_session, 0, sizeof(upload_session));
 	upload_session.active = true;
 	upload_session.slot_id = slot_id;
@@ -472,12 +500,13 @@ bool est_audio_resource_commit(est_audio_resource_status_t *status)
 		return false;
 	}
 	if (!crc_matches(slot_id, upload_session.resource_length,
-		upload_session.resource_crc32) || !write_header(&upload_session)) {
+	    upload_session.resource_crc32) || !write_header(&upload_session)) {
 		last_error = EST_AUDIO_RESOURCE_ERROR_VERIFY;
 		memset(&upload_session, 0, sizeof(upload_session));
 		fill_status(slot_id, last_error, status);
 		return false;
 	}
+	catalog_update_slot(slot_id);
 	memset(&upload_session, 0, sizeof(upload_session));
 	fill_status(slot_id, EST_AUDIO_RESOURCE_ERROR_NONE, status);
 	return true;
@@ -507,6 +536,7 @@ bool est_audio_resource_clear_slot(uint8_t slot_id,
 		fill_status(slot_id, last_error, status);
 		return false;
 	}
+	resource_catalog_valid[slot_id] = false;
 	fill_status(slot_id, EST_AUDIO_RESOURCE_ERROR_NONE, status);
 	return true;
 }
@@ -519,20 +549,21 @@ bool est_audio_resource_find(const char *name, struct audio_resource *resource,
 	if (name == NULL || resource == NULL || name_buffer == NULL) {
 		return false;
 	}
+	ensure_resource_catalog();
 	for (slot = 0U; slot < EST_AUDIO_RESOURCE_SLOT_COUNT; slot++) {
-		struct audio_resource_header header;
+		const struct audio_resource_header *header = &resource_catalog[slot];
 
-		if (!read_header(slot, &header) || strcmp(name, header.name) != 0) {
+		if (!resource_catalog_valid[slot] || strcmp(name, header->name) != 0) {
 			continue;
 		}
-		if ((size_t)header.name_length + 1U > name_buffer_length) {
+		if ((size_t)header->name_length + 1U > name_buffer_length) {
 			return false;
 		}
-		memcpy(name_buffer, header.name, header.name_length + 1U);
+		memcpy(name_buffer, header->name, header->name_length + 1U);
 		resource->name = name_buffer;
 		resource->data = NULL;
-		resource->length = header.resource_length;
-		resource->duration_ms = header.duration_ms;
+		resource->length = header->resource_length;
+		resource->duration_ms = header->duration_ms;
 		resource->flash_address = slot_data_address(slot);
 		return true;
 	}

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import binascii
+import json
 import sys
 import time
 from pathlib import Path
@@ -25,6 +26,7 @@ from .constants import (
     DEVICE_CAPABILITY_PERSISTENT_PROGRAM,
     DEVICE_CAPABILITY_RUNTIME_TEMPERATURE,
     DEVICE_CAPABILITY_RUNTIME_BASIC_EVENT_HATS,
+    DEVICE_CAPABILITY_RUNTIME_BROADCAST,
     DEVICE_CAPABILITY_UNLIMITED_PYTHON_RUN,
     DEVICE_CAPABILITY_ZERO_SPEED_MOTOR_CONTROL,
     AUDIO_RESOURCE_SLOT_COUNT,
@@ -203,6 +205,31 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     audio_resource_write.add_argument(
         "--replace", action="store_true", help="允许覆盖同名音效资源"
+    )
+
+    audio_resource_sync = commands.add_parser(
+        "audio-resource-sync", help="把 assets/audio 里的整套 MP3 音效同步到外部 Flash"
+    )
+    add_device_options(audio_resource_sync)
+    audio_resource_sync.add_argument(
+        "--assets-dir",
+        type=Path,
+        default=Path("firmware/minimal_upgrade_app/assets/audio"),
+        help="音效 MP3 根目录，默认使用固件资产目录",
+    )
+    audio_resource_sync.add_argument(
+        "--inventory",
+        type=Path,
+        default=Path("docs/audio_resources_inventory_2026-09-03.json"),
+        help="音效清单 JSON，用于读取时长并校验文件数量",
+    )
+    audio_resource_sync.add_argument(
+        "--replace",
+        action="store_true",
+        help="兼容参数；同步会自动覆盖缺失或校验不一致的音效资源",
+    )
+    audio_resource_sync.add_argument(
+        "--clear-first", action="store_true", help="写入前先清空所有音效槽"
     )
 
     audio_resource_clear = commands.add_parser(
@@ -738,6 +765,7 @@ DEVICE_CAPABILITY_NAMES = (
     (DEVICE_CAPABILITY_MOTOR_STALL_DETECTION, "motor-stall-detection"),
     (DEVICE_CAPABILITY_AUDIO_PLAYBACK, "audio-playback"),
     (DEVICE_CAPABILITY_AUDIO_RESOURCE_FLASH, "audio-resource-flash"),
+    (DEVICE_CAPABILITY_RUNTIME_BROADCAST, "runtime-broadcast"),
 )
 
 
@@ -1373,6 +1401,42 @@ def derive_audio_resource_name(path: Path) -> str:
     return path.with_suffix("").name
 
 
+def load_audio_resource_inventory(inventory_path: Path, assets_dir: Path) -> list[dict]:
+    manifest = json.loads(inventory_path.read_text(encoding="utf-8"))
+    resources = manifest.get("resources", [])
+    if not isinstance(resources, list) or not resources:
+        raise ValueError("音效清单没有 resources 列表")
+    records: list[dict] = []
+    seen: set[str] = set()
+    for item in resources:
+        archive_name = str(item.get("name", "")).replace("\\", "/")
+        if not archive_name.lower().endswith(".mp3"):
+            raise ValueError(f"音效清单条目不是 MP3：{archive_name}")
+        resource_name = archive_name[:-4]
+        if resource_name in seen:
+            raise ValueError(f"音效清单存在重复资源名：{resource_name}")
+        seen.add(resource_name)
+        file_path = assets_dir / Path(*archive_name.split("/"))
+        data = file_path.read_bytes()
+        expected_bytes = int(item.get("bytes", len(data)))
+        if len(data) != expected_bytes:
+            raise ValueError(
+                f"{archive_name} 大小不匹配：实际 {len(data)}，清单 {expected_bytes}"
+            )
+        expected_crc32 = item.get("crc32")
+        actual_crc32 = binascii.crc32(data) & 0xFFFFFFFF
+        if expected_crc32 is not None and int(expected_crc32) != actual_crc32:
+            raise ValueError(f"{archive_name} CRC32 不匹配")
+        records.append({
+            "name": resource_name,
+            "path": file_path,
+            "bytes": len(data),
+            "duration_ms": int(item.get("duration_ms", 0)),
+            "crc32": actual_crc32,
+        })
+    return records
+
+
 def run_audio_resource_list(args: argparse.Namespace) -> int:
     with open_transport(args) as transport:
         print(f"device={transport.path}", flush=True)
@@ -1386,6 +1450,16 @@ def run_audio_resource_list(args: argparse.Namespace) -> int:
         for status in statuses:
             print_audio_resource_status(status)
     return 0
+
+
+def audio_resource_matches_record(status: object, record: dict) -> bool:
+    return (
+        (status.flags & AUDIO_RESOURCE_STATUS_FLAG_OCCUPIED) != 0
+        and status.resource_name == record["name"]
+        and status.resource_length == record["bytes"]
+        and status.resource_crc32 == record["crc32"]
+        and status.duration_ms == record["duration_ms"]
+    )
 
 
 def run_audio_resource_write(args: argparse.Namespace) -> int:
@@ -1410,6 +1484,78 @@ def run_audio_resource_write(args: argparse.Namespace) -> int:
         )
         print("audio_resource_write=done", flush=True)
         print_audio_resource_status(status)
+    return 0
+
+
+def run_audio_resource_sync(args: argparse.Namespace) -> int:
+    records = load_audio_resource_inventory(args.inventory, args.assets_dir)
+    maximum_size = max(record["bytes"] for record in records)
+    with open_transport(args) as transport:
+        print(f"device={transport.path}", flush=True)
+        updater = FirmwareUpdater(transport)
+        print(f"current_version={updater.ping()}", flush=True)
+        statuses = updater.list_audio_resources()
+        first = statuses[0]
+        print(f"slot_count={first.slot_count}", flush=True)
+        print(f"slot_size={first.slot_size}", flush=True)
+        print(f"data_max={first.data_max_bytes}", flush=True)
+        print(f"resource_count={len(records)}", flush=True)
+        print(f"max_resource_bytes={maximum_size}", flush=True)
+        if first.slot_count < len(records):
+            raise EstUpdaterError(
+                f"设备音效槽不足：需要 {len(records)}，当前 {first.slot_count}"
+            )
+        if first.data_max_bytes < maximum_size:
+            raise EstUpdaterError(
+                f"设备单个音效容量不足：需要 {maximum_size}，当前 {first.data_max_bytes}"
+            )
+        if args.clear_first:
+            for slot_id in range(first.slot_count):
+                print(f"clearing {slot_id + 1}/{first.slot_count}", flush=True)
+                updater.clear_audio_resource(slot_id)
+            existing_by_name = {}
+        else:
+            existing_by_name = {
+                status.resource_name: status
+                for status in statuses
+                if (status.flags & AUDIO_RESOURCE_STATUS_FLAG_OCCUPIED) != 0
+            }
+        written = 0
+        skipped = 0
+        for index, record in enumerate(records, start=1):
+            existing = existing_by_name.get(record["name"])
+            if existing is not None and audio_resource_matches_record(existing, record):
+                skipped += 1
+                print(
+                    f"skipping {index}/{len(records)} {record['name']} "
+                    f"bytes={record['bytes']} crc32=0x{record['crc32']:08X}",
+                    flush=True,
+                )
+                continue
+            data = record["path"].read_bytes()
+            print(
+                f"writing {index}/{len(records)} {record['name']} "
+                f"bytes={record['bytes']} crc32=0x{record['crc32']:08X}",
+                flush=True,
+            )
+            status = updater.write_audio_resource(
+                record["name"],
+                data,
+                duration_ms=record["duration_ms"],
+                replace=True,
+            )
+            written += 1
+            if (
+                status.resource_name != record["name"] or
+                status.resource_length != record["bytes"] or
+                status.resource_crc32 != record["crc32"]
+            ):
+                raise EstUpdaterError(f"{record['name']} 写入后状态校验失败")
+        print(
+            f"audio_resource_sync=done count={len(records)} "
+            f"written={written} skipped={skipped}",
+            flush=True,
+        )
     return 0
 
 
@@ -2757,6 +2903,8 @@ def main(argv: list[str] | None = None) -> int:
             return run_audio_resource_list(args)
         if args.mode == "audio-resource-write":
             return run_audio_resource_write(args)
+        if args.mode == "audio-resource-sync":
+            return run_audio_resource_sync(args)
         if args.mode == "audio-resource-clear":
             return run_audio_resource_clear(args)
         if args.mode == "motor-test":

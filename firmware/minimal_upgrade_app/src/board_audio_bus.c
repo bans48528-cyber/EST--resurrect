@@ -93,7 +93,7 @@ static bool restore_bus(void)
 	spi_disable(SPI3);
 	spi_set_baudrate_prescaler(SPI3, SPI_CR1_BAUDRATE_FPCLK_DIV_64);
 	spi_set_clock_polarity_0(SPI3);
-	spi_set_clock_phase_0(SPI3);
+	spi_set_clock_phase_1(SPI3);
 	spi_enable(SPI3);
 	return idle;
 }

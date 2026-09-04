@@ -718,6 +718,33 @@ static void draw_program_transfer(const est_ui_state_t *state,
 	}
 }
 
+static void draw_program_transfer_complete(const est_ui_view_t *view)
+{
+	const uint16_t x = 20U;
+	const uint16_t y = 39U;
+	const uint16_t check_x[] = {74U, 80U, 86U, 94U};
+	const uint16_t check_y[] = {65U, 71U, 77U, 69U};
+	const uint16_t check_x2[] = {80U, 86U, 94U, 105U};
+	const uint16_t check_y2[] = {71U, 77U, 69U, 58U};
+	uint16_t title_width = est_ui_font_measure("100%", EST_UI_TEXT_NORMAL);
+	uint8_t segment;
+
+	draw_panel(x, y, 140U, 52U);
+	(void)est_ui_text_draw_raw(centered_in_zone(x, 140U, title_width), y + 8U,
+		"100%", EST_UI_TEXT_NORMAL);
+	for (segment = 0U; segment < 4U; segment++) {
+		if (view->transfer_complete_frame <= segment) {
+			break;
+		}
+		(void)board_lcd_draw_line(check_x[segment], check_y[segment],
+			check_x2[segment], check_y2[segment], true);
+		(void)board_lcd_draw_line(check_x[segment], check_y[segment] + 1U,
+			check_x2[segment], check_y2[segment] + 1U, true);
+	}
+	(void)board_lcd_draw_rectangle(x + 16U, y + 40U, 108U, 5U, false, true);
+	(void)board_lcd_draw_rectangle(x + 17U, y + 41U, 106U, 3U, true, true);
+}
+
 static void draw_setting_row(const est_ui_state_t *state, uint8_t index,
 	est_ui_string_id_t label, const char *value)
 {
@@ -852,6 +879,8 @@ void est_ui_renderer_render(const est_ui_state_t *state,
 	}
 	if (view->transfer_active) {
 		draw_program_transfer(state, view);
+	} else if (view->transfer_complete) {
+		draw_program_transfer_complete(view);
 	}
 	board_lcd_refresh();
 }

@@ -269,9 +269,9 @@ EV3 Classroom 1.5.2 缓存中的 `TravelGuideBuilder.steeringToSpeeds()` 已给�
 | `event_gyro_angle` | `[2] 当角度 [小于 (<)] [45]° 时` | 有符号角度；比较或变化事件 |
 | `event_brick_button` | `当 [中] 按钮 [被按压]` | 无/左/中/右/上/下；按压/松开 |
 | `event_condition` | `当 [条件]` | 条件从假变真时触发 |
-| `event_broadcast_received` | `当接收到 [消息1]` | 收到同名广播时触发 |
-| `event_broadcast` | `广播 [消息1]` | 发出消息，不等待接收程序结束 |
-| `event_broadcast_wait` | `广播 [消息1] 并等待` | 等待本次接收程序全部结束 |
+| `event_broadcast_received` | `当接收到 [消息1..消息8]` | 收到同名广播时触发 |
+| `event_broadcast` | `广播 [消息1..消息8]` | 发出消息，不等待接收程序结束 |
+| `event_broadcast_wait` | `广播 [消息1..消息8] 并等待` | 等待本次接收程序全部结束 |
 | `event_timer` | `当计时器 > [10]` | 计时器首次越过阈值时触发 |
 
 比较事件菜单：小于 `(<)`、大于 `(>)`、等于 `(=)`、变化超过。

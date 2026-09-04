@@ -525,16 +525,17 @@ class FirmwareUpdater:
     ) -> AudioResourceStatus:
         if not data:
             raise ValueError("audio resource must not be empty")
-        existing = [
-            status
-            for status in self.list_audio_resources()
-            if (
-                status.resource_name == name
-                and (status.flags & AUDIO_RESOURCE_STATUS_FLAG_OCCUPIED) != 0
-            )
-        ]
-        if existing and not replace:
-            raise EstUpdaterError("同名音效资源已存在；如需覆盖请使用 --replace")
+        if not replace:
+            existing = [
+                status
+                for status in self.list_audio_resources()
+                if (
+                    status.resource_name == name
+                    and (status.flags & AUDIO_RESOURCE_STATUS_FLAG_OCCUPIED) != 0
+                )
+            ]
+            if existing:
+                raise EstUpdaterError("同名音效资源已存在；如需覆盖请使用 --replace")
         resource_crc32 = binascii.crc32(data) & 0xFFFFFFFF
         status = self._audio_resource_action(
             build_audio_resource_begin_frame(

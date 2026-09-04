@@ -688,62 +688,6 @@ class RuntimeHardwareTests(unittest.TestCase):
         self.assertNotIn(("motor.stop", "A", 0), fake_est.events)
         self.assertNotIn(("motor.stop", "C", 0), fake_est.events)
 
-    def test_line_follow_init_and_dual_pd_steps(self) -> None:
-        runtime, fake_est = load_runtime()
-        fake_est.millis_step = 20
-        runtime.drive_set_pair("B", "C")
-
-        runtime.line_follow_init()
-        self.assertEqual(
-            [event for event in fake_est.events if event[0] == "pair.run_speed"],
-            [],
-        )
-
-        runtime.line_follow_dual_step(60, 40, 30, 30, 1, 0.01)
-        runtime.line_follow_dual_step(50, 40, 30, 30, 1, 0.01)
-
-        self.assertEqual(
-            [
-                ("pair.run_speed", 50, 10),
-                ("pair.run_speed", 35, 25),
-            ],
-            [event for event in fake_est.events if event[0] == "pair.run_speed"],
-        )
-
-    def test_line_follow_clamps_outputs_and_validates_numbers(self) -> None:
-        runtime, fake_est = load_runtime()
-        runtime.line_follow_init()
-        runtime.line_follow_dual_step(100, -100, 90, -90, 2, 0)
-        self.assertIn(("pair.run_speed", 100, -100), fake_est.events)
-
-        with self.assertRaisesRegex(ValueError, "left input must be a number"):
-            runtime.line_follow_dual_step("bad", 0, 30, 30, 1, 0)
-
-    def test_line_follow_new_task_owner_survives_old_task_cleanup(self) -> None:
-        runtime, fake_est = load_runtime()
-
-        @runtime.on_start
-        async def old_owner():
-            runtime.line_follow_init()
-            runtime.line_follow_dual_step(60, 40, 30, 30, 1, 0)
-            await runtime.yield_once()
-            await runtime.yield_once()
-
-        @runtime.on_start
-        async def new_owner():
-            await runtime.yield_once()
-            runtime.line_follow_init()
-            runtime.line_follow_dual_step(40, 60, 50, 50, 1, 0)
-            await runtime.yield_once()
-
-        runtime.run()
-
-        takeover = fake_est.events.index(("pair.run_speed", 30, 70))
-        self.assertEqual(
-            [("motor.stop", "B", 0), ("motor.stop", "C", 0)],
-            [event for event in fake_est.events[takeover + 1:] if event[0] == "motor.stop"],
-        )
-
     def test_dual_power_drive_clamps_and_retargets_without_speed_control(self) -> None:
         runtime, fake_est = load_runtime()
         runtime.drive_set_pair("B", "C")
@@ -939,8 +883,6 @@ class RuntimeHardwareTests(unittest.TestCase):
         self.assertEqual(runtime.ultrasonic("4").distance("inches"), 4.8)
         self.assertEqual(runtime.infrared("4").proximity(), 31)
         self.assertEqual(runtime.infrared("4").beacon(), (-4, 22))
-        with self.assertRaises(NotImplementedError):
-            runtime.infrared("4").beacon_heading(1)
         for invalid_port in (0, "0", 5, "5"):
             with self.assertRaisesRegex(ValueError, "sensor port must be 1..4"):
                 runtime.color(invalid_port)
@@ -1480,25 +1422,142 @@ class RuntimeSensorWaitTests(unittest.TestCase):
             runtime.wait_ir_beacon_button(4, 1, "held")
 
 
+class RuntimeBroadcastTests(unittest.TestCase):
+    def test_all_eight_messages_register_and_invalid_names_fail(self) -> None:
+        runtime, _ = load_runtime()
+
+        for index in range(1, 9):
+            handler = lambda: None
+            self.assertIs(
+                runtime.on_broadcast(f"message_{index}")(handler),
+                handler,
+            )
+        self.assertEqual(len(runtime._event_handlers), 8)
+        with self.assertRaisesRegex(ValueError, "message_1..message_8"):
+            runtime.on_broadcast("message_9")
+        with self.assertRaisesRegex(ValueError, "message_1..message_8"):
+            runtime.broadcast("hello")
+        with self.assertRaisesRegex(ValueError, "True or False"):
+            runtime.broadcast("message_1", wait="yes")
+        with self.assertRaisesRegex(RuntimeError, "requires an async task"):
+            runtime.broadcast("message_1", wait=True)
+
+    def test_broadcast_without_wait_returns_before_async_receiver(self) -> None:
+        runtime, fake_est = load_runtime()
+        calls = []
+
+        @runtime.on_broadcast("message_1")
+        async def receiver():
+            calls.append("receiver")
+
+        @runtime.on_broadcast("message_2")
+        def other_message():
+            calls.append("wrong-message")
+
+        @runtime.on_start
+        async def sender():
+            calls.append("before")
+            runtime.broadcast("message_1", wait=False)
+            calls.append("after")
+            while "receiver" not in calls:
+                await runtime.yield_once()
+            runtime.stop("all")
+
+        with self.assertRaises(fake_est.GlobalProgramStop):
+            runtime.run()
+        self.assertEqual(calls, ["before", "after", "receiver"])
+
+    def test_broadcast_wait_waits_for_all_matching_receivers(self) -> None:
+        runtime, fake_est = load_runtime()
+        calls = []
+
+        @runtime.on_broadcast("message_1")
+        async def slow_receiver():
+            calls.append("slow-start")
+            await runtime.sleep(0.3)
+            calls.append("slow-end")
+
+        @runtime.on_broadcast("message_1")
+        def immediate_receiver():
+            calls.append("immediate")
+
+        @runtime.on_start
+        async def sender():
+            calls.append("before")
+            await runtime.broadcast("message_1", wait=True)
+            calls.append("after")
+            runtime.stop("all")
+
+        with self.assertRaises(fake_est.GlobalProgramStop):
+            runtime.run()
+        self.assertEqual(
+            calls,
+            ["before", "immediate", "slow-start", "slow-end", "after"],
+        )
+
+    def test_repeated_broadcast_coalesces_one_pending_receiver_run(self) -> None:
+        runtime, fake_est = load_runtime()
+        calls = []
+
+        @runtime.on_broadcast("message_1")
+        async def receiver():
+            calls.append("start")
+            await runtime.sleep(0.2)
+            calls.append("end")
+            if calls.count("end") == 2:
+                runtime.stop("all")
+
+        @runtime.on_start
+        async def sender():
+            runtime.broadcast("message_1")
+            runtime.broadcast("message_1")
+            runtime.broadcast("message_1")
+            while True:
+                await runtime.yield_once()
+
+        with self.assertRaises(fake_est.GlobalProgramStop):
+            runtime.run()
+        self.assertEqual(calls, ["start", "end", "start", "end"])
+
+    def test_broadcast_wait_does_not_deadlock_its_own_event_hat(self) -> None:
+        runtime, fake_est = load_runtime()
+        calls = []
+
+        @runtime.on_broadcast("message_1")
+        async def receiver():
+            calls.append("run")
+            if len(calls) == 1:
+                await runtime.broadcast("message_1", wait=True)
+            else:
+                runtime.stop("all")
+
+        @runtime.on_start
+        async def sender():
+            runtime.broadcast("message_1")
+            while True:
+                await runtime.yield_once()
+
+        with self.assertRaises(fake_est.GlobalProgramStop):
+            runtime.run()
+        self.assertEqual(calls, ["run", "run"])
+
+
 class RuntimeContractTests(unittest.TestCase):
     def test_generator_runtime_names_are_explicit(self) -> None:
         runtime, _ = load_runtime()
         expected = {
-            "boolean", "broadcast", "color", "color_calibrate",
-            "color_reset_calibration", "compare", "display_image_for",
+            "boolean", "broadcast", "color", "compare", "display_image_for",
             "display_text", "display_text_line",
             "drive_dual_speed_for", "drive_move_for", "drive_set_pair",
             "drive_set_speed", "drive_set_stop_action",
             "drive_start_dual_power", "drive_start_dual_speed", "drive_start_steer",
             "drive_steer_for", "drive_stop", "gyro", "infrared",
-            "ir_beacon_compare", "motor", "motor_run_for",
-            "line_follow_dual_power_step", "line_follow_dual_step", "line_follow_init",
+            "motor", "motor_run_for",
+            "line_follow_dual_power_step", "line_follow_init",
             "motor_set_speed", "motor_set_stop_action", "motor_stalled", "motor_start",
             "motor_start_power", "motor_start_speed", "motor_stop",
-            "on_brick_button", "on_broadcast", "on_color",
-            "on_condition", "on_gyro_angle", "on_ir_beacon_button",
-            "on_ir_proximity", "on_start", "on_timer_gt", "on_touch",
-            "on_ultrasonic", "random_int", "repeat_count", "reset_timer", "run",
+            "on_brick_button", "on_broadcast", "on_condition", "on_start",
+            "on_timer_gt", "random_int", "repeat_count", "reset_timer", "run",
             "seconds_to_ms", "sleep", "stop", "stop_other_stacks",
             "temperature", "timer_seconds", "touch", "ultrasonic", "wait_brick_button",
             "wait_color", "wait_gyro", "wait_ir_beacon_button",
@@ -1509,17 +1568,20 @@ class RuntimeContractTests(unittest.TestCase):
 
     def test_unsupported_interfaces_raise(self) -> None:
         runtime, _ = load_runtime()
-        unsupported = (
-            "broadcast", "color_calibrate", "color_reset_calibration",
-            "ir_beacon_compare",
-            "on_broadcast", "on_color",
-            "on_gyro_angle", "on_ir_beacon_button", "on_ir_proximity",
-            "on_touch", "on_ultrasonic",
+        with self.assertRaisesRegex(
+            NotImplementedError, "compare changed"
+        ):
+            runtime.compare(1, "changed", 2)
+
+    def test_removed_unsupported_interfaces_are_absent(self) -> None:
+        runtime, _ = load_runtime()
+        removed = (
+            "color_calibrate", "color_reset_calibration", "ir_beacon_compare",
+            "line_follow_dual_step", "on_color", "on_gyro_angle",
+            "on_ir_beacon_button", "on_ir_proximity", "on_touch",
+            "on_ultrasonic",
         )
-        for name in unsupported:
-            with self.subTest(name=name):
-                with self.assertRaisesRegex(NotImplementedError, name):
-                    getattr(runtime, name)()
+        self.assertEqual([name for name in removed if hasattr(runtime, name)], [])
 
 
 if __name__ == "__main__":

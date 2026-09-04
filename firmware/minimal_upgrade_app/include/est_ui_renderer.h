@@ -30,7 +30,9 @@ typedef struct {
 	uint8_t remote_fault;
 	bool remote_output_enabled;
 	bool transfer_active;
+	bool transfer_complete;
 	uint8_t transfer_progress;
+	uint8_t transfer_complete_frame;
 	uint8_t battery_percent;
 	bool battery_valid;
 	bool battery_low;

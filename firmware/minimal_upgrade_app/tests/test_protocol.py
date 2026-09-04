@@ -708,7 +708,7 @@ class BoardModuleLayoutTests(unittest.TestCase):
         header = (ROOT / "include" / "board_motor.h").read_text(encoding="utf-8")
         config = (ROOT / "include" / "app_config.h").read_text(encoding="utf-8")
         self.assertIn("MOTOR_POSITION_COMMAND          0x1BU", config)
-        self.assertIn("DEVICE_PROTOCOL_MINOR           27U", config)
+        self.assertIn("DEVICE_PROTOCOL_MINOR           28U", config)
         self.assertIn("MOTOR_LARGE_COUNTS_PER_SPEED 12800U", motor)
         self.assertIn("MOTOR_MEDIUM_COUNTS_PER_SPEED 8100U", motor)
         self.assertIn("medium_samples[4] = {2U, 4U, 8U, 16U}", motor)
@@ -1311,7 +1311,7 @@ class MicroPythonIntegrationTests(unittest.TestCase):
         config = (ROOT / "include" / "app_config.h").read_text(encoding="utf-8")
         protocol = (SOURCE_DIR / "update_protocol.c").read_text(encoding="utf-8")
         self.assertIn("MICROPYTHON_STATUS_COMMAND      0x23U", config)
-        self.assertIn("DEVICE_PROTOCOL_MINOR           27U", config)
+        self.assertIn("DEVICE_PROTOCOL_MINOR           28U", config)
         self.assertIn("DEVICE_CAPABILITY_MICROPYTHON", config)
         self.assertIn("DEVICE_CAPABILITY_FROZEN_EST_RUNTIME", config)
         self.assertIn("DEVICE_CAPABILITY_UNLIMITED_PYTHON_RUN", config)
@@ -1901,8 +1901,26 @@ class MicroPythonIntegrationTests(unittest.TestCase):
         self.assertIn("est_key_events_reset();", ui)
         self.assertIn("draw_program_transfer(state, view);", renderer)
         self.assertIn("view->transfer_progress", renderer)
+        self.assertIn("est_feedback_transfer_complete(ui_now_ms);", ui)
+        self.assertIn("draw_program_transfer_complete(view);", renderer)
+        self.assertIn("EST_UI_TRANSFER_COMPLETE_MS 900U", ui)
         self.assertIn("EST_UI_ACTION_STOP_PROGRAM", state)
         self.assertIn("case EST_UI_PAGE_RUNNING", state)
+
+    def test_system_feedback_and_default_blue_led_are_integrated(self) -> None:
+        main = (ROOT / "src" / "main.c").read_text(encoding="utf-8")
+        ui = (ROOT / "src" / "est_ui.c").read_text(encoding="utf-8")
+        runtime = (ROOT / "micropython_port" / "est_micropython.c").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("est_led_set(EST_LED_BLUE)", main)
+        self.assertIn("est_feedback_init();", main)
+        self.assertIn("est_feedback_button(ui_now_ms);", ui)
+        self.assertIn("est_feedback_usb_connected(ui_now_ms);", ui)
+        self.assertIn("est_feedback_program_start(program_requires_host", runtime)
+        self.assertIn("est_led_set(EST_LED_RED)", ui)
+        self.assertIn("est_led_set(EST_LED_BLUE)", ui)
 
 
 if __name__ == "__main__":

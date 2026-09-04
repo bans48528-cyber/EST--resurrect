@@ -83,12 +83,12 @@ class CooperativeMultitaskContractTests(unittest.TestCase):
         constants = (TOOLS_ROOT / "constants.py").read_text(encoding="utf-8")
         cli = (TOOLS_ROOT / "cli.py").read_text(encoding="utf-8")
 
-        self.assertIn("DEVICE_PROTOCOL_MINOR           27U", config)
+        self.assertIn("DEVICE_PROTOCOL_MINOR           28U", config)
         self.assertIn(
             "DEVICE_CAPABILITY_COOPERATIVE_MULTITASK (1UL << 23U)", config
         )
         self.assertIn("DEVICE_CAPABILITY_COOPERATIVE_MULTITASK", protocol)
-        self.assertIn("DEVICE_PROTOCOL_MINOR = 27", constants)
+        self.assertIn("DEVICE_PROTOCOL_MINOR = 28", constants)
         self.assertIn("DEVICE_CAPABILITY_COOPERATIVE_MULTITASK = 1 << 23", constants)
         self.assertIn('"cooperative-multitask"', cli)
 

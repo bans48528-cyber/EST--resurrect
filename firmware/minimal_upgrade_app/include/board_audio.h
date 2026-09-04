@@ -14,6 +14,7 @@ void board_audio_init(void);
 bool board_audio_ready(void);
 bool board_audio_play(const char *name, uint32_t now_ms);
 bool board_audio_tone(uint8_t note, int32_t duration_ms, uint32_t now_ms);
+bool board_audio_feedback_tone(uint32_t now_ms);
 bool board_audio_has_resource(const char *name);
 void board_audio_stop(void);
 enum board_audio_state board_audio_state(void);

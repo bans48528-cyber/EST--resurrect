@@ -25,6 +25,7 @@ class AudioPlaybackTests(unittest.TestCase):
             void board_audio_init(void);
             bool board_audio_play(const char *, uint32_t);
             bool board_audio_tone(uint8_t, int32_t, uint32_t);
+            bool board_audio_feedback_tone(uint32_t);
             void board_audio_tick(uint32_t);
             void board_audio_stop(void);
             bool board_audio_ready(void);
@@ -82,11 +83,17 @@ class AudioPlaybackTests(unittest.TestCase):
             bool est_audio_resource_find(const char *name,
                     struct audio_resource *resource, char *name_buffer,
                     size_t name_buffer_size) {
-                (void)name;
-                (void)resource;
-                (void)name_buffer;
                 (void)name_buffer_size;
-                return false;
+                if (strcmp(name, "External/Cheering") != 0) {
+                    return false;
+                }
+                strcpy(name_buffer, name);
+                resource->name = name_buffer;
+                resource->data = NULL;
+                resource->length = 27616;
+                resource->duration_ms = 3000;
+                resource->flash_address = 0x01B40080;
+                return true;
             }
         """
         cls.native = ffi.verify(stub + GENERATOR.generate() +
@@ -114,13 +121,15 @@ class AudioPlaybackTests(unittest.TestCase):
     def test_index_has_37_flash_resources_without_embedded_audio(self):
         generated = GENERATOR.generate()
         self.assertEqual(generated.count('"Piano/'), 37)
+        self.assertIn('"System/FastClick"', generated)
+        self.assertEqual(len(GENERATOR.feedback_tone_wav()), 1964)
         self.assertIn('0x01F7F000U', generated)
         self.assertNotIn('hello_mp3', generated)
         self.assertEqual(sum(GENERATOR.PIANO_LENGTHS), 206906)
 
     def test_idle_init_does_not_play(self):
         self.tick()
-        self.assertEqual(self.native.mock_sent, 0)
+        self.assertEqual(self.native.mock_sent, START_PREFILL_BYTES)
         self.assertEqual(self.native.board_audio_state(), 0)
 
     def test_flash_stream_drains_and_completes(self):
@@ -161,6 +170,39 @@ class AudioPlaybackTests(unittest.TestCase):
         self.assertEqual(n.mock_sent,
                          self.legacy_piano_stream_length(6366) + END_FILL_BYTES)
 
+    def test_external_flash_resource_reuses_ready_decoder_after_idle_piano(self):
+        n = self.native
+        self.assertTrue(n.board_audio_play(b"Piano/C4", 0))
+        self.tick(0, 2200)
+        self.assertEqual(n.board_audio_state(), 0)
+        n.mock_reset = False
+        n.mock_sent = 0
+        self.assertTrue(n.board_audio_play(b"External/Cheering", 2201))
+        self.assertFalse(n.mock_reset)
+        self.tick(2201, 2450)
+        self.assertGreater(n.mock_sent, 0)
+
+    def test_external_flash_resource_finishes_with_decoder_ready(self):
+        n = self.native
+        self.assertTrue(n.board_audio_play(b"External/Cheering", 0))
+        generation = n.board_audio_generation()
+        self.tick(0, 3900)
+        self.assertEqual(n.board_audio_state(), 0)
+        self.assertFalse(n.mock_reset)
+        self.assertGreater(n.board_audio_generation(), generation)
+        self.assertTrue(n.board_audio_ready())
+
+    def test_boot_mode_is_retried_until_decoder_settles(self):
+        n = self.native
+        n.mock_mode = 0
+        self.assertTrue(n.board_audio_play(b"Piano/C4", 0))
+        self.tick(0, 40)
+        self.assertEqual(n.board_audio_state(), 1)
+        self.assertEqual(n.mock_sent, 0)
+        n.mock_mode = 0x0800
+        self.tick(40, 120)
+        self.assertGreaterEqual(n.mock_sent, START_PREFILL_BYTES)
+
     def test_idle_piano_reuses_ready_decoder_without_reset(self):
         n = self.native
         self.tick(0, 40)
@@ -172,25 +214,78 @@ class AudioPlaybackTests(unittest.TestCase):
         self.tick(41, 80)
         self.assertEqual(n.board_audio_state(), 1)
 
+    def test_feedback_tone_starts_immediately_without_reset(self):
+        n = self.native
+        self.tick(0, 40)
+        sent = n.mock_sent
+        generation = n.board_audio_generation()
+        n.mock_reset = False
+        self.assertTrue(n.board_audio_feedback_tone(41))
+        self.assertEqual(n.board_audio_state(), 1)
+        self.assertFalse(n.mock_reset)
+        self.assertGreater(n.board_audio_generation(), generation)
+        self.tick(42, 300)
+        self.assertEqual(
+            n.mock_sent,
+            sent + len(GENERATOR.feedback_tone_wav()) + END_FILL_BYTES,
+        )
+        self.assertEqual(n.board_audio_state(), 0)
+        self.assertTrue(n.board_audio_ready())
+        self.assertFalse(n.mock_reset)
+
+    def test_user_volume_expands_audible_hardware_range(self):
+        n = self.native
+        self.tick(0, 40)
+        self.assertTrue(n.board_audio_set_volume_percent(10))
+        self.assertEqual(n.mock_volume, 0x1212)
+        self.assertTrue(n.board_audio_set_volume_percent(50))
+        self.assertEqual(n.mock_volume, 0x0A0A)
+        self.assertTrue(n.board_audio_set_volume_percent(80))
+        volume_80 = n.mock_volume
+        self.assertTrue(n.board_audio_set_volume_percent(90))
+        volume_90 = n.mock_volume
+        self.assertLess(volume_90, volume_80)
+        self.assertEqual(volume_80, 0x0404)
+        self.assertEqual(volume_90, 0x0202)
+        self.assertTrue(n.board_audio_set_volume_percent(100))
+        self.assertEqual(n.mock_volume, 0x0000)
+        self.assertTrue(n.board_audio_set_volume_percent(0))
+        self.assertEqual(n.mock_volume, 0xFEFE)
+
+    def test_feedback_tone_does_not_interrupt_active_audio(self):
+        n = self.native
+        self.tick(0, 40)
+        self.assertTrue(n.board_audio_play(b"Piano/C4", 41))
+        generation = n.board_audio_generation()
+        self.assertFalse(n.board_audio_feedback_tone(42))
+        self.assertEqual(n.board_audio_generation(), generation)
+        self.assertEqual(n.board_audio_state(), 1)
+
     def test_idle_volume_change_is_applied_before_playback(self):
         n = self.native
         self.tick(0, 40)
         writes = n.mock_volume_writes
         self.assertTrue(n.board_audio_set_volume_percent(85))
         self.assertGreater(n.mock_volume_writes, writes)
-        self.assertEqual(n.mock_volume, 0x1E1E)
+        self.assertEqual(n.mock_volume, 0x0303)
         writes = n.mock_volume_writes
         self.assertTrue(n.board_audio_play(b"Piano/C4", 41))
         self.tick(41, 80)
         self.assertEqual(n.mock_volume_writes, writes)
+        self.assertEqual(n.mock_volume, 0x0303)
 
-    def test_first_play_prefill_uses_user_volume_not_mute(self):
+    def test_boot_prefill_is_quiet_then_restores_user_volume(self):
         n = self.native
         self.assertTrue(n.board_audio_set_volume_percent(85))
-        self.assertTrue(n.board_audio_play(b"Piano/C4", 0))
         self.tick(0, 20)
-        self.assertEqual(n.mock_volume, 0x1E1E)
+        self.assertEqual(n.mock_volume, 0x6464)
         self.assertGreater(n.mock_sent, 0)
+        self.tick(20, 35)
+        self.assertEqual(n.mock_volume, 0x0303)
+        self.assertEqual(n.mock_sent, START_PREFILL_BYTES)
+        self.assertTrue(n.board_audio_play(b"Piano/C4", 36))
+        self.tick(36, 45)
+        self.assertGreater(n.mock_sent, START_PREFILL_BYTES)
 
     def test_diagnostic_reads_are_gated_and_checksum_resets(self):
         n = self.native
@@ -259,8 +354,8 @@ class AudioPlaybackTests(unittest.TestCase):
         n = self.native
         n.board_audio_set_volume_percent(80)
         n.board_audio_play(b"Piano/C4", 0)
-        self.tick(0, 20)
-        self.assertEqual(n.mock_volume, 0x2828)
+        self.tick(0, 40)
+        self.assertEqual(n.mock_volume, 0x0404)
         n.board_audio_set_volume_percent(0)
         n.board_audio_tick(150)
         self.assertEqual(n.mock_volume, 0xFEFE)
@@ -273,14 +368,14 @@ class AudioPlaybackTests(unittest.TestCase):
         self.assertTrue(n.board_audio_play(b"Piano/C4", 0))
         self.tick(0, 150)
         self.assertEqual(n.board_audio_state(), 1)
-        self.assertEqual(n.mock_volume, 0x1E1E)
+        self.assertEqual(n.mock_volume, 0x0303)
         n.board_audio_stop()
         self.assertTrue(n.mock_reset)
         self.assertEqual(n.board_audio_state(), 0)
         self.assertTrue(n.board_audio_play(b"Piano/G4", 230))
         self.assertTrue(n.mock_reset)
         self.tick(230, 370)
-        self.assertEqual(n.mock_volume, 0x1E1E)
+        self.assertEqual(n.mock_volume, 0x0303)
 
     def test_new_note_restarts_decoder_from_baseline(self):
         n = self.native
@@ -292,7 +387,7 @@ class AudioPlaybackTests(unittest.TestCase):
         n.board_audio_tick(151)
         self.assertEqual(n.mock_mode_write, 0)
         self.tick(152, 300)
-        self.assertEqual(n.mock_volume, 0x2828)
+        self.assertEqual(n.mock_volume, 0x0404)
 
     def test_timed_and_continuous_tone_stop(self):
         n = self.native
@@ -337,6 +432,8 @@ class AudioPlaybackTests(unittest.TestCase):
         n.mock_mode = 0xFFFF
         n.board_audio_play(b"Piano/C4", 0)
         self.tick(0, 20)
+        self.assertEqual(n.board_audio_state(), 1)
+        self.tick(20, 600)
         self.assertEqual(n.board_audio_state(), 2)
         self.assertTrue(n.mock_reset)
         self.setUp()

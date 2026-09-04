@@ -80,7 +80,9 @@ class UiRendererTests(unittest.TestCase):
                 uint8_t remote_fault;
                 _Bool remote_output_enabled;
                 _Bool transfer_active;
+                _Bool transfer_complete;
                 uint8_t transfer_progress;
+                uint8_t transfer_complete_frame;
                 uint8_t battery_percent;
                 _Bool battery_valid;
                 _Bool battery_low;
@@ -326,6 +328,12 @@ class UiRendererTests(unittest.TestCase):
         view.transfer_progress = 50
         self.renderer.est_ui_renderer_render(state, view)
         self.assertGreater(self.count_pixels(20, 39, 140, 52), 300)
+
+        view.transfer_active = False
+        view.transfer_complete = True
+        view.transfer_complete_frame = 4
+        self.renderer.est_ui_renderer_render(state, view)
+        self.assertGreater(self.count_pixels(20, 39, 140, 52), 400)
 
     def test_python_error_renders_source_line_instead_of_error_three(self) -> None:
         state, view, _ = self.new_model()

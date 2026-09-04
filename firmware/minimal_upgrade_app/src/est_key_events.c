@@ -28,8 +28,13 @@ void est_key_events_tick(void)
 	uint8_t released = est_buttons_take_released_events();
 	uint8_t held = est_buttons_pressed_mask();
 	uint8_t long_pressed = est_buttons_take_long_press_events();
+	uint8_t back_bit = (uint8_t)(1U << (uint8_t)EST_BUTTON_BACK);
+	uint8_t immediate = pressed & (uint8_t)~back_bit;
 
-	(void)pressed;
+	/* Navigation feels immediate on the debounced press. Back remains a
+	 * release action so its long-press emergency-stop gesture stays distinct. */
+	short_events |= immediate;
+	suppress_short_mask |= immediate;
 	long_events |= long_pressed;
 	suppress_short_mask |= long_pressed;
 	short_events |= released & (uint8_t)~suppress_short_mask;

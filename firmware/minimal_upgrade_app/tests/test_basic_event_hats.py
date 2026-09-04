@@ -25,7 +25,7 @@ class BasicEventHatsContractTests(unittest.TestCase):
         self.assertNotIn("uasyncio", runtime)
         self.assertNotIn("threading", runtime)
 
-    def test_first_stage_hats_are_implemented_and_later_hats_stay_explicit(self) -> None:
+    def test_event_hats_are_implemented_and_removed_sensor_hats_are_absent(self) -> None:
         runtime = RUNTIME_PATH.read_text(encoding="utf-8")
 
         self.assertIn("def on_brick_button(button, event):", runtime)
@@ -34,11 +34,14 @@ class BasicEventHatsContractTests(unittest.TestCase):
         self.assertNotIn('on_brick_button = _unsupported', runtime)
         self.assertNotIn('on_condition = _unsupported', runtime)
         self.assertNotIn('on_timer_gt = _unsupported', runtime)
+        self.assertIn("def on_broadcast(message):", runtime)
+        self.assertIn("def broadcast(message, wait=False):", runtime)
         for name in (
             "on_touch", "on_color", "on_ultrasonic", "on_ir_proximity",
-            "on_gyro_angle", "on_broadcast", "on_ir_beacon_button",
+            "on_gyro_angle", "on_ir_beacon_button",
         ):
-            self.assertIn(f'{name} = _unsupported("{name}")', runtime)
+            self.assertNotIn(f'{name} = _unsupported("{name}")', runtime)
+            self.assertNotIn(f"def {name}(", runtime)
 
     def test_event_sampling_does_not_use_blocking_sensor_waits(self) -> None:
         runtime = RUNTIME_PATH.read_text(encoding="utf-8")
@@ -60,15 +63,22 @@ class BasicEventHatsContractTests(unittest.TestCase):
         constants = (TOOLS_ROOT / "constants.py").read_text(encoding="utf-8")
         cli = (TOOLS_ROOT / "cli.py").read_text(encoding="utf-8")
 
-        self.assertIn("DEVICE_PROTOCOL_MINOR           27U", config)
+        self.assertIn("DEVICE_PROTOCOL_MINOR           28U", config)
         self.assertIn(
             "DEVICE_CAPABILITY_RUNTIME_BASIC_EVENT_HATS (1UL << 24U)",
             config,
         )
         self.assertIn("DEVICE_CAPABILITY_RUNTIME_BASIC_EVENT_HATS", protocol)
-        self.assertIn("DEVICE_PROTOCOL_MINOR = 27", constants)
+        self.assertIn(
+            "DEVICE_CAPABILITY_RUNTIME_BROADCAST (1UL << 28U)",
+            config,
+        )
+        self.assertIn("DEVICE_CAPABILITY_RUNTIME_BROADCAST", protocol)
+        self.assertIn("DEVICE_PROTOCOL_MINOR = 28", constants)
         self.assertIn("DEVICE_CAPABILITY_RUNTIME_BASIC_EVENT_HATS = 1 << 24", constants)
+        self.assertIn("DEVICE_CAPABILITY_RUNTIME_BROADCAST = 1 << 28", constants)
         self.assertIn('"runtime-basic-event-hats"', cli)
+        self.assertIn('"runtime-broadcast"', cli)
 
 
 if __name__ == "__main__":

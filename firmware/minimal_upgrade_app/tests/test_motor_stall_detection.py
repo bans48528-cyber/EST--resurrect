@@ -85,12 +85,12 @@ class MotorStallDetectionTests(unittest.TestCase):
         constants = (TOOLS_ROOT / "constants.py").read_text(encoding="utf-8")
         cli = (TOOLS_ROOT / "cli.py").read_text(encoding="utf-8")
 
-        self.assertIn("DEVICE_PROTOCOL_MINOR           27U", config)
+        self.assertIn("DEVICE_PROTOCOL_MINOR           28U", config)
         self.assertIn(
             "DEVICE_CAPABILITY_MOTOR_STALL_DETECTION (1UL << 25U)", config
         )
         self.assertIn("DEVICE_CAPABILITY_MOTOR_STALL_DETECTION", protocol)
-        self.assertIn("DEVICE_PROTOCOL_MINOR = 27", constants)
+        self.assertIn("DEVICE_PROTOCOL_MINOR = 28", constants)
         self.assertIn("DEVICE_CAPABILITY_MOTOR_STALL_DETECTION = 1 << 25", constants)
         self.assertIn('"motor-stall-detection"', cli)
 

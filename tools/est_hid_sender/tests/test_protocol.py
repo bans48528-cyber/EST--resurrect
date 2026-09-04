@@ -677,10 +677,10 @@ def build_audio_resource_result(
     payload[4] = slot_id
     payload[5] = AUDIO_RESOURCE_SLOT_COUNT
     payload[6] = len(name_bytes)
-    payload[8:12] = (0x01F81000).to_bytes(4, "little")
-    payload[12:16] = (0x0004C000).to_bytes(4, "little")
-    payload[16:20] = (0x00004000).to_bytes(4, "little")
-    payload[20:24] = (0x00003F80).to_bytes(4, "little")
+    payload[8:12] = (0x01B40000).to_bytes(4, "little")
+    payload[12:16] = (0x00400000).to_bytes(4, "little")
+    payload[16:20] = (0x00008000).to_bytes(4, "little")
+    payload[20:24] = (0x00007F80).to_bytes(4, "little")
     payload[24:28] = resource_length.to_bytes(4, "little")
     payload[28:32] = resource_crc32.to_bytes(4, "little")
     payload[32:36] = duration_ms.to_bytes(4, "little")
@@ -1301,19 +1301,19 @@ class ProtocolTests(unittest.TestCase):
         self.assertIsNotNone(status)
         self.assertEqual(status.schema_version, 1)
         self.assertEqual(status.slot_id, 2)
-        self.assertEqual(status.slot_count, 19)
-        self.assertEqual(status.region_start, 0x01F81000)
-        self.assertEqual(status.region_size, 0x0004C000)
-        self.assertEqual(status.slot_size, 0x00004000)
-        self.assertEqual(status.data_max_bytes, 0x00003F80)
+        self.assertEqual(status.slot_count, 128)
+        self.assertEqual(status.region_start, 0x01B40000)
+        self.assertEqual(status.region_size, 0x00400000)
+        self.assertEqual(status.slot_size, 0x00008000)
+        self.assertEqual(status.data_max_bytes, 0x00007F80)
         self.assertEqual(status.resource_name, "Sounds/Hello")
         self.assertEqual(status.resource_crc32, crc32)
-        with self.assertRaisesRegex(ValueError, "0..18"):
-            build_audio_resource_status_frame(19)
+        with self.assertRaisesRegex(ValueError, "0..127"):
+            build_audio_resource_status_frame(128)
         with self.assertRaisesRegex(ValueError, "unsafe"):
             build_audio_resource_begin_frame("../bad", 1, 0)
-        with self.assertRaisesRegex(ValueError, "1..16256"):
-            build_audio_resource_begin_frame("TooLarge", 16257, 0)
+        with self.assertRaisesRegex(ValueError, "1..32640"):
+            build_audio_resource_begin_frame("TooLarge", 32641, 0)
 
     def test_motor_type_query_parses_all_four_output_ports(self) -> None:
         self.assertEqual(build_motor_type_frame(), build_frame(0x1A))
@@ -2219,7 +2219,7 @@ class FakeTransport:
     def _audio_occupied_mask(self) -> int:
         mask = 0
         for slot_id, slot in enumerate(self.audio_slots):
-            if slot["data"]:
+            if slot_id < 32 and slot["data"]:
                 mask |= 1 << slot_id
         return mask
 

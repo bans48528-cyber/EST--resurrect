@@ -16,6 +16,8 @@
 #define AUDIO_START_PREFILL_BYTES 2048U
 #define AUDIO_MP3_END_FILL_BYTES 2048U
 #define AUDIO_DAC_DRAIN_MS 150U
+#define AUDIO_STARTUP_MUTE_ATTENUATION 100U
+#define AUDIO_USER_VOLUME_ATTENUATION_RANGE 20U
 #define AUDIO_LEGACY_PIANO_PREFIX "Piano/"
 #define AUDIO_MODE_NEW 0x0800U
 #define AUDIO_CLOCK_NORMAL 0x9800U
@@ -38,6 +40,7 @@ static uint8_t volume_percent;
 static uint8_t tone_note;
 static int32_t tone_duration_ms;
 static uint32_t generation;
+static uint32_t reset_hold_ms;
 static uint32_t phase_started_ms;
 static uint32_t last_progress_ms;
 static uint32_t stream_started_ms;
@@ -54,6 +57,7 @@ static uint16_t tone_sample;
 static struct audio_resource flash_resource;
 static char flash_resource_name[EST_AUDIO_RESOURCE_NAME_MAX_BYTES + 1U];
 
+static bool write_attenuation(uint8_t attenuation);
 static bool write_volume_level(uint8_t percent);
 
 /* A large PCM stream is ended by the duration timer or explicit stop/reset. */
@@ -96,6 +100,11 @@ static bool resource_is_legacy_piano(const struct audio_resource *item)
 			sizeof(AUDIO_LEGACY_PIANO_PREFIX) - 1U) == 0;
 }
 
+static bool phase_timed_out(uint32_t now_ms, uint32_t timeout_ms)
+{
+	return now_ms - phase_started_ms > timeout_ms;
+}
+
 static uint32_t resource_stream_limit(const struct audio_resource *item)
 {
 	uint32_t legacy_limit;
@@ -133,12 +142,13 @@ static void reset_stream_state(uint32_t now_ms)
 	generation++;
 }
 
-static void begin_reset(uint32_t now_ms)
+static void begin_reset(uint32_t now_ms, uint32_t hold_ms)
 {
 	board_audio_bus_reset(true);
 	ready = false;
 	decoder_prefilled = false;
 	phase = AUDIO_RESET;
+	reset_hold_ms = hold_ms;
 	reset_stream_state(now_ms);
 }
 
@@ -163,10 +173,11 @@ void board_audio_init(void)
 	decoder_prefilled = false;
 	volume_percent = 80U;
 	generation = 0U;
+	reset_hold_ms = AUDIO_RESET_HOLD_MS;
 	decoder_status = 0U;
 	mode_register = 0U;
 	tone_started_ms = 0U;
-	begin_reset(system_time_millis());
+	begin_reset(system_time_millis(), AUDIO_RESET_HOLD_MS);
 }
 
 bool board_audio_ready(void)
@@ -199,7 +210,7 @@ bool board_audio_play(const char *name, uint32_t now_ms)
 		volume_pending = pending_volume;
 		phase = AUDIO_VOLUME;
 	} else {
-		begin_reset(now_ms);
+		begin_reset(now_ms, AUDIO_RESET_HOLD_MS);
 	}
 	return true;
 }
@@ -218,8 +229,16 @@ bool board_audio_tone(uint8_t note, int32_t duration_ms, uint32_t now_ms)
 	tone_note = note;
 	tone_duration_ms = duration_ms;
 	tone_started_ms = now_ms;
-	begin_reset(now_ms);
+	begin_reset(now_ms, AUDIO_RESET_HOLD_MS);
 	return true;
+}
+
+bool board_audio_feedback_tone(uint32_t now_ms)
+{
+	if (phase != AUDIO_IDLE) {
+		return false;
+	}
+	return board_audio_play("System/FastClick", now_ms);
 }
 
 void board_audio_stop(void)
@@ -323,16 +342,22 @@ uint8_t board_audio_volume_percent(void)
 	return volume_percent;
 }
 
-static bool write_volume_level(uint8_t percent)
+static bool write_attenuation(uint8_t attenuation)
 {
-	uint8_t attenuation = percent == 0U ? 0xFEU :
-		(uint8_t)((100U - percent) * 2U);
 	if (!board_audio_bus_write(11U,
-		(uint16_t)((uint16_t)attenuation << 8U) | attenuation)) {
+	    (uint16_t)((uint16_t)attenuation << 8U) | attenuation)) {
 		return false;
 	}
 	volume_pending = false;
 	return true;
+}
+
+static bool write_volume_level(uint8_t percent)
+{
+	uint8_t attenuation = percent == 0U ? 0xFEU :
+		(uint8_t)(((100U - percent) *
+			AUDIO_USER_VOLUME_ATTENUATION_RANGE + 50U) / 100U);
+	return write_attenuation(attenuation);
 }
 
 static bool write_volume(void)
@@ -377,7 +402,7 @@ void board_audio_tick(uint32_t now_ms)
 		return;
 	}
 	if (phase == AUDIO_RESET) {
-		if (now_ms - phase_started_ms >= AUDIO_RESET_HOLD_MS) {
+		if (now_ms - phase_started_ms >= reset_hold_ms) {
 			board_audio_bus_reset(false);
 			phase = AUDIO_BOOT;
 			phase_started_ms = now_ms;
@@ -395,14 +420,18 @@ void board_audio_tick(uint32_t now_ms)
 	if (phase == AUDIO_BOOT) {
 		if (!board_audio_bus_read(0U, &mode_register) ||
 		    mode_register != AUDIO_MODE_NEW) {
-			fail();
+			if (phase_timed_out(now_ms, AUDIO_BOOT_TIMEOUT_MS)) {
+				fail();
+			}
 			return;
 		}
 		phase = AUDIO_STATUS;
 	} else if (phase == AUDIO_STATUS) {
 		if (!board_audio_bus_read(1U, &decoder_status) ||
 		    decoder_status == 0xFFFFU) {
-			fail();
+			if (phase_timed_out(now_ms, AUDIO_BOOT_TIMEOUT_MS)) {
+				fail();
+			}
 			return;
 		}
 		phase = AUDIO_CLOCK;
@@ -413,8 +442,9 @@ void board_audio_tick(uint32_t now_ms)
 		}
 		phase = AUDIO_VOLUME;
 	} else if (phase == AUDIO_VOLUME) {
-		if (has_job() && !decoder_prefilled) {
-			if (volume_pending && !write_volume()) {
+		if (!decoder_prefilled) {
+			/* Warm the decoder once at boot, before normal playback begins. */
+			if (!write_attenuation(AUDIO_STARTUP_MUTE_ATTENUATION)) {
 				fail();
 				return;
 			}
@@ -429,7 +459,7 @@ void board_audio_tick(uint32_t now_ms)
 		}
 		ready = true;
 		phase = has_job() ? AUDIO_STREAMING : AUDIO_IDLE;
-	} else if (volume_pending) {
+	} else if (volume_pending && phase != AUDIO_PREROLL) {
 		if (!write_volume()) {
 			fail();
 			return;
@@ -457,6 +487,7 @@ void board_audio_tick(uint32_t now_ms)
 			if (fill_offset >= AUDIO_START_PREFILL_BYTES) {
 				fill_offset = 0U;
 				decoder_prefilled = true;
+				volume_pending = true;
 				phase = AUDIO_VOLUME;
 				break;
 			}

@@ -1453,6 +1453,15 @@ html&gt;body{padding:0}&lt;/style&gt;
       const keys = Array.from(root.querySelectorAll(&#x27;[data-key]&#x27;));
       const scenarioSelect = root.querySelector(&#x27;[data-scenario]&#x27;);
       const mainActions = [&#x27;quick&#x27;, &#x27;programs&#x27;, &#x27;ports&#x27;, &#x27;remote&#x27;, &#x27;motor&#x27;, &#x27;settings&#x27;];
+      const HOME_SLOT_WIDTH = 44;
+      const HOME_SELECTION_TOP = 23;
+      const HOME_SELECTION_HEIGHT = 53;
+      const HOME_SELECTION_RADIUS = 3;
+      const HOME_ICON_Y = 26;
+      const HOME_LABEL_Y = 59;
+      const HOME_SELECTED_LIFT_PX = 2;
+      const HOME_ANIMATION_DURATION_MS = 140;
+      const HOME_ANIMATION_STEPS = 6;
       const uiText = {
         English: {
           recent: &#x27;Recent&#x27;, noRecent: &#x27;No recent program&#x27;, programs: &#x27;Programs&#x27;, ports: &#x27;Ports&#x27;, portsTitle: &#x27;Ports&#x27;,
@@ -1607,6 +1616,15 @@ html&gt;body{padding:0}&lt;/style&gt;
       let page = &#x27;main&#x27;;
       let mainIndex = 0;
       let homeFirstIndex = 0;
+      let homeAnimationFrame = null;
+      const homeAnimation = {
+        active: false,
+        startedAt: 0,
+        startIndex: 0,
+        startFirstIndex: 0,
+        targetIndex: 0,
+        targetFirstIndex: 0
+      };
       let programIndex = 0;
       let quickProgramIndex = 0;
       let settingsIndex = 0;
@@ -1660,6 +1678,19 @@ html&gt;body{padding:0}&lt;/style&gt;
           for (let offsetX = 0; offsetX &lt; width &amp;&amp; x + offsetX &lt; LCD_WIDTH; offsetX += 1) {
             setPixel(x + offsetX, y + offsetY, on);
           }
+        }
+      }
+
+      function fillRoundedRegion(x, y, width, height, radius, on) {
+        for (let offsetY = 0; offsetY &lt; height; offsetY += 1) {
+          const top = offsetY;
+          const bottom = height - 1 - offsetY;
+          const edgeDistance = Math.min(top, bottom);
+          let inset = 0;
+          if (edgeDistance &lt; radius) {
+            inset = radius - edgeDistance - 1;
+          }
+          fillRegion(x + inset, y + offsetY, width - inset * 2, 1, on);
         }
       }
 
@@ -1879,6 +1910,75 @@ html&gt;body{padding:0}&lt;/style&gt;
       const selectedProgram = () =&gt; visiblePrograms()[programIndex] || null;
       const batteryPercent = () =&gt; previewScenario === &#x27;low-battery&#x27; ? 5 : 100;
 
+      function easeOutCubic(value) {
+        const clamped = Math.max(0, Math.min(1, value));
+        const inverted = 1 - clamped;
+        return 1 - inverted * inverted * inverted;
+      }
+
+      function quantizedHomeProgress(value) {
+        const eased = easeOutCubic(value);
+        if (eased &lt;= 0) return 0;
+        if (eased &gt;= 1) return 1;
+        return Math.min(1, Math.ceil(eased * HOME_ANIMATION_STEPS) / HOME_ANIMATION_STEPS);
+      }
+
+      function homeMotionState() {
+        if (!homeAnimation.active) {
+          return {
+            selectedIndex: mainIndex,
+            firstIndex: homeFirstIndex,
+            startIndex: mainIndex,
+            progress: 1
+          };
+        }
+        const elapsed = performance.now() - homeAnimation.startedAt;
+        const rawProgress = Math.min(1, elapsed / HOME_ANIMATION_DURATION_MS);
+        const progress = quantizedHomeProgress(rawProgress);
+        if (rawProgress &gt;= 1) {
+          homeAnimation.active = false;
+          return {
+            selectedIndex: homeAnimation.targetIndex,
+            firstIndex: homeAnimation.targetFirstIndex,
+            startIndex: homeAnimation.startIndex,
+            progress: 1
+          };
+        }
+        return {
+          selectedIndex: homeAnimation.startIndex + (homeAnimation.targetIndex - homeAnimation.startIndex) * progress,
+          firstIndex: homeAnimation.startFirstIndex + (homeAnimation.targetFirstIndex - homeAnimation.startFirstIndex) * progress,
+          startIndex: homeAnimation.startIndex,
+          progress
+        };
+      }
+
+      function scheduleHomeAnimationFrame() {
+        if (homeAnimationFrame !== null) return;
+        homeAnimationFrame = requestAnimationFrame(() =&gt; {
+          homeAnimationFrame = null;
+          render();
+          if (homeAnimation.active) scheduleHomeAnimationFrame();
+        });
+      }
+
+      function startHomeAnimation(fromMotion) {
+        if (page !== &#x27;main&#x27; &amp;&amp; page !== &#x27;power&#x27;) return;
+        if (fromMotion.selectedIndex === mainIndex &amp;&amp; fromMotion.firstIndex === homeFirstIndex) return;
+        homeAnimation.active = true;
+        homeAnimation.startedAt = performance.now();
+        homeAnimation.startIndex = fromMotion.selectedIndex;
+        homeAnimation.startFirstIndex = fromMotion.firstIndex;
+        homeAnimation.targetIndex = mainIndex;
+        homeAnimation.targetFirstIndex = homeFirstIndex;
+        scheduleHomeAnimationFrame();
+      }
+
+      function stopHomeAnimation() {
+        if (homeAnimationFrame !== null) cancelAnimationFrame(homeAnimationFrame);
+        homeAnimationFrame = null;
+        homeAnimation.active = false;
+      }
+
       function drawHeader() {
         const battery = `BAT ${batteryPercent()}%`;
         const batteryStyle = previewScenario === &#x27;low-battery&#x27; ? &#x27;compact-inverse&#x27; : &#x27;compact&#x27;;
@@ -1895,28 +1995,41 @@ html&gt;body{padding:0}&lt;/style&gt;
 
       function drawHome() {
         const labels = homeText[language];
-        const firstIndex = homeFirstIndex;
+        const motion = homeMotionState();
+        const firstIndex = motion.firstIndex;
+        const selectedX = Math.round(2 + (motion.selectedIndex - firstIndex) * HOME_SLOT_WIDTH);
+        const paintedIndex = Math.max(0, Math.min(mainActions.length - 1, Math.round(motion.selectedIndex)));
+        const startItemIndex = Math.max(0, Math.min(mainActions.length - 1, Math.round(motion.startIndex)));
+        const minIndex = Math.max(0, Math.floor(firstIndex) - 1);
+        const maxIndex = Math.min(mainActions.length - 1, Math.ceil(firstIndex + 4));
         drawHeader();
-        mainActions.slice(firstIndex, firstIndex + 4).forEach((action, slotIndex) =&gt; {
-          const actionIndex = firstIndex + slotIndex;
-          const zoneX = 2 + slotIndex * 44;
-          const selected = actionIndex === mainIndex;
+        if (selectedX &gt; -HOME_SLOT_WIDTH &amp;&amp; selectedX &lt; LCD_WIDTH) {
+          fillRoundedRegion(selectedX, HOME_SELECTION_TOP, HOME_SLOT_WIDTH, HOME_SELECTION_HEIGHT, HOME_SELECTION_RADIUS, true);
+          fillRegion(selectedX + 17, HOME_SELECTION_TOP + HOME_SELECTION_HEIGHT + 2, 10, 2, true);
+        }
+        for (let actionIndex = minIndex; actionIndex &lt;= maxIndex; actionIndex += 1) {
+          const action = mainActions[actionIndex];
+          const zoneX = Math.round(2 + (actionIndex - firstIndex) * HOME_SLOT_WIDTH);
+          if (zoneX &lt; -HOME_SLOT_WIDTH || zoneX &gt; LCD_WIDTH) continue;
+          const selected = actionIndex === paintedIndex;
+          const targetLift = actionIndex === mainIndex ? motion.progress : 0;
+          const startLift = actionIndex === startItemIndex &amp;&amp; startItemIndex !== mainIndex ? 1 - motion.progress : 0;
+          const lift = Math.round(HOME_SELECTED_LIFT_PX * Math.max(targetLift, startLift));
           const style = selected ? &#x27;compact-inverse&#x27; : &#x27;compact&#x27;;
           const label = textFittingWidth(labels[action], 42, style);
           const labelWidth = textWidth(label, style);
-          if (selected) fillRegion(zoneX, 23, 44, 55, true);
-          drawBitmap(zoneX + 6, 26, firmwareIcons[action], selected);
-          drawText(zoneX + Math.floor((44 - labelWidth) / 2), 59, label, style);
-        });
+          drawBitmap(zoneX + 6, HOME_ICON_Y - lift, firmwareIcons[action], selected);
+          drawText(zoneX + Math.floor((HOME_SLOT_WIDTH - labelWidth) / 2), HOME_LABEL_Y - lift, label, style);
+        }
         if (mainIndex === 0) {
           const recent = quickProgramIndex &gt;= 0 ? programs[quickProgramIndex] : null;
           drawCentered(84, recent &amp;&amp; recent.saved ? recent.name : t(&#x27;noRecent&#x27;), &#x27;compact&#x27;);
         }
         [0, 1, 2].forEach(index =&gt; {
           const x = 76 + index * 14;
-          if (index === firstIndex) fillRegion(x, 105, 8, 3, true);
-          else drawLine(x, 106, x + 7, 106);
+          drawLine(x, 106, x + 7, 106);
         });
+        fillRegion(Math.round(76 + firstIndex * 14), 105, 8, 3, true);
         drawStatus();
       }
 
@@ -2330,9 +2443,11 @@ html&gt;body{padding:0}&lt;/style&gt;
       }
 
       function moveMain(delta) {
+        const fromMotion = homeMotionState();
         mainIndex = (mainIndex + delta + mainActions.length) % mainActions.length;
         if (mainIndex &lt; homeFirstIndex) homeFirstIndex = mainIndex;
         if (mainIndex &gt;= homeFirstIndex + 4) homeFirstIndex = mainIndex - 3;
+        startHomeAnimation(fromMotion);
       }
 
       function moveProgram(delta) {
@@ -2390,6 +2505,7 @@ html&gt;body{padding:0}&lt;/style&gt;
 
       function setPreviewScenario(nextScenario) {
         clearTransferSimulation();
+        stopHomeAnimation();
         previewScenario = nextScenario;
         scenarioSelect.value = nextScenario;
         page = &#x27;main&#x27;;
@@ -2441,6 +2557,7 @@ html&gt;body{padding:0}&lt;/style&gt;
       }
 
       function stopProgram() {
+        stopHomeAnimation();
         page = &#x27;main&#x27;;
         mainIndex = 0;
         homeFirstIndex = 0;
@@ -2469,15 +2586,23 @@ html&gt;body{padding:0}&lt;/style&gt;
         if (page === &#x27;main&#x27;) {
           if (key === &#x27;up&#x27; || key === &#x27;left&#x27;) moveMain(-1);
           if (key === &#x27;down&#x27; || key === &#x27;right&#x27;) moveMain(1);
-          if (key === &#x27;back&#x27;) page = &#x27;power&#x27;;
+          if (key === &#x27;back&#x27;) {
+            stopHomeAnimation();
+            page = &#x27;power&#x27;;
+          }
           if (key === &#x27;ok&#x27;) {
             const action = mainActions[mainIndex];
             if (action === &#x27;quick&#x27;) {
               const program = quickProgramIndex &gt;= 0 ? programs[quickProgramIndex] : null;
-              if (program &amp;&amp; program.saved) startProgram(program);
+              if (program &amp;&amp; program.saved) {
+                stopHomeAnimation();
+                startProgram(program);
+              }
             } else if (action === &#x27;remote&#x27;) {
+              stopHomeAnimation();
               enterRemoteControl();
             } else {
+              stopHomeAnimation();
               page = action;
               if (action === &#x27;programs&#x27;) programIndex = 0;
             }
